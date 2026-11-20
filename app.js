@@ -2742,8 +2742,10 @@ function stableStr(v) {
 const cloudFetch = (url, opts) => (TEST_MODE && window.__cloudFetch ? window.__cloudFetch : fetch)(url, opts);
 
 async function cloudApi(path, { method = 'GET', body, headers = {}, auth = true } = {}) {
+  // apikey = the project's public key (old "anon" JWT or new "sb_publishable_…"); the
+  // Authorization header is only sent once signed in.
   const h = { apikey: CLOUD.key, 'Content-Type': 'application/json', ...headers };
-  h.Authorization = 'Bearer ' + (auth ? await accessToken() : CLOUD.key);
+  if (auth) h.Authorization = 'Bearer ' + await accessToken();
   let res;
   try {
     res = await cloudFetch(CLOUD.url.replace(/\/$/, '') + path, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) });
