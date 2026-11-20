@@ -2424,14 +2424,26 @@ async function startFresh() {
   await cloudResetAfter();
 }
 
+/** Fill the shop with sample products and sales (e.g. a client's demo shop).
+    Keeps the shop's own details (name, address, VAT…), staff logins and the
+    trial date. On a synced shop it replaces the data on every device. */
 async function loadDemo() {
-  if (cloudOn()) return toast('Demo data is off while cloud sync is on — it would replace your real shop on every device', true);
-  if (!(await confirmBox('Replace everything on this device with demo data?', 'Load demo', true))) return;
+  const synced = cloudOn();
+  const ok = await confirmBox(synced
+    ? `Fill ${Cloud.conf.shopName || 'this shop'} with demo products and sales? Everything in the shop is replaced on ALL its synced devices. The shop name, address, VAT number and staff logins are kept.`
+    : 'Replace all products and sales on this device with demo data? The shop name, address, VAT number and staff logins are kept.', 'Load demo', true);
+  if (!ok) return;
+  if (!(await cloudResetBefore())) return;
+  const keepSettings = state.settings.storeName && state.settings.storeName !== DEFAULT_SETTINGS.storeName ? { ...state.settings } : null;
+  const keepMeta = { installedAt: state.meta.installedAt };
   loadDemoData();
+  if (keepSettings) state.settings = { ...keepSettings, lastBackupAt: state.settings.lastBackupAt };
+  Object.assign(state.meta, keepMeta);
   await persistEverything();
   restoreCart(ui.cart);
   renderAll();
-  toast('Demo data loaded');
+  toast(synced ? 'Demo data loaded — sending it to the other devices' : 'Demo data loaded');
+  await cloudResetAfter();
 }
 
 /* ===== 14b. Sign-in ======================================================

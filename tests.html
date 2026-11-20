@@ -842,6 +842,20 @@ test('Cloud sync: two tills share sales, stock and settings; a wiped device gets
   use(document.getElementById('app2')); await synced();
   eq([P.state.sales.length, P.state.products.length], [0, 0], 'B was emptied too');
 
+  // "Load demo data" on a synced shop fills every device, keeping the shop's own name
+  use(A);
+  await nav('settings'); await tick(150);
+  type('[data-setting="storeName"]', 'Rumaanah - Demo'); await tick(200);
+  const shopName = P.state.settings.storeName;
+  await nav('settings'); await tick(150);
+  click('[data-action="load-demo"]'); await confirmYes();
+  await waitFor(() => !P.Cloud.busy && P.Cloud.pending === 0 && P.state.products.length === 8, 6000, 'A to load and upload demo data');
+  eq(P.state.settings.storeName, shopName, 'shop name kept');
+  use(document.getElementById('app2')); await synced();
+  eq([P.state.products.length, P.state.sales.length > 0, P.state.settings.storeName], [8, true, shopName], 'B got the demo data');
+  const v8 = P.state.products[0].variants[0];
+  eq(v8.stock, (await P.DB.getAll('movements')).filter(m => m.variantId === v8.id).reduce((a, m) => a + m.change, 0), 'demo stock matches its movements');
+
   // Leave the other tests offline-only
   await blank(document.getElementById('app2'));
   await deleteDbNamed('rails-pos-test-b');
