@@ -61,7 +61,14 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
 - **Subscription (licence)**
   - A device without a shop account has a **14-day free trial**. A new cloud shop gets **30 days free**, then follows its paid-until date (`shops.active_until`, set by the supplier in Supabase; shops can't change it). No date means no end.
   - Reminder in the last 7 days. After the date there are 7 days' grace, then **selling pauses**: Charge is disabled, but reports, backups and settings still work. The date is checked on every sync and remembered offline.
-  - Managing subscriptions: see the SQL snippets at the end of `cloud/supabase-setup.sql`.
+  - A shop **deactivated** by the supplier pauses selling on all its devices at the next sync (data kept) and shows a "Contact on WhatsApp" button. **Renew on WhatsApp** buttons go to the supplier's WhatsApp Business number (`SUPPLIER` in `app.js`).
+  - Subscriptions are managed on the supplier admin page (below).
+- **Supplier admin page** (`admin.html`, for the Rails POS supplier only)
+  - Sign in with the admin email and password (no authenticator app). Only logins listed in the `vendor_admins` table get in; everything else is refused by the database.
+  - Every shop with its login email, trial / paid status, paid-until date, tills, last activity, total paid and last payment. Totals: shops, paid this month, shops needing attention, deactivated.
+  - **Record payment:** paid-on date (can be backdated), the **paid-until** date you choose, amount, method and note. **Payment history** per shop. **Set date** / **No end date** without a payment. **Deactivate** (with a reason the shop sees) and **Reactivate**.
+  - Every change is written to an audit log (Recent changes). The page forgets the login when the tab closes, signs out after 15 minutes idle, has a strict content-security policy and is never cached offline.
+  - Add an admin once in Supabase → SQL Editor: `insert into public.vendor_admins (user_id) select id from auth.users where email = 'your@email';`
 - **Sign-in**
   - The till is covered by a sign-in screen: username (not case-sensitive) and a 4-digit PIN.
   - You stay signed in when the page reloads or updates; closing the app or tapping the lock button in the header asks again.
@@ -90,6 +97,9 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
 | `sw.js` | Service worker: caches the app so it opens offline |
 | `manifest.json` | Makes the app installable |
 | `icon-192.png`, `icon-512.png` | App icons |
+| `admin.html`, `admin.js`, `admin.css` | Supplier admin page (subscriptions, payments, deactivation) |
+| `cloud/supabase-setup.sql` | The whole cloud database; safe to re-run after each change |
+| `CHANGELOG.md` | Every release, newest first |
 | `tests.html` | Automated tests that run in any browser |
 | `tools/serve.ps1` | A tiny local web server for Windows when Python isn't installed |
 
@@ -113,7 +123,7 @@ Then open http://localhost:8000. Offline mode only works over `http://localhost`
 
 With the server running, open **http://localhost:8000/tests.html** and click **Run all tests**, or open `tests.html?auto` to run them straight away.
 
-The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 35 tests should pass (one runs two "devices" against a fake Supabase to test syncing; one reads drawn barcodes that are blurred, noisy and upside down). They cover:
+The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 36 tests should pass (one runs two "devices" against a fake Supabase to test syncing; one reads drawn barcodes that are blurred, noisy and upside down). They cover:
 - sign-in, lock and changing the PIN
 - admin: adding, editing and deleting users, and what a cashier can't do
 - selling and stock
@@ -128,6 +138,9 @@ The tests drive the real app (clicks, typing, reloads, a second tab) using a **s
 - backup and restore
 - CSV export
 - accessibility and colour contrast
+- clients and lay-bys (payments, overdue, collect, cancel)
+- barcodes, labels, photos and the licence check
+- cloud sync and the supplier admin page (against a fake Supabase)
 - upgrading data from version 1
 
 ## Put it on a phone (free hosting)
@@ -157,7 +170,7 @@ Push the files to a repository, then go to **Settings, then Pages, then Deploy f
 Free-tier note: a Supabase free project pauses after a week with no activity (a shop selling daily keeps it awake). Move to a paid plan before you have paying customers.
 
 ### Releasing an update
-Change the files **and bump `CACHE_VERSION` in `sw.js`**, then upload. Phones download the update in the background and show *"A new version is ready — Reload now"*. Nothing changes in the middle of a sale. If you forget to bump the version, phones keep the old files.
+Change the files, **add an entry to `CHANGELOG.md` and bump `CACHE_VERSION` in `sw.js`**, then upload. If `cloud/supabase-setup.sql` changed, run the whole file again in Supabase. Phones download the update in the background and show *"A new version is ready — Reload now"*. Nothing changes in the middle of a sale. If you forget to bump the version, phones keep the old files.
 
 ## How it works
 
@@ -193,19 +206,20 @@ Search `app.js` and `sw.js` for `PLUG-IN:`.
 
 - Without cloud sync, data lives only on the device. Clearing the browser's website data deletes it. **Back up weekly**, or turn on cloud sync.
 - With cloud sync, two devices editing the *same* product or the same sale's returns at the same moment: the last save wins. Stock is not affected, because it is summed from movements.
+- Email opens the email app with the text (no automatic sending yet). There is no "forgot password" for shop logins yet.
 - Printing uses the browser print dialog. Small thermal printers need the Bluetooth integration.
 - Very old browsers without Web Locks (Safari before 15.4) don't get the one-tab protection.
 - The receipt layout is 32 characters wide (58mm paper). 80mm printers will show it narrower than they could.
 
 ## What to build next
 
-1. **Licence check**: a small server that confirms the shop's subscription when online, so the app can't simply be copied.
-2. **Cloud backup and sync** (Google Drive or a small server). This is the biggest remaining data-safety gap.
-2. **Bluetooth thermal printer (ESC-POS)** and a cash drawer kick.
-3. **Barcode labels** for SKUs, and the camera as a scanner.
+Already built: licence check, cloud sync, barcode labels and camera scanning, cashier logins, clients and lay-bys, product photos, supplier admin page.
+
+1. **Forgot password** for shop logins, with a proper email service (custom SMTP) for confirmation and reset emails.
+2. **Automatic email** of receipts and statements (today the email app opens with the text).
+3. **Bluetooth thermal printer (ESC-POS)** and a cash drawer kick.
 4. **Card machine integration** (Yoco, SumUp, iKhokha).
-5. **Cashier logins with PINs**, with cash-ups per cashier.
-6. **Customers and lay-bys:** WhatsApp numbers, purchase history, loyalty, and lay-by deposits.
-7. **Product photos**, stored compressed on the device.
-8. **Purchase orders and suppliers**, building on the "Receive delivery" screen.
-9. **Multi-branch** with stock transfers.
+5. **Online renewals** (PayFast / Yoco payment link that updates the paid-until date).
+6. **Loyalty**, and cash-ups per cashier.
+7. **Purchase orders and suppliers**, building on the "Receive delivery" screen.
+8. **Multi-branch** with stock transfers.
