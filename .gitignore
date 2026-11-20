@@ -8,3 +8,6 @@ rails-pos-sales-*.csv
 # OS clutter
 Thumbs.db
 .DS_Store
+
+# Private handover documents (business details) — keep out of the public repo
+docs/
