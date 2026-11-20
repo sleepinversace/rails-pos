@@ -1,6 +1,6 @@
 # Rails POS: offline point of sale for small clothing stores
 
-Rails POS is a till for small South African clothing shops. It runs in the browser, keeps working with no internet (load-shedding, patchy signal) and can be installed on a phone or tablet home screen. All data stays on the device.
+Rails POS is a till for small South African clothing shops. It runs in the browser, keeps working with no internet (load-shedding, patchy signal) and can be installed on a phone or tablet home screen. Each device keeps a full copy of the shop, and with cloud sync turned on, all devices share sales, stock and settings through a Supabase database.
 
 ## Features
 
@@ -27,6 +27,12 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - Cash-up at the end of a shift: expected cash vs counted cash, over/short, the float for the next shift, and a printable Z-report.
 - **Receipts**
   - Every receipt, credit note and Z-report can be sent on WhatsApp, copied or printed.
+- **Cloud sync and backup** (Supabase)
+  - Every device of a shop shares sales, stock, products, settings and staff users. Changes arrive within about 20 seconds, and straight away when you open Reports or Sales.
+  - Works offline: sales are queued and sent when the connection returns. The header shows Synced, Syncing…, Offline · 3 waiting, or Sync problem.
+  - Stock stays right when two tills sell the same item at once: devices sync stock *movements* (−1, +1 …) and each device adds them up.
+  - Each device is a till with its own letter, so receipt numbers never clash (A-00012, B-00003). Each till cashes up its own drawer, and Reports show the whole shop.
+  - A new, lost or wiped device signs in with the shop email and gets everything back.
 - **Data safety**
   - Backup to a JSON file (download, copy or share) and restore from a file or pasted JSON.
   - Sales export to CSV.
@@ -86,7 +92,7 @@ Then open http://localhost:8000. Offline mode only works over `http://localhost`
 
 With the server running, open **http://localhost:8000/tests.html** and click **Run all tests**, or open `tests.html?auto` to run them straight away.
 
-The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 27 tests should pass. They cover:
+The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 28 tests should pass (one runs two "devices" against a fake Supabase to test syncing). They cover:
 - sign-in, lock and changing the PIN
 - admin: adding, editing and deleting users, and what a cashier can't do
 - selling and stock
@@ -120,6 +126,15 @@ Push the files to a repository, then go to **Settings, then Pages, then Deploy f
 - **Android:** open the URL in Chrome, tap ⋮, then **Install app**.
 - Open it once while online. After that it works with no signal.
 
+### Cloud sync set-up (once)
+1. Create a free project at https://supabase.com.
+2. Open **SQL Editor → New query**, paste all of [`cloud/supabase-setup.sql`](cloud/supabase-setup.sql) and click **Run**.
+3. Under **Authentication → URL Configuration**, set **Site URL** to the app's address (e.g. `https://you.github.io/rails-pos/`). That's where the "confirm your email" link sends people.
+4. Copy the **Project URL** and the **anon / publishable key** into `CLOUD` at the top of `app.js`. Both are meant to be public; row-level security keeps each shop's data private. Never put the `service_role` key in the app.
+5. In the app: **Settings → Cloud sync → Create shop account** on the first device, then **Sign in** with the same email on every other device.
+
+Free-tier note: a Supabase free project pauses after a week with no activity (a shop selling daily keeps it awake). Move to a paid plan before you have paying customers.
+
 ### Releasing an update
 Change the files **and bump `CACHE_VERSION` in `sw.js`**, then upload. Phones download the update in the background and show *"A new version is ready — Reload now"*. Nothing changes in the middle of a sale. If you forget to bump the version, phones keep the old files.
 
@@ -139,7 +154,8 @@ Search `app.js` and `sw.js` for `PLUG-IN:`.
 
 | Feature | Where |
 |---|---|
-| Cloud sync | `DB.write()` in `app.js` (queue ops in an outbox), and a `sync` event in `sw.js` |
+| Licence / subscription check | `shops.active_until` in `cloud/supabase-setup.sql`; check it in `syncNow()` |
+| Background sync while the app is closed | a `sync` event in `sw.js` |
 | Card terminal (Yoco / SumUp / iKhokha) | `checkout()`: call the terminal before saving |
 | Bluetooth / ESC-POS printer | `printDoc()` |
 | Licence check / cloud accounts | `checkLogin()` in section 14b of `app.js` |
@@ -154,7 +170,8 @@ Search `app.js` and `sw.js` for `PLUG-IN:`.
 
 ## Known limitations
 
-- Data lives only on the device until cloud sync is built. **Back up weekly.**
+- Without cloud sync, data lives only on the device. Clearing the browser's website data deletes it. **Back up weekly**, or turn on cloud sync.
+- With cloud sync, two devices editing the *same* product or the same sale's returns at the same moment: the last save wins. Stock is not affected, because it is summed from movements.
 - Printing uses the browser print dialog. Small thermal printers need the Bluetooth integration.
 - Very old browsers without Web Locks (Safari before 15.4) don't get the one-tab protection.
 - The receipt layout is 32 characters wide (58mm paper). 80mm printers will show it narrower than they could.

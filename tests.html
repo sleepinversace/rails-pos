@@ -519,6 +519,161 @@ test('Admin: add a cashier who can only sell and see sales; edit, protect the la
   ok(P.state.sales.some(s => s.cashier === 'Thandi'), 'her past sale keeps her name');
 });
 
+/* ---------- a fake Supabase (auth + REST) for the sync tests ---------- */
+function fakeCloud() {
+  const db = { users: {}, shops: [], records: new Map(), seq: 0, offline: false };
+  const json = (data, status = 200) => new Response(data == null ? '' : JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+  const session = email => ({ access_token: 'tok-' + email, refresh_token: 'ref-' + email, expires_in: 3600, user: { id: 'user-' + email, email } });
+  db.fetch = async (url, opts = {}) => {
+    if (db.offline) throw new TypeError('Failed to fetch');
+    const u = new URL(url), p = u.pathname, m = opts.method || 'GET';
+    const body = opts.body ? JSON.parse(opts.body) : null;
+    const token = String(opts.headers?.Authorization || '').replace('Bearer ', '');
+    const userId = token.startsWith('tok-') ? 'user-' + token.slice(4) : null;
+    const param = k => (u.searchParams.get(k) || '').replace(/^(eq|gt)\./, '');
+    if (p === '/auth/v1/signup') {
+      if (db.users[body.email]) return json({ msg: 'User already registered' }, 422);
+      db.users[body.email] = body.password; return json(session(body.email));
+    }
+    if (p === '/auth/v1/token') {
+      if (u.searchParams.get('grant_type') === 'password') return db.users[body.email] === body.password ? json(session(body.email)) : json({ error_description: 'Invalid login credentials' }, 400);
+      return json(session(body.refresh_token.slice(4)));
+    }
+    if (p === '/auth/v1/logout') return json(null, 204);
+    if (!userId) return json({ message: 'JWT required' }, 401);
+    const mine = db.shops.filter(s => s.owner === userId); // row-level security
+    if (p === '/rest/v1/shops') {
+      if (m === 'POST') { const s = { id: 'shop-' + (db.shops.length + 1), owner: userId, name: body.name, generation: 1, next_device: 1 }; db.shops.push(s); return json([s], 201); }
+      return json(mine.filter(s => !param('id') || s.id === param('id')));
+    }
+    const shop = mine.find(s => s.id === (body?.p_shop || param('shop_id') || body?.[0]?.shop_id));
+    if (p === '/rest/v1/rpc/claim_device') { shop.next_device++; return json(shop.next_device - 1); }
+    if (p === '/rest/v1/rpc/reset_shop') {
+      shop.generation++;
+      for (const k of [...db.records.keys()]) if (k.startsWith(shop.id + '|')) db.records.delete(k);
+      return json(shop.generation);
+    }
+    if (p === '/rest/v1/records') {
+      if (m === 'POST') {
+        for (const r of body) {
+          if (!mine.some(s => s.id === r.shop_id)) return json({ message: 'row-level security' }, 403);
+          db.records.set(`${r.shop_id}|${r.kind}|${r.id}`, { ...JSON.parse(JSON.stringify(r)), seq: ++db.seq });
+        }
+        return json(null, 201);
+      }
+      const after = Number(param('seq')), limit = Number(u.searchParams.get('limit') || 1000);
+      return json([...db.records.values()].filter(r => r.shop_id === shop?.id && r.seq > after).sort((a, b) => a.seq - b.seq).slice(0, limit)
+        .map(({ kind, id, data, deleted, seq }) => ({ kind, id, data, deleted, seq })));
+    }
+    return json({ message: 'Not found ' + p }, 404);
+  };
+  return db;
+}
+function deleteDbNamed(name) {
+  return new Promise(resolve => { const r = indexedDB.deleteDatabase(name); r.onsuccess = resolve; r.onerror = resolve; r.onblocked = () => setTimeout(resolve, 300); });
+}
+async function openDeviceB() {
+  const B = document.getElementById('app2');
+  await blank(B);
+  await deleteDbNamed('rails-pos-test-b');
+  sessionStorage.removeItem('rails-pos-test-b-signed-in');
+  B.src = 'index.html?test=b&t=' + Date.now();
+  await new Promise(r => { B.onload = r; });
+  await waitFor(() => B.contentWindow.__pos?.ui.appActive, 6000, 'device B to start');
+  use(B);
+  await signIn('amish', OWNER.pin); // a new device starts with the default owner
+}
+const SHOP = { email: 'shop@example.test', password: 'test-pass-123' }; // fake cloud only
+async function cloudLogin(cloud, button) {
+  w.__cloudFetch = cloud.fetch; P.CLOUD.url = 'https://fake.supabase.test'; P.CLOUD.key = 'anon-test-key';
+  await nav('settings'); await tick(150);
+  type('#cEmail', SHOP.email); type('#cPass', SHOP.password);
+  click(`[data-action="${button}"]`);
+}
+async function synced() {
+  await waitFor(() => !P.Cloud.busy, 5000, 'sync to finish');
+  await P.syncNow();
+  await waitFor(() => !P.Cloud.busy && P.Cloud.pending === 0, 5000, 'outbox to empty');
+}
+
+test('Cloud sync: two tills share sales, stock and settings; a wiped device gets everything back', async () => {
+  const cloud = fakeCloud();
+  const A = document.getElementById('app');
+  use(A);
+  // Till A creates the shop and uploads its data
+  await cloudLogin(cloud, 'cloud-signup');
+  await waitFor(() => $('[data-action="cloud-create"]'), 4000, 'create-shop dialog');
+  click('[data-action="cloud-create"][data-mode="upload"]');
+  await waitFor(() => P.Cloud.status === 'ok' && P.Cloud.pending === 0 && P.Cloud.conf?.lastSyncAt, 6000, 'first upload');
+  eq(P.Cloud.conf.deviceCode, 'A', 'first device is till A');
+  const nSales = P.state.sales.length;
+  const recs = [...cloud.records.values()];
+  eq(recs.filter(r => r.kind === 'sales').length, nSales, 'every sale uploaded');
+  const v0 = variant(product('Test <b>Tee</b>'), 'S', 'Red');
+  eq(recs.filter(r => r.kind === 'movements' && r.data.variantId === v0.id).reduce((a, r) => a + r.data.change, 0), v0.stock, 'cloud movements add up to the stock');
+  const stock0 = v0.stock;
+  ok($('#netStatus').textContent === 'Synced', 'header says Synced');
+
+  // Till B: a brand-new device joins and downloads the shop
+  await openDeviceB();
+  await cloudLogin(cloud, 'cloud-signin');
+  await waitFor(() => $('[data-action="cloud-join"]'), 4000, 'join dialog');
+  click('[data-action="cloud-join"]');
+  await waitFor(() => P.Cloud.conf?.deviceCode === 'B' && P.state.sales.length === nSales && P.Cloud.status === 'ok', 8000, 'B to download the shop');
+  eq(variant(product('Test <b>Tee</b>'), 'S', 'Red').stock, stock0, 'B has the same stock');
+
+  // Both tills sell the same shirt while offline, and A changes the address
+  cloud.offline = true;
+  await addItem(product('Test <b>Tee</b>'), 'S', 'Red'); await pay('card');
+  eq(lastSale().series, 'B', "B's receipt is in the B series");
+  closeModal(); await tick();
+  use(A);
+  await addItem(product('Test <b>Tee</b>'), 'S', 'Red'); await pay('card');
+  eq(lastSale().series, 'A', "A's receipt is in the A series");
+  closeModal(); await tick();
+  await nav('settings'); await tick(100);
+  type('[data-setting="storeAddress"]', '1 Sync Street'); await tick(200);
+  cloud.offline = false;
+  await synced();
+  use(document.getElementById('app2')); await synced();
+  use(A); await synced();
+
+  for (const f of [A, document.getElementById('app2')]) {
+    use(f);
+    const name = f === A ? 'A' : 'B';
+    eq(P.state.sales.length, nSales + 2, `${name} sees both new sales`);
+    eq(variant(product('Test <b>Tee</b>'), 'S', 'Red').stock, stock0 - 2, `${name}: both sales came off the stock`);
+    eq(P.state.settings.storeAddress, '1 Sync Street', `${name} has the new address`);
+  }
+  eq(P.computeShift(P.state.meta.lastCashupAt, new Date().toISOString()).salesCount, 1, "B's cash-up counts only B's own sale");
+
+  // Wipe device B completely, then sign in again: everything comes back
+  await openDeviceB();
+  eq(P.state.meta.demo, true, 'wiped device starts empty (demo)');
+  await cloudLogin(cloud, 'cloud-signin');
+  await waitFor(() => $('[data-action="cloud-join"]'), 4000, 'join dialog after wipe');
+  click('[data-action="cloud-join"]');
+  await waitFor(() => P.state.sales.length === nSales + 2 && P.Cloud.status === 'ok', 8000, 'B restored from the cloud');
+  eq(variant(product('Test <b>Tee</b>'), 'S', 'Red').stock, stock0 - 2, 'restored stock is right');
+  eq(P.Cloud.conf.deviceCode, 'C', 'a re-joined device gets a new till letter');
+
+  // "Start fresh" on till A empties the shop on every device
+  use(A);
+  await nav('settings'); await tick(150);
+  click('[data-action="start-fresh"]'); await confirmYes();
+  await waitFor(() => !P.Cloud.busy && P.Cloud.pending === 0 && P.state.sales.length === 0, 6000, 'A to reset the cloud');
+  use(document.getElementById('app2')); await synced();
+  eq([P.state.sales.length, P.state.products.length], [0, 0], 'B was emptied too');
+
+  // Leave the other tests offline-only
+  await blank(document.getElementById('app2'));
+  await deleteDbNamed('rails-pos-test-b');
+  use(A);
+  click('[data-action="cloud-disconnect"]'); await confirmYes();
+  ok(!P.Cloud.conf.shopId && P.Cloud.conf.deviceCode === 'A', 'disconnected, till letter kept');
+  P.CLOUD.url = ''; w.__cloudFetch = null;
+});
+
 test('Upgrade: data saved by version 1 is migrated', async () => {
   await blank(document.getElementById('app'));
   await deleteDb();

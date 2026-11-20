@@ -133,6 +133,9 @@ h3 { font-size: 15px; }
 }
 .net::before { content: "● "; }
 .net.offline { background: var(--warn-soft); color: var(--warn); }
+.net.err { background: var(--danger-soft); color: var(--danger); }
+#netStatus { cursor: pointer; }
+.cloud-card.on { border-color: color-mix(in srgb, var(--ok) 55%, var(--border)); box-shadow: 0 0 14px color-mix(in srgb, var(--ok) var(--g2), transparent); }
 
 /* ----- Navigation (bottom bar on phones) ----- */
 .app-nav {

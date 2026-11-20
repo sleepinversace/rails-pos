@@ -30,7 +30,16 @@
 
 /** index.html?test uses a separate database so tests never touch real data. */
 const TEST_MODE = new URLSearchParams(location.search).has('test');
-const DB_NAME = TEST_MODE ? 'rails-pos-test' : 'rails-pos';
+const TEST_DEVICE = new URLSearchParams(location.search).get('test'); // ?test=b = a second test "device"
+const DB_NAME = TEST_MODE ? 'rails-pos-test' + (TEST_DEVICE && TEST_DEVICE !== '1' ? '-' + TEST_DEVICE : '') : 'rails-pos';
+
+/** Cloud sync (Supabase). The URL and the public "anon" key are meant to be
+    inside the app — the database's row-level security keeps each shop's
+    data private to that shop's login. Leave empty to turn cloud sync off. */
+const CLOUD = {
+  url: '',   // e.g. https://abcdefgh.supabase.co
+  key: '',   // the anon / publishable key
+};
 /** SARS: a tax invoice for more than R5 000 must show the buyer's name and address. */
 const FULL_TAX_INVOICE_OVER = 500000;
 
@@ -72,6 +81,12 @@ const fmtDate = iso => { const d = new Date(iso); return `${pad(d.getDate())}/${
 const fmtTime = iso => { const d = new Date(iso); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const fmtDT = iso => `${fmtDate(iso)} ${fmtTime(iso)}`;
 const fmtNo = n => pad(n, 5);
+/* Document numbers. With cloud sync each device has its own series letter
+   (A, B, C…), so two tills can never print the same invoice number. */
+const docNo = (n, series) => (series ? series + '-' : '') + fmtNo(n);
+const saleNo = s => docNo(s.number, s.series);
+const retNo = r => 'CN' + docNo(r.number, r.series);
+const zNo = z => docNo(z.number, z.series);
 const startOfDay = (d = new Date()) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 const daysAgo = iso => Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
 const splitList = s => String(s || '').split(',').map(x => x.trim()).filter(Boolean);
@@ -85,11 +100,22 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
    DB.write() applies several changes in ONE transaction, so a sale (the sale,
    its stock changes, movements and the receipt counter) is all-or-nothing.
 
-   PLUG-IN: cloud sync — after a successful DB.write(), copy the ops into an
-   "outbox" store and push them to a server when navigator.onLine is true.
+   Cloud sync: while this device is connected (DB.tracking), every write to
+   a synced store also notes its key in the "outbox" store in the SAME
+   transaction. The sync engine (section 15c) sends those records to the
+   cloud and removes them from the outbox once they have arrived.
    ======================================================================== */
 
-const STORES = ['kv', 'products', 'sales', 'movements', 'cashups'];
+const STORES = ['kv', 'products', 'sales', 'movements', 'cashups', 'outbox'];
+const SYNC_STORES = ['products', 'sales', 'movements', 'cashups'];
+const SYNC_KV = ['settings', 'auth']; // shared by all devices (meta, cart and cloud login stay per device)
+
+/** "sales:s123" for an op that must be sent to the cloud, else null. */
+function syncKey(o) {
+  if (o.store === 'kv') return SYNC_KV.includes(o.key) ? `kv:${o.key}` : null;
+  if (!SYNC_STORES.includes(o.store)) return null;
+  return `${o.store}:${o.del ? o.key : o.value.id}`;
+}
 
 const DB = (() => {
   let dbPromise = null;
@@ -98,7 +124,7 @@ const DB = (() => {
     if (dbPromise) return dbPromise;
     dbPromise = new Promise((resolve, reject) => {
       if (!('indexedDB' in window)) return reject(new Error('This browser cannot store data (IndexedDB missing).'));
-      const req = indexedDB.open(DB_NAME, 2);
+      const req = indexedDB.open(DB_NAME, 3);
       req.onupgradeneeded = e => {
         const db = req.result;
         const tx = req.transaction;
@@ -107,6 +133,7 @@ const DB = (() => {
         if (!db.objectStoreNames.contains('sales')) db.createObjectStore('sales', { keyPath: 'id' }).createIndex('date', 'date');
         if (!db.objectStoreNames.contains('movements')) db.createObjectStore('movements', { keyPath: 'id' }).createIndex('productId', 'productId');
         if (!db.objectStoreNames.contains('cashups')) db.createObjectStore('cashups', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('outbox')) db.createObjectStore('outbox', { keyPath: 'key' }); // v3: cloud sync queue
         // Version 1 kept whole arrays in kv — move them into their own stores.
         if (e.oldVersion === 1) {
           const kv = tx.objectStore('kv');
@@ -139,12 +166,14 @@ const DB = (() => {
   const getAll = store => request(store, 'readonly', s => s.getAll());
   const getAllByIndex = (store, index, value) => request(store, 'readonly', s => s.index(index).getAll(value));
 
-  /** ops: [{store, value}] put by keyPath, [{store, key, value}] put by key, [{store, key, del: true}] delete. */
-  async function write(ops, clearFirst = []) {
+  /** ops: [{store, value}] put by keyPath, [{store, key, value}] put by key, [{store, key, del: true}] delete.
+      opts.remote = these changes came FROM the cloud, so don't queue them to be sent back. */
+  async function write(ops, clearFirst = [], opts = {}) {
     const db = await open();
-    const names = [...new Set([...ops.map(o => o.store), ...clearFirst])];
+    const track = api.tracking && !opts.remote ? [...new Set(ops.map(syncKey).filter(Boolean))] : [];
+    const names = [...new Set([...ops.map(o => o.store), ...clearFirst, ...(track.length ? ['outbox'] : [])])];
     if (!names.length) return;
-    return new Promise((resolve, reject) => {
+    await new Promise((resolve, reject) => {
       const tx = db.transaction(names, 'readwrite');
       clearFirst.forEach(n => tx.objectStore(n).clear());
       for (const o of ops) {
@@ -153,13 +182,17 @@ const DB = (() => {
         else if (o.key !== undefined) s.put(clone(o.value), o.key);
         else s.put(clone(o.value));
       }
+      // v = a fresh tag, so a push only clears entries that weren't changed again meanwhile
+      track.forEach(key => tx.objectStore('outbox').put({ key, v: uid() }));
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
     });
+    if (track.length) api.onTracked?.();
   }
 
-  return { open, get, getAll, getAllByIndex, write };
+  const api = { open, get, getAll, getAllByIndex, write, tracking: false, onTracked: null };
+  return api;
 })();
 
 /* Small helpers to build write ops */
@@ -268,12 +301,14 @@ async function loadState() {
   state.settings = { ...DEFAULT_SETTINGS, ...settings };
   state.meta = { ...DEFAULT_META, ...meta };
   state.products = products.sort((a, b) => (a.created || 0) - (b.created || 0) || a.name.localeCompare(b.name));
-  state.sales = sales.map(normalizeSale).sort((a, b) => a.number - b.number || a.date.localeCompare(b.date));
-  state.cashups = cashups.sort((a, b) => a.number - b.number);
+  state.sales = sales.map(normalizeSale).sort(byDate);
+  state.cashups = cashups.sort((a, b) => (a.to || '').localeCompare(b.to || ''));
   restoreCart(cart);
 }
 
 /** Bring older sale records up to the current shape. */
+const byDate = (a, b) => a.date.localeCompare(b.date) || a.number - b.number;
+
 function normalizeSale(s) {
   s.returns ||= [];
   s.creditUsed ??= 0;
@@ -551,12 +586,13 @@ async function checkout() {
     returns: [],
     status: 'completed',
     cashier: ui.user?.name || '', // who was signed in
+    ...deviceStamp(),             // which till (cloud sync): series letter + device id
   };
 
   const ops = [];
   t.lines.forEach(l => {
     l.variant.stock -= l.qty;
-    ops.push(opPut('movements', movement(l.product, l.variant, -l.qty, 'sale', `#${fmtNo(number)}`)));
+    ops.push(opPut('movements', movement(l.product, l.variant, -l.qty, 'sale', `#${saleNo(sale)}`)));
   });
   [...new Set(t.lines.map(l => l.product))].forEach(p => ops.push(opPut('products', p)));
   state.sales.push(sale);
@@ -631,7 +667,7 @@ function openReturn(saleId) {
   const sale = state.sales.find(s => s.id === saleId);
   if (!sale) return;
   ui.ret = { saleId, qty: {}, method: ['cash', 'card', 'eft'].includes(sale.payment) ? sale.payment : 'cash' };
-  openModal({ title: `Return / exchange · #${fmtNo(sale.number)}`, body: '<div id="retBody"></div>', foot: '<div id="retFoot" class="foot-row"></div>' });
+  openModal({ title: `Return / exchange · #${saleNo(sale)}`, body: '<div id="retBody"></div>', foot: '<div id="retFoot" class="foot-row"></div>' });
   renderReturn();
 }
 
@@ -674,6 +710,7 @@ async function processReturn(asExchange) {
   const ret = {
     id: uid('r'), number: state.meta.nextCreditNo, date: new Date().toISOString(),
     method: asExchange ? 'credit' : ui.ret.method, ...pv,
+    cashier: ui.user?.name || '', ...deviceStamp(),
   };
   const ops = [];
   const restocked = [];
@@ -684,7 +721,7 @@ async function processReturn(asExchange) {
     if (!f) { missing.push(it.name); continue; }
     f.variant.stock += ri.qty;
     restocked.push([f.variant, ri.qty]);
-    ops.push(opPut('movements', movement(f.product, f.variant, ri.qty, 'return', `CN${fmtNo(ret.number)}`)));
+    ops.push(opPut('movements', movement(f.product, f.variant, ri.qty, 'return', retNo(ret))));
     if (!ops.some(o => o.store === 'products' && o.value === f.product)) ops.push(opPut('products', f.product));
   }
   sale.returns.push(ret);
@@ -704,7 +741,7 @@ async function processReturn(asExchange) {
   closeModal();
   if (missing.length) toast(`Not restocked (product deleted): ${missing.join(', ')}`, true);
   if (asExchange) {
-    ui.cart.credit = { amount: ret.amount, saleId: sale.id, returnId: ret.id, label: `CN${fmtNo(ret.number)}` };
+    ui.cart.credit = { amount: ret.amount, saleId: sale.id, returnId: ret.id, label: retNo(ret) };
     saveCart(true);
     showView('sell');
     if (!isWide()) openCartSheet();
@@ -819,7 +856,7 @@ async function saveReceive(productId) {
   toast(`Received ${total} item${total === 1 ? '' : 's'}`);
 }
 
-const REASON_LABEL = { sale: 'Sold', return: 'Returned', adjust: 'Adjusted', count: 'Stock count', receive: 'Received', new: 'New product' };
+const REASON_LABEL = { sale: 'Sold', return: 'Returned', adjust: 'Adjusted', count: 'Stock count', receive: 'Received', new: 'New product', opening: 'Opening stock' };
 
 async function openHistory(productId) {
   const p = findProduct(productId);
@@ -991,13 +1028,17 @@ function stockSummary() {
     retailValue: sum(rows, r => r.retailValue), lowCount: rows.filter(r => r.low).length };
 }
 
-/** Money movements for a shift (from the last cash-up until now). */
+/** Money movements for a shift (from the last cash-up until now) on THIS till.
+    With cloud sync, other devices' sales are in the data too, but each till
+    counts only its own cash drawer. */
 function computeShift(fromIso, toIso) {
   const from = fromIso ? new Date(fromIso) : new Date(0);
   const to = new Date(toIso);
   const inShift = d => { const x = new Date(d); return x > from && x <= to; };
-  const sales = state.sales.filter(s => inShift(s.date));
-  const rets = allReturns().filter(x => inShift(x.ret.date));
+  const me = Cloud.conf?.deviceId;
+  const mine = x => !me || !x.device || x.device === me;
+  const sales = state.sales.filter(s => inShift(s.date) && mine(s));
+  const rets = allReturns().filter(x => inShift(x.ret.date) && mine(x.ret));
   const byMethod = m => sum(sales.filter(s => s.payment === m), s => s.paid);
   const refundBy = m => sum(rets.filter(x => x.ret.method === m), x => x.ret.amount);
   const cashSales = byMethod('cash');
@@ -1053,7 +1094,8 @@ async function saveCashup() {
   if (!Number.isFinite(counted) || counted < 0) return toast('Enter the cash you counted', true);
   if (!Number.isFinite(nextFloat) || nextFloat < 0) return toast('Enter a valid float', true);
   const sh = computeShift(state.meta.lastCashupAt, new Date().toISOString());
-  const z = { id: uid('z'), number: state.meta.nextZNo, ...sh, counted, diff: counted - sh.expected, nextFloat, store: storeSnapshot() };
+  const z = { id: uid('z'), number: state.meta.nextZNo, ...sh, counted, diff: counted - sh.expected, nextFloat, store: storeSnapshot(),
+    cashier: ui.user?.name || '', ...deviceStamp() };
   state.cashups.push(z);
   state.meta.nextZNo += 1;
   state.meta.lastCashupAt = sh.to;
@@ -1098,7 +1140,7 @@ function receiptText(sale) {
   const st = sale.store || storeSnapshot();
   const registered = st.vatRegistered && sale.vatRate > 0;
   const out = headerLines(st, registered ? 'TAX INVOICE' : 'RECEIPT');
-  out.push(center(`No. ${fmtNo(sale.number)}`), center(fmtDT(sale.date)));
+  out.push(center(`No. ${saleNo(sale)}`), center(fmtDT(sale.date)));
   if (sale.cashier) out.push(center('Served by ' + sale.cashier));
   if (sale.customer) {
     out.push(LINE, 'Customer: ' + sale.customer.name);
@@ -1128,7 +1170,7 @@ function receiptText(sale) {
   if (sale.creditChange) out.push(lr('Credit paid out (cash)', money(sale.creditChange)));
   if (sale.returns.length) {
     out.push(LINE);
-    sale.returns.forEach(r => out.push(lr(`Returned ${r.number ? 'CN' + fmtNo(r.number) : ''} ${fmtDate(r.date)}`, '-' + money(r.amount))));
+    sale.returns.forEach(r => out.push(lr(`Returned ${r.number ? retNo(r) : ''} ${fmtDate(r.date)}`, '-' + money(r.amount))));
   }
   out.push(LINE, ...footerLines());
   return out.join('\n');
@@ -1139,8 +1181,8 @@ function creditNoteText(sale, ret) {
   const st = sale.store || storeSnapshot();
   const registered = st.vatRegistered && sale.vatRate > 0;
   const out = headerLines(st, registered ? 'CREDIT NOTE' : 'REFUND SLIP');
-  out.push(center(`No. CN${fmtNo(ret.number)}`), center(fmtDT(ret.date)));
-  out.push(center(`For invoice ${fmtNo(sale.number)} of ${fmtDate(sale.date)}`));
+  out.push(center(`No. ${retNo(ret)}`), center(fmtDT(ret.date)));
+  out.push(center(`For invoice ${saleNo(sale)} of ${fmtDate(sale.date)}`));
   if (sale.customer) out.push(LINE, 'Customer: ' + sale.customer.name);
   out.push(LINE);
   for (const ri of ret.items) {
@@ -1156,7 +1198,7 @@ function creditNoteText(sale, ret) {
 }
 
 function zText(z) {
-  const out = headerLines(z.store, `Z-REPORT No. ${fmtNo(z.number)}`);
+  const out = headerLines(z.store, `Z-REPORT No. ${zNo(z)}`);
   out.push(center('Cash-up / end of shift'));
   out.push(lr('From', z.from ? fmtDT(z.from) : 'start'), lr('To', fmtDT(z.to)), LINE);
   out.push(lr(`Sales (${z.salesCount})`, money(z.gross)));
@@ -1182,12 +1224,12 @@ function zText(z) {
 /** A "doc ref" names any printable document: sale:<id>, ret:<saleId>:<retId>, z:<id>. */
 function resolveDoc(ref) {
   const [kind, a, b] = String(ref).split(':');
-  if (kind === 'sale') { const s = state.sales.find(x => x.id === a); return s && { kind, sale: s, text: receiptText(s), title: `${s.vatRate ? 'Tax invoice' : 'Receipt'} #${fmtNo(s.number)}` }; }
+  if (kind === 'sale') { const s = state.sales.find(x => x.id === a); return s && { kind, sale: s, text: receiptText(s), title: `${s.vatRate ? 'Tax invoice' : 'Receipt'} #${saleNo(s)}` }; }
   if (kind === 'ret') {
     const s = state.sales.find(x => x.id === a); const r = s?.returns.find(x => x.id === b);
-    return r && { kind, sale: s, ret: r, text: creditNoteText(s, r), title: `${s.vatRate ? 'Credit note' : 'Refund slip'} CN${fmtNo(r.number)}` };
+    return r && { kind, sale: s, ret: r, text: creditNoteText(s, r), title: `${s.vatRate ? 'Credit note' : 'Refund slip'} ${retNo(r)}` };
   }
-  if (kind === 'z') { const z = state.cashups.find(x => x.id === a); return z && { kind, z, text: zText(z), title: `Z-report #${fmtNo(z.number)}` }; }
+  if (kind === 'z') { const z = state.cashups.find(x => x.id === a); return z && { kind, z, text: zText(z), title: `Z-report #${zNo(z)}` }; }
   return null;
 }
 
@@ -1240,8 +1282,8 @@ function showDoc(ref, { justSold = false } = {}) {
       ${justSold && s.payment === 'cash' ? `<div class="banner info"><p>Change due: <strong class="money">${money(s.change)}</strong></p></div>` : ''}
       ${justSold && s.creditChange ? `<div class="banner info"><p>Pay out unused credit in cash: <strong class="money">${money(s.creditChange)}</strong></p></div>` : ''}
       <pre class="receipt" tabindex="0" aria-label="${esc(doc.title)}">${esc(doc.text)}</pre>
-      ${doc.kind === 'ret' ? `<p class="small"><button class="link" data-action="open-doc" data-doc="sale:${esc(s.id)}">View original invoice #${fmtNo(s.number)}</button></p>` : ''}
-      ${doc.kind === 'sale' && s.returns.length ? `<p class="small">${s.returns.map(r => `<button class="link" data-action="open-doc" data-doc="ret:${esc(s.id)}:${esc(r.id)}">Credit note CN${fmtNo(r.number)}</button>`).join(' · ')}</p>` : ''}
+      ${doc.kind === 'ret' ? `<p class="small"><button class="link" data-action="open-doc" data-doc="sale:${esc(s.id)}">View original invoice #${saleNo(s)}</button></p>` : ''}
+      ${doc.kind === 'sale' && s.returns.length ? `<p class="small">${s.returns.map(r => `<button class="link" data-action="open-doc" data-doc="ret:${esc(s.id)}:${esc(r.id)}">Credit note ${retNo(r)}</button>`).join(' · ')}</p>` : ''}
       ${doc.kind !== 'z' ? `<label class="field" style="margin-top:12px"><span>Customer WhatsApp number (optional)</span>
         <input id="waPhone" class="input" type="tel" inputmode="tel" placeholder="082 123 4567"></label>` : ''}`,
     foot: `
@@ -1343,7 +1385,7 @@ function updateInert() {
 
 function backupOverdue() {
   const last = state.settings.lastBackupAt;
-  if (state.meta.demo) return false;
+  if (state.meta.demo || cloudOn()) return false; // the cloud is the backup
   if (!last) return state.sales.length > 0 || state.products.length > 0;
   return daysAgo(last) >= 7;
 }
@@ -1357,6 +1399,13 @@ function renderBanners() {
   if (state.meta.demo) {
     html += `<div class="banner info"><p><strong>Demo data.</strong> These products and sales are samples to try things out.</p>
       ${can('settings') ? '<button class="btn sm primary" data-action="start-fresh">Start fresh</button>' : ''}</div>`;
+  }
+  if (cloudOn() && Cloud.status === 'signedout') {
+    html += `<div class="banner"><p><strong>Cloud sync has stopped.</strong> Sign in again so this device's sales reach your other devices.</p>
+      ${can('settings') ? '<button class="btn sm primary" data-action="go-settings">Sign in</button>' : ''}</div>`;
+  } else if (cloudReady() && !cloudOn() && !state.meta.demo && can('settings')) {
+    html += `<div class="banner info"><p><strong>Protect your shop.</strong> Turn on cloud sync so all your devices share sales and stock, and a lost or wiped device loses nothing.</p>
+      <button class="btn sm primary" data-action="go-settings">Set up</button></div>`;
   }
   if (backupOverdue() && can('settings')) {
     const last = state.settings.lastBackupAt;
@@ -1405,6 +1454,7 @@ function showView(name) {
   closeCartSheet();
   renderAll();
   window.scrollTo(0, 0);
+  if (name === 'reports' || name === 'sales') syncNow(); // show other tills' latest sales
 }
 
 /* ----- Sell ----- */
@@ -1803,7 +1853,7 @@ async function deleteProduct(id) {
 function renderSales() {
   const q = $('#salesSearch').value.trim().toLowerCase();
   const list = state.sales.slice().reverse().filter(s => !q ||
-    fmtNo(s.number).includes(q) || String(s.number) === q ||
+    saleNo(s).toLowerCase().includes(q) || String(s.number) === q ||
     s.customer?.name?.toLowerCase().includes(q) ||
     s.items.some(it => it.name.toLowerCase().includes(q) || it.sku.toLowerCase().includes(q)));
   $('#salesList').innerHTML = list.length ? list.slice(0, 300).map(saleRow).join('') +
@@ -1816,7 +1866,7 @@ function saleRow(s) {
   const badge = s.status === 'returned' ? '<span class="badge returned">Returned</span>'
     : s.status === 'partial' ? '<span class="badge low">Part returned</span>' : '';
   return `<button class="sale-row ${s.status}" data-action="open-doc" data-doc="sale:${esc(s.id)}">
-    <span><strong>#${fmtNo(s.number)}</strong> ${badge}</span>
+    <span><strong>#${saleNo(s)}</strong> ${badge}</span>
     <span class="t money">${money(s.total)}</span>
     <span class="small muted">${fmtDT(s.date)} · ${n} item${n === 1 ? '' : 's'}${s.customer ? ' · ' + esc(s.customer.name) : ''}</span>
     <span class="small muted" style="text-align:right">${esc(PAY_LABEL[s.payment] || s.payment)}</span>
@@ -1835,7 +1885,7 @@ function renderReports() {
           <div class="small muted">Since ${sh.from ? fmtDT(sh.from) : 'the first sale'} · ${sh.salesCount} sales · expected cash in drawer <strong class="money" data-k="expected">${money(sh.expected)}</strong></div></div>
         <button class="btn primary" data-action="cashup">Cash up</button>
       </div>
-      ${recentZ.length ? `<div class="z-list">${recentZ.map(z => `<button class="link" data-action="open-doc" data-doc="z:${esc(z.id)}">Z${fmtNo(z.number)} · ${fmtDate(z.to)} · ${z.diff === 0 ? 'balanced' : (z.diff > 0 ? 'over ' : 'short ') + money(Math.abs(z.diff))}</button>`).join('')}</div>` : ''}
+      ${recentZ.length ? `<div class="z-list">${recentZ.map(z => `<button class="link" data-action="open-doc" data-doc="z:${esc(z.id)}">Z${zNo(z)} · ${fmtDate(z.to)} · ${z.diff === 0 ? 'balanced' : (z.diff > 0 ? 'over ' : 'short ') + money(Math.abs(z.diff))}</button>`).join('')}</div>` : ''}
     </div>`;
 
   // Period picker
@@ -2018,10 +2068,10 @@ function a4Summary(range) {
 function a4SalesList(range) {
   const r = buildReport(range);
   const rows = [
-    ...r.sales.map(s => ({ date: s.date, doc: `#${fmtNo(s.number)}`, who: s.cashier || '', how: PAY_LABEL[s.payment] || s.payment,
+    ...r.sales.map(s => ({ date: s.date, doc: `#${saleNo(s)}`, who: s.cashier || '', how: PAY_LABEL[s.payment] || s.payment,
       items: sum(s.items, it => it.qty), disc: s.discount || 0, vat: s.vat, total: s.total, note: s.customer?.name || '' })),
-    ...r.rets.map(({ sale, ret }) => ({ date: ret.date, doc: `CN${fmtNo(ret.number)}`, who: ret.cashier || '', how: PAY_LABEL[ret.method] || ret.method,
-      items: -sum(ret.items, ri => ri.qty), disc: 0, vat: -ret.vat, total: -ret.amount, note: `Refund on #${fmtNo(sale.number)}` })),
+    ...r.rets.map(({ sale, ret }) => ({ date: ret.date, doc: retNo(ret), who: ret.cashier || '', how: PAY_LABEL[ret.method] || ret.method,
+      items: -sum(ret.items, ri => ri.qty), disc: 0, vat: -ret.vat, total: -ret.amount, note: `Refund on #${saleNo(sale)}` })),
   ].sort((a, b) => a.date.localeCompare(b.date));
   return `${a4Header('Sales list', range.label)}
     <table class="a4-list">
@@ -2063,7 +2113,7 @@ function a4Cashups(range) {
   return `${a4Header('Cash-ups', range.label)}
     <table class="a4-list">
       <thead><tr><th>Z no.</th><th>From</th><th>To</th><th class="r">Sales</th><th class="r">Net takings</th><th class="r">Expected cash</th><th class="r">Counted</th><th class="r">Over / short</th></tr></thead>
-      <tbody>${zs.map(z => `<tr><td>Z${fmtNo(z.number)}</td><td>${z.from ? fmtDT(z.from) : '—'}</td><td>${fmtDT(z.to)}</td><td class="r">${z.salesCount}</td>
+      <tbody>${zs.map(z => `<tr><td>Z${zNo(z)}</td><td>${z.from ? fmtDT(z.from) : '—'}</td><td>${fmtDT(z.to)}</td><td class="r">${z.salesCount}</td>
         <td class="r">${m4(z.net)}</td><td class="r">${m4(z.expected)}</td><td class="r">${m4(z.counted)}</td>
         <td class="r">${z.diff === 0 ? 'Balanced' : m4(z.diff, z.diff < 0 ? 'neg' : '')}</td></tr>`).join('')
         || '<tr><td colspan="8">No cash-ups in this period.</td></tr>'}</tbody>
@@ -2136,9 +2186,12 @@ async function renderSettings() {
         <button class="btn" data-action="lock">Lock till</button>
       </div>
     </div>
-    <div class="section-title">Data safety</div>
+    ${cloudCardHtml()}
+    <div class="section-title">Backup file</div>
     <div class="card">
-      <p style="margin-top:0">Your data is stored <strong>only on this device</strong>. Back up at least once a week and keep the file somewhere else (email it to yourself, Google Drive, WhatsApp to yourself).</p>
+      <p style="margin-top:0">${cloudOn()
+        ? 'Your shop is saved in the cloud. A backup file is still a good extra copy now and then.'
+        : 'Without cloud sync your data is stored <strong>only on this device</strong> — clearing the browser\'s website data or losing the device deletes it. Back up at least once a week and keep the file somewhere else (email or WhatsApp it to yourself, or save it to Files / Google Drive).'}</p>
       <p class="small ${backupOverdue() ? 'warn-text' : 'muted'}"><strong>Last backup:</strong> ${last ? `${fmtDate(last)} (${daysAgo(last)} days ago)` : 'never'}</p>
       <div class="row gap-s wrap">
         <button class="btn primary" data-action="backup-download">Download backup</button>
@@ -2251,8 +2304,9 @@ async function restoreFromText(text) {
   if (!data || data.app !== 'rails-pos' || !Array.isArray(data.products) || !Array.isArray(data.sales)) {
     return toast('This does not look like a Rails POS backup', true);
   }
-  const ok = await confirmBox(`Replace ALL data on this device with the backup from ${data.exportedAt ? fmtDate(data.exportedAt) : 'unknown date'} (${data.products.length} products, ${data.sales.length} sales)?`, 'Restore', true);
+  const ok = await confirmBox(`Replace ALL data ${cloudOn() ? 'on ALL your synced devices' : 'on this device'} with the backup from ${data.exportedAt ? fmtDate(data.exportedAt) : 'unknown date'} (${data.products.length} products, ${data.sales.length} sales)?`, 'Restore', true);
   if (!ok) return;
+  if (!(await cloudResetBefore())) return;
   state.settings = { ...DEFAULT_SETTINGS, ...data.settings };
   state.products = data.products;
   state.sales = data.sales.map(normalizeSale);
@@ -2262,11 +2316,13 @@ async function restoreFromText(text) {
   state.meta.nextReceiptNo = Math.max(state.meta.nextReceiptNo, ...state.sales.map(s => s.number + 1));
   state.meta.nextCreditNo = Math.max(state.meta.nextCreditNo, ...state.sales.flatMap(s => s.returns.map(r => r.number + 1)));
   state.meta.nextZNo = Math.max(state.meta.nextZNo, ...state.cashups.map(z => z.number + 1));
+  state.sales.sort(byDate);
   ui.cart = emptyCart();
   await persistEverything(data.movements || []);
   restoreCart(ui.cart);
   renderAll();
   toast('Backup restored');
+  await cloudResetAfter();
 }
 
 function exportCsv() {
@@ -2282,13 +2338,13 @@ function exportCsv() {
   const rows = [head.join(',')];
   for (const s of state.sales) {
     for (const it of s.items) {
-      rows.push(['sale', fmtNo(s.number), fmtNo(s.number), fmtDate(s.date), fmtTime(s.date), s.payment,
+      rows.push(['sale', saleNo(s), saleNo(s), fmtDate(s.date), fmtTime(s.date), s.payment,
         cell(it.sku), cell(it.name), cell(it.size), cell(it.colour), it.qty,
         num(it.unitPrice), num(it.unitPrice * it.qty), num(it.unitCost), num(s.total), num(s.vat), s.vatRate, cell(s.customer?.name)].join(','));
     }
     for (const r of s.returns) for (const ri of r.items) {
       const it = s.items[ri.idx];
-      rows.push(['refund', 'CN' + fmtNo(r.number), fmtNo(s.number), fmtDate(r.date), fmtTime(r.date), r.method,
+      rows.push(['refund', retNo(r), saleNo(s), fmtDate(r.date), fmtTime(r.date), r.method,
         cell(it.sku), cell(it.name), cell(it.size), cell(it.colour), -ri.qty,
         num(it.unitPrice), num(-ri.amount), num(it.unitCost), num(-r.amount), num(-r.vat), s.vatRate, cell(s.customer?.name)].join(','));
     }
@@ -2300,8 +2356,9 @@ function exportCsv() {
 async function startFresh() {
   const ok = await confirmBox(state.meta.demo
     ? 'Remove all demo products and sales and start with an empty shop?'
-    : 'Delete ALL products, sales and cash-ups on this device? Make a backup first — this cannot be undone.', 'Start fresh', true);
+    : `Delete ALL products, sales and cash-ups ${cloudOn() ? 'on ALL your synced devices and in the cloud' : 'on this device'}? Make a backup first — this cannot be undone.`, 'Start fresh', true);
   if (!ok) return;
+  if (!(await cloudResetBefore())) return;
   const keep = state.meta.demo ? { ...DEFAULT_SETTINGS } : { ...state.settings };
   state.settings = keep;
   state.products = [];
@@ -2313,9 +2370,11 @@ async function startFresh() {
   restoreCart(ui.cart);
   renderAll();
   toast('Fresh start — add your first product on the Stock screen');
+  await cloudResetAfter();
 }
 
 async function loadDemo() {
+  if (cloudOn()) return toast('Demo data is off while cloud sync is on — it would replace your real shop on every device', true);
   if (!(await confirmBox('Replace everything on this device with demo data?', 'Load demo', true))) return;
   loadDemoData();
   await persistEverything();
@@ -2632,6 +2691,587 @@ function onUserFormChange(t) {
   }
 }
 
+/* ===== 14c. Cloud sync (Supabase) ========================================
+   Every device keeps its full copy in IndexedDB (works offline) and swaps
+   changes with the shop's cloud copy:
+
+   push  send the records listed in the outbox (they are upserted by id)
+   pull  ask for every cloud change after the last one seen (records.seq)
+         and merge it in. A change still waiting in our outbox wins.
+
+   Stock: two tills can sell the same shirt at the same moment, so stock is
+   never copied between devices. Each device works it out as the sum of all
+   stock movements (sales -1, returns +1, deliveries, counts…), and the
+   movements themselves are what sync. Opening stock gets a movement when a
+   shop is first uploaded, so the sum always matches.
+
+   Receipt numbers: each device gets a letter (A, B…) printed before its own
+   numbers, so tax invoice numbers are unique across tills.
+
+   Start fresh / Restore on a synced device empties the cloud copy and bumps
+   the shop's "generation"; other devices see that and download it again.
+   ======================================================================== */
+
+const Cloud = {
+  conf: null,      // kv 'cloud' — this device only: login tokens, shop, till letter, lastSeq
+  busy: false,
+  again: false,
+  status: 'off',   // off | ok | syncing | offline | error | signedout
+  message: '',
+  pending: 0,      // changes waiting in the outbox
+  timer: null,
+  soon: null,
+};
+const SYNC_EVERY_MS = 20000;
+const PULL_OVERLAP = 100; // re-read the last few changes in case two saves crossed
+const cloudReady = () => !!(CLOUD.url && CLOUD.key);
+const cloudOn = () => cloudReady() && !!Cloud.conf?.shopId;
+const deviceLetter = n => { let s = ''; for (let x = Math.max(1, n); x > 0; x = Math.floor((x - 1) / 26)) s = String.fromCharCode(65 + ((x - 1) % 26)) + s; return s; };
+function deviceStamp() { return Cloud.conf?.deviceCode ? { series: Cloud.conf.deviceCode, device: Cloud.conf.deviceId } : {}; }
+const saveCloudConf = () => DB.write([opKv('cloud', Cloud.conf)]);
+const countOutbox = async () => (await DB.getAll('outbox')).length;
+
+/** JSON with sorted keys, to compare records whatever order the database returns them in. */
+function stableStr(v) {
+  return JSON.stringify(v, (k, val) => (val && typeof val === 'object' && !Array.isArray(val)
+    ? Object.keys(val).sort().reduce((o, key) => { o[key] = val[key]; return o; }, {}) : val));
+}
+
+/* ----- Talking to Supabase (plain REST, no library) ----- */
+
+const cloudFetch = (url, opts) => (TEST_MODE && window.__cloudFetch ? window.__cloudFetch : fetch)(url, opts);
+
+async function cloudApi(path, { method = 'GET', body, headers = {}, auth = true } = {}) {
+  const h = { apikey: CLOUD.key, 'Content-Type': 'application/json', ...headers };
+  h.Authorization = 'Bearer ' + (auth ? await accessToken() : CLOUD.key);
+  let res;
+  try {
+    res = await cloudFetch(CLOUD.url.replace(/\/$/, '') + path, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) });
+  } catch {
+    const e = new Error('No connection to the cloud'); e.offline = true; throw e;
+  }
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!res.ok) { const e = new Error(cloudErrorText(data, res.status)); e.status = res.status; throw e; }
+  return data;
+}
+
+function cloudErrorText(d, status) {
+  const m = String((d && (d.msg || d.message || d.error_description || d.error)) || `Cloud error ${status}`);
+  if (/invalid login/i.test(m)) return 'Wrong email or password';
+  if (/not confirmed/i.test(m)) return 'Confirm your email first (check your inbox), then sign in';
+  if (/already registered|already exists/i.test(m)) return 'That email already has an account — tap Sign in';
+  if (/relation .* does not exist|could not find the table/i.test(m)) return 'The cloud database is not set up yet (run supabase-setup.sql)';
+  return m;
+}
+
+function setSession(d) {
+  Object.assign(Cloud.conf, {
+    access: d.access_token, refresh: d.refresh_token,
+    expiresAt: Date.now() + (d.expires_in || 3600) * 1000,
+    email: d.user?.email || Cloud.conf.email, userId: d.user?.id || Cloud.conf.userId,
+  });
+}
+
+/** A valid access token, refreshing it when it is about to expire (they last an hour). */
+async function accessToken() {
+  const c = Cloud.conf;
+  if (c?.access && Date.now() < c.expiresAt - 60000) return c.access;
+  const signedOut = () => { const e = new Error('Signed out of the cloud — sign in again in Settings'); e.signedOut = true; return e; };
+  if (!c?.refresh) throw signedOut();
+  let d;
+  try {
+    d = await cloudApi('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: { refresh_token: c.refresh }, auth: false });
+  } catch (e) {
+    if (e.status === 400 || e.status === 401) throw signedOut();
+    throw e;
+  }
+  setSession(d);
+  await saveCloudConf();
+  return c.access;
+}
+
+/** Sign in (or create the shop login). Returns 'ok', or 'confirm' when Supabase wants the email confirmed first. */
+async function cloudSignIn(email, password, create) {
+  Cloud.conf = { ...(Cloud.conf || {}), email };
+  Cloud.conf.deviceId ||= uid('d');
+  const d = create
+    ? await cloudApi('/auth/v1/signup', { method: 'POST', body: { email, password }, auth: false })
+    : await cloudApi('/auth/v1/token?grant_type=password', { method: 'POST', body: { email, password }, auth: false });
+  if (!d?.access_token) { await saveCloudConf(); return 'confirm'; }
+  setSession(d);
+  await saveCloudConf();
+  return 'ok';
+}
+
+/* ----- Push / pull / merge ----- */
+
+/** Send everything in the outbox (300 at a time). */
+async function pushOutbox() {
+  for (;;) {
+    const box = (await DB.getAll('outbox')).slice(0, 300);
+    if (!box.length) break;
+    const rows = [];
+    for (const o of box) {
+      const i = o.key.indexOf(':');
+      const kind = o.key.slice(0, i), id = o.key.slice(i + 1);
+      const data = await DB.get(kind, id);
+      rows.push({ shop_id: Cloud.conf.shopId, kind, id, data: data ?? null, deleted: data === undefined, device: Cloud.conf.deviceId });
+    }
+    await cloudApi('/rest/v1/records?on_conflict=shop_id,kind,id', {
+      method: 'POST', body: rows, headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    });
+    // Remove what was sent — unless it was changed again while we were sending.
+    const db = await DB.open();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('outbox', 'readwrite');
+      const s = tx.objectStore('outbox');
+      box.forEach(o => { s.get(o.key).onsuccess = e => { if (e.target.result?.v === o.v) s.delete(o.key); }; });
+      tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
+    });
+  }
+  Cloud.pending = 0;
+}
+
+/** All cloud changes after seq, oldest first. */
+async function fetchChanges(after) {
+  const rows = [];
+  let seq = after;
+  for (;;) {
+    const page = await cloudApi(`/rest/v1/records?select=kind,id,data,deleted,seq&shop_id=eq.${encodeURIComponent(Cloud.conf.shopId)}&seq=gt.${seq}&order=seq.asc&limit=1000`);
+    rows.push(...page);
+    if (page.length < 1000) break;
+    seq = page[page.length - 1].seq;
+  }
+  return rows;
+}
+
+/** Stock of these products = sum of their movements (see the note at the top of this section). */
+async function recomputeStock(productIds) {
+  const ops = [];
+  for (const pid of productIds) {
+    const p = findProduct(pid);
+    if (!p) continue;
+    const sums = new Map();
+    (await DB.getAllByIndex('movements', 'productId', pid)).forEach(m => sums.set(m.variantId, (sums.get(m.variantId) || 0) + m.change));
+    let changed = false;
+    p.variants.forEach(v => { const s = sums.get(v.id) || 0; if (v.stock !== s) { v.stock = s; changed = true; } });
+    if (changed) ops.push(opPut('products', p));
+  }
+  if (ops.length) await DB.write(ops, [], { remote: true });
+  return ops.length > 0;
+}
+
+/** Merge cloud rows into this device. Returns true if anything changed. */
+async function applyRemote(rows) {
+  const pending = new Set((await DB.getAll('outbox')).map(o => o.key));
+  const latest = new Map();
+  rows.forEach(r => latest.set(`${r.kind}:${r.id}`, r));
+  const order = { kv: 0, products: 1, cashups: 2, sales: 3, movements: 4 };
+  const list = [...latest.values()].sort((a, b) => order[a.kind] - order[b.kind]);
+  const ops = [];
+  const restock = new Set();
+  let changed = false, authChanged = false;
+
+  for (const r of list) {
+    const key = `${r.kind}:${r.id}`;
+    if (r.kind === 'movements') {
+      // Movements never change: add the ones we don't have yet.
+      if (r.deleted || !r.data || await DB.get('movements', r.id)) continue;
+      ops.push(opPut('movements', r.data));
+      restock.add(r.data.productId);
+      changed = true;
+      continue;
+    }
+    if (pending.has(key)) continue; // our own newer change is waiting to be sent
+
+    if (r.kind === 'kv') {
+      if (!SYNC_KV.includes(r.id) || r.deleted || !r.data) continue;
+      const local = r.id === 'settings' ? state.settings : await DB.get('kv', r.id);
+      if (stableStr(local) === stableStr(r.data)) continue;
+      ops.push(opKv(r.id, r.data));
+      if (r.id === 'settings') state.settings = { ...DEFAULT_SETTINGS, ...r.data };
+      else authChanged = true;
+      changed = true;
+      continue;
+    }
+
+    const arr = r.kind === 'products' ? state.products : r.kind === 'sales' ? state.sales : state.cashups;
+    if (!arr || !SYNC_STORES.includes(r.kind)) continue;
+    const i = arr.findIndex(x => x.id === r.id);
+    if (r.deleted || !r.data) {
+      if (i >= 0) { arr.splice(i, 1); ops.push({ store: r.kind, key: r.id, del: true }); changed = true; }
+      continue;
+    }
+    let incoming = clone(r.data);
+    if (r.kind === 'products') {
+      // Keep our own stock figures; they're recalculated from movements below.
+      const old = i >= 0 ? arr[i] : null;
+      incoming.variants.forEach(v => { v.stock = old?.variants.find(x => x.id === v.id)?.stock ?? 0; });
+      restock.add(incoming.id);
+    }
+    if (i >= 0 && stableStr(arr[i]) === stableStr(incoming)) continue;
+    if (r.kind === 'sales') incoming = normalizeSale(incoming);
+    if (i >= 0) arr[i] = incoming; else arr.push(incoming);
+    ops.push(opPut(r.kind, incoming));
+    changed = true;
+  }
+
+  if (ops.length) await DB.write(ops, [], { remote: true });
+  if (restock.size && await recomputeStock([...restock])) changed = true;
+  if (changed) {
+    state.sales.sort(byDate);
+    state.cashups.sort((a, b) => (a.to || '').localeCompare(b.to || ''));
+  }
+  if (authChanged) await refreshCurrentUser();
+  return changed;
+}
+
+/** Replace this device's shop data with the cloud copy (joining, or after another device reset the shop). */
+async function fullDownload() {
+  const rows = await fetchChanges(0); // fetch everything BEFORE touching local data
+  const latest = new Map();
+  rows.forEach(r => latest.set(`${r.kind}:${r.id}`, r));
+  const ops = [];
+  for (const r of latest.values()) {
+    if (r.deleted || r.data == null) continue;
+    if (r.kind === 'kv') { if (SYNC_KV.includes(r.id)) ops.push(opKv(r.id, r.data)); }
+    else if (SYNC_STORES.includes(r.kind)) ops.push(opPut(r.kind, r.data));
+  }
+  await DB.write(ops, [...SYNC_STORES, 'outbox'], { remote: true });
+  Cloud.conf.lastSeq = rows.length ? rows[rows.length - 1].seq : 0;
+  DB.tracking = true;
+  await saveCloudConf();
+  await loadState();
+  await recomputeStock(state.products.map(p => p.id));
+  await refreshCurrentUser();
+  renderAll();
+}
+
+/** Make sure every variant's stock equals the sum of its movements (adds "Opening stock" movements). */
+async function addOpeningMovements() {
+  const sums = new Map();
+  (await DB.getAll('movements')).forEach(m => sums.set(m.variantId, (sums.get(m.variantId) || 0) + m.change));
+  const ops = [];
+  for (const p of state.products) for (const v of p.variants) {
+    const diff = v.stock - (sums.get(v.id) || 0);
+    if (diff) ops.push(opPut('movements', { ...movement(p, v, diff, 'opening'), ref: 'Stock when cloud sync started' }));
+  }
+  if (ops.length) await DB.write(ops);
+}
+
+/** Queue every record on this device to be sent (first upload, or after a reset). */
+async function enqueueAll() {
+  const keys = [];
+  for (const s of SYNC_STORES) (await DB.getAll(s)).forEach(r => keys.push(`${s}:${r.id}`));
+  for (const k of SYNC_KV) if (await DB.get('kv', k)) keys.push(`kv:${k}`);
+  const db = await DB.open();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction('outbox', 'readwrite');
+    keys.forEach(key => tx.objectStore('outbox').put({ key, v: uid() }));
+    tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
+  });
+  Cloud.pending = keys.length;
+}
+
+/** One sync round: check for a reset, send our changes, fetch everyone else's. */
+async function syncNow() {
+  if (!cloudOn() || !ui.appActive) return;
+  if (Cloud.busy) { Cloud.again = true; return; }
+  if (!navigator.onLine) { Cloud.pending = await countOutbox(); setCloudStatus('offline'); return; }
+  Cloud.busy = true;
+  setCloudStatus('syncing');
+  try {
+    const [shop] = await cloudApi(`/rest/v1/shops?select=id,name,generation&id=eq.${encodeURIComponent(Cloud.conf.shopId)}`);
+    if (!shop) throw new Error('This shop was not found in the cloud. Sign in with the shop\'s email.');
+    Cloud.conf.shopName = shop.name;
+    await flushAllAdjust();
+    if (shop.generation !== Cloud.conf.generation) {
+      // Another device started fresh or restored a backup: take its data.
+      Cloud.conf.generation = shop.generation;
+      await fullDownload();
+      toast('Shop data was replaced from another device');
+    } else {
+      await pushOutbox();
+      const rows = await fetchChanges(Math.max(0, (Cloud.conf.lastSeq || 0) - PULL_OVERLAP));
+      if (rows.length) {
+        if (await applyRemote(rows)) renderAfterSync();
+        Cloud.conf.lastSeq = Math.max(Cloud.conf.lastSeq || 0, rows[rows.length - 1].seq);
+      }
+    }
+    Cloud.conf.lastSyncAt = new Date().toISOString();
+    await saveCloudConf();
+    setCloudStatus('ok');
+  } catch (e) {
+    console.warn('Sync failed:', e);
+    setCloudStatus(e.offline ? 'offline' : e.signedOut ? 'signedout' : 'error', e.message);
+  } finally {
+    Cloud.busy = false;
+    Cloud.pending = await countOutbox();
+    renderCloudStatus();
+    if (Cloud.again) { Cloud.again = false; scheduleSync(300); }
+  }
+}
+
+function scheduleSync(ms = 1500) {
+  clearTimeout(Cloud.soon);
+  Cloud.soon = setTimeout(syncNow, ms);
+}
+
+/** Redraw after other devices' changes arrive — but don't wipe out a form someone is typing in. */
+function renderAfterSync() {
+  const typing = document.activeElement?.closest?.('#view-settings, #view-stock, #view-admin');
+  if (typing) { renderBanners(); renderSell(); renderCart(); }
+  else renderAll();
+}
+
+/** After users change on another device: refresh our signed-in user (or lock if they were deleted). */
+async function refreshCurrentUser() {
+  if (!ui.user) return;
+  const u = (await loadAuth()).users.find(x => x.id === ui.user.id);
+  if (!u) { toast('Your user was removed on another device', true); await lockTill(); return; }
+  setUser(u);
+}
+
+/** Called from startApp. */
+async function startCloud() {
+  Cloud.conf = (await DB.get('kv', 'cloud')) || null;
+  DB.tracking = cloudOn();
+  DB.onTracked = () => { Cloud.pending++; renderCloudStatus(); scheduleSync(); };
+  Cloud.pending = cloudOn() ? await countOutbox() : 0;
+  setCloudStatus(cloudOn() ? 'ok' : 'off');
+  if (!Cloud.timer) Cloud.timer = setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, SYNC_EVERY_MS);
+  scheduleSync(300);
+}
+
+/* ----- Connecting, joining, disconnecting ----- */
+
+async function cloudAuthFromForm(create) {
+  const email = $('#cEmail').value.trim();
+  const password = $('#cPass').value;
+  if (!/^\S+@\S+\.\S+$/.test(email)) return toast('Enter the shop email address', true);
+  if (password.length < 6) return toast('The password needs at least 6 characters', true);
+  if (!navigator.onLine) return toast('You need internet to sign in', true);
+  const btns = $$('[data-action="cloud-signin"], [data-action="cloud-signup"]');
+  btns.forEach(b => { b.disabled = true; });
+  try {
+    const r = await cloudSignIn(email, password, create);
+    $('#cPass').value = '';
+    if (r === 'confirm') {
+      openModal({
+        title: 'Check your email',
+        body: `<p style="margin-top:0">We sent a confirmation link to <strong>${esc(email)}</strong>. Open it, then come back here and tap <strong>Sign in</strong>.</p>`,
+        foot: '<button class="btn primary" data-action="close-modal">OK</button>',
+      });
+      return;
+    }
+    if (cloudOn()) { toast('Signed in'); setCloudStatus('ok'); renderSettings(); syncNow(); return; }
+    const shops = await cloudApi('/rest/v1/shops?select=id,name,generation&order=created_at.asc');
+    if (shops.length) openJoinShop(shops[0]); else openCreateShop();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btns.forEach(b => { b.disabled = false; });
+  }
+}
+
+function openCreateShop() {
+  const demo = state.meta.demo;
+  openModal({
+    title: 'Create your shop in the cloud',
+    body: `<p style="margin-top:0">No shop is linked to <strong>${esc(Cloud.conf.email)}</strong> yet. This device becomes till <strong>A</strong>; its receipts are numbered A-00001, A-00002…</p>
+      ${demo
+        ? '<div class="banner info"><p>This device still has the <strong>demo data</strong>. Start empty to set up your real shop.</p></div>'
+        : `<p>This device has <strong>${state.products.length} products</strong> and <strong>${state.sales.length} sales</strong>. Upload them so every device starts with them.</p>`}`,
+    foot: `<button class="btn" data-action="close-modal">Cancel</button>
+      <button class="btn ${demo ? '' : 'primary'}" data-action="cloud-create" data-mode="upload">Upload ${demo ? 'demo data' : "this device's data"}</button>
+      <button class="btn ${demo ? 'primary' : ''}" data-action="cloud-create" data-mode="empty">Start with an empty shop</button>`,
+  });
+}
+
+async function createCloudShop(mode) {
+  closeModal();
+  try {
+    if (mode === 'empty') {
+      const theme = state.settings.theme;
+      if (state.meta.demo) state.settings = { ...DEFAULT_SETTINGS, theme };
+      state.products = []; state.sales = []; state.cashups = [];
+      state.meta = { ...DEFAULT_META };
+      ui.cart = emptyCart();
+      await persistEverything();
+      restoreCart(ui.cart);
+    }
+    const [shop] = await cloudApi('/rest/v1/shops', { method: 'POST', body: { name: state.settings.storeName }, headers: { Prefer: 'return=representation' } });
+    const n = await cloudApi('/rest/v1/rpc/claim_device', { method: 'POST', body: { p_shop: shop.id } });
+    Object.assign(Cloud.conf, { shopId: shop.id, shopName: shop.name, generation: shop.generation, deviceCode: deviceLetter(n), lastSeq: 0 });
+    state.meta.demo = false;
+    await DB.write([opKv('meta', state.meta)]);
+    await saveCloudConf();
+    DB.tracking = true;
+    await addOpeningMovements();
+    await enqueueAll();
+    renderAll();
+    toast('Shop created — uploading…');
+    await syncNow();
+    if (Cloud.status === 'ok') toast('Your shop is in the cloud');
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+function openJoinShop(shop) {
+  ui.joinShop = shop;
+  openModal({
+    title: `Join ${shop.name}`,
+    body: `<p style="margin-top:0">This device will download <strong>${esc(shop.name)}</strong> from the cloud and then stay in sync with your other devices. It gets its own till letter for receipt numbers.</p>
+      <div class="banner"><p><strong>Everything on this device is replaced</strong> by the shop's data${state.meta.demo ? ' (it only has demo data now)' : ` — the ${state.products.length} products and ${state.sales.length} sales here will be removed. Download a backup first if you need them`}.</p></div>`,
+    foot: `<button class="btn" data-action="close-modal">Cancel</button><button class="btn primary" data-action="cloud-join">Join and download</button>`,
+  });
+}
+
+async function joinCloudShop() {
+  const shop = ui.joinShop;
+  if (!shop) return;
+  closeModal();
+  const before = { ...Cloud.conf };
+  try {
+    toast('Downloading your shop…');
+    const n = await cloudApi('/rest/v1/rpc/claim_device', { method: 'POST', body: { p_shop: shop.id } });
+    Object.assign(Cloud.conf, { shopId: shop.id, shopName: shop.name, generation: shop.generation, deviceCode: deviceLetter(n), lastSeq: 0 });
+    // A new till: its own number series, and its own cash drawer starts now.
+    state.meta = { ...state.meta, nextReceiptNo: 1, nextCreditNo: 1, nextZNo: 1, lastCashupAt: new Date().toISOString(), float: 0, demo: false };
+    await DB.write([opKv('meta', state.meta)]);
+    await fullDownload();
+    setCloudStatus('ok');
+    toast(`Joined ${shop.name} — this is till ${Cloud.conf.deviceCode}`);
+  } catch (e) {
+    Cloud.conf = before;
+    DB.tracking = false;
+    await saveCloudConf();
+    toast(e.message, true);
+  }
+}
+
+async function disconnectCloud() {
+  const n = await countOutbox();
+  if (!(await confirmBox(`Stop syncing this device? Its data stays here, but new sales won't reach your other devices${n ? `, and ${n} change${n === 1 ? '' : 's'} not sent yet will stay only on this device` : ''}.`, 'Disconnect', true))) return;
+  if (Cloud.conf?.access && navigator.onLine) await cloudApi('/auth/v1/logout', { method: 'POST' }).catch(() => {});
+  // Keep the till letter so receipt numbers stay unique.
+  Cloud.conf = { deviceId: Cloud.conf?.deviceId, deviceCode: Cloud.conf?.deviceCode, email: Cloud.conf?.email };
+  DB.tracking = false;
+  await DB.write([opKv('cloud', Cloud.conf)], ['outbox']);
+  setCloudStatus('off');
+  renderAll();
+  toast('This device is no longer synced');
+}
+
+/** Start fresh / Restore on a synced device: empty the cloud copy first (needs internet). */
+async function cloudResetBefore() {
+  if (!cloudOn()) return true;
+  if (!navigator.onLine) { toast('Cloud sync is on — connect to the internet first, so all devices get the change', true); return false; }
+  try {
+    const g = await cloudApi('/rest/v1/rpc/reset_shop', { method: 'POST', body: { p_shop: Cloud.conf.shopId } });
+    Object.assign(Cloud.conf, { generation: g, lastSeq: 0 });
+    await saveCloudConf();
+    return true;
+  } catch (e) {
+    toast(e.message, true);
+    return false;
+  }
+}
+/** …then upload this device's new data. */
+async function cloudResetAfter() {
+  if (!cloudOn()) return;
+  await DB.write([], ['outbox'], { remote: true });
+  await addOpeningMovements();
+  await enqueueAll();
+  await syncNow();
+}
+
+/* ----- Status in the header ----- */
+
+function setCloudStatus(status, message = '') {
+  const was = Cloud.status;
+  Cloud.status = status;
+  Cloud.message = message;
+  renderCloudStatus();
+  if ((was === 'signedout') !== (status === 'signedout') && ui.appActive) renderBanners();
+}
+
+function renderCloudStatus() {
+  const el = $('#netStatus');
+  if (!el) return;
+  const online = navigator.onLine;
+  const p = Cloud.pending;
+  let text, cls = '', title;
+  if (!cloudOn()) {
+    text = online ? 'Online' : 'Offline';
+    cls = online ? '' : 'offline';
+    title = online
+      ? (cloudReady() ? 'Not synced: this device keeps its own data. Turn on cloud sync in Settings.' : 'Connected to the internet')
+      : 'No internet — everything still works and is saved on this device';
+    if (cloudReady()) { text = 'Not synced'; cls = 'offline'; }
+  } else if (Cloud.status === 'syncing') {
+    text = 'Syncing…'; title = 'Swapping changes with your other devices';
+  } else if (!online || Cloud.status === 'offline') {
+    text = p ? `Offline · ${p} waiting` : 'Offline'; cls = 'offline';
+    title = 'No internet — sales are saved here and sent when the connection is back';
+  } else if (Cloud.status === 'signedout') {
+    text = 'Sign in to sync'; cls = 'err'; title = Cloud.message;
+  } else if (Cloud.status === 'error') {
+    text = 'Sync problem'; cls = 'err'; title = Cloud.message || 'Could not sync';
+  } else {
+    text = p ? 'Saving…' : 'Synced';
+    title = Cloud.conf.lastSyncAt ? `Last synced ${fmtDT(Cloud.conf.lastSyncAt)}` : 'Synced';
+  }
+  el.textContent = text;
+  el.className = 'net ' + cls;
+  el.title = title;
+  el.setAttribute('aria-label', `${text}. ${title}`);
+  if (ui.view === 'settings' && document.getElementById('cloudStatusLine')) $('#cloudStatusLine').innerHTML = cloudStatusLine();
+}
+
+function cloudStatusLine() {
+  const c = Cloud.conf;
+  const last = c?.lastSyncAt ? `last synced ${fmtDT(c.lastSyncAt)}` : 'not synced yet';
+  const state_ = { ok: 'Synced', syncing: 'Syncing…', offline: 'Offline', error: 'Problem', signedout: 'Signed out' }[Cloud.status] || '';
+  return `<strong>${state_}</strong> · ${last}${Cloud.pending ? ` · ${Cloud.pending} change${Cloud.pending === 1 ? '' : 's'} waiting to send` : ''}${Cloud.message && Cloud.status !== 'ok' ? `<br><span class="err-text">${esc(Cloud.message)}</span>` : ''}`;
+}
+
+/** The "Cloud sync & backup" card in Settings. */
+function cloudCardHtml() {
+  const title = '<div class="section-title">Cloud sync &amp; backup</div>';
+  if (!cloudReady()) {
+    return `${title}<div class="card"><p class="small muted" style="margin:0">Cloud sync isn't set up in this copy of the app yet. Until it is, data stays only on this device — back up weekly.</p></div>`;
+  }
+  const c = Cloud.conf || {};
+  const form = `
+    <label class="field"><span>Shop email</span><input id="cEmail" class="input" type="email" autocomplete="username" autocapitalize="none" value="${esc(c.email || '')}"></label>
+    <label class="field"><span>Shop password</span><input id="cPass" class="input" type="password" autocomplete="current-password"></label>`;
+  if (cloudOn()) {
+    return `${title}<div class="card cloud-card on">
+      <p style="margin-top:0"><strong>${esc(c.shopName || 'Your shop')}</strong> · ${esc(c.email || '')}</p>
+      <p class="small muted">This device is <strong>till ${esc(c.deviceCode)}</strong> (receipts ${esc(c.deviceCode)}-00001…). Sales, stock, products, settings and users are shared by all devices of the shop and kept safe online. Each till cashes up its own drawer.</p>
+      <p class="small" id="cloudStatusLine">${cloudStatusLine()}</p>
+      ${Cloud.status === 'signedout' ? `${form}<div class="row gap-s wrap" style="margin-bottom:10px"><button class="btn primary" data-action="cloud-signin">Sign in again</button></div>` : ''}
+      <div class="row gap-s wrap">
+        <button class="btn primary" data-action="cloud-sync">Sync now</button>
+        <button class="btn" data-action="cloud-disconnect">Disconnect this device</button>
+      </div>
+    </div>`;
+  }
+  return `${title}<div class="card cloud-card">
+    <p style="margin-top:0"><strong>Keep every device in step, and never lose your data.</strong> Sales, stock, products and settings are saved online and shared between your phone, iPad and PC. A new or wiped device simply signs in to get everything back.</p>
+    ${form}
+    <div class="row gap-s wrap">
+      <button class="btn primary" data-action="cloud-signin">Sign in</button>
+      <button class="btn" data-action="cloud-signup">Create shop account</button>
+    </div>
+    <p class="small muted" style="margin-bottom:0">Use the same shop email and password on every device. It is separate from the 4-digit staff PINs, and only needs entering once per device.</p>
+  </div>`;
+}
+
 /* ===== 15. One tab at a time ============================================
    Each tab keeps the data in memory, so two open tabs could overwrite each
    other's work. A Web Lock makes sure only one tab is "active"; any other
@@ -2819,6 +3459,13 @@ const actions = {
   'user-edit': el => openUserForm(el.dataset.id),
   'user-save': el => saveUser(el.dataset.id || null),
   'user-delete': el => deleteUser(el.dataset.id),
+  'cloud-signin': () => cloudAuthFromForm(false),
+  'cloud-signup': () => cloudAuthFromForm(true),
+  'cloud-sync': () => syncNow(),
+  'cloud-disconnect': () => disconnectCloud(),
+  'cloud-create': el => createCloudShop(el.dataset.mode),
+  'cloud-join': () => joinCloudShop(),
+  'go-settings': () => showView('settings'),
 };
 
 /* Actions that need a permission. Buttons are hidden too, but this is the real check. */
@@ -2831,6 +3478,8 @@ const ACTION_PERMS = {
   'backup-download': 'settings', 'backup-copy': 'settings', 'backup-share': 'settings', 'restore-paste': 'settings',
   'export-csv': 'settings', 'start-fresh': 'settings', 'load-demo': 'settings',
   'user-add': 'admin', 'user-edit': 'admin', 'user-save': 'admin', 'user-delete': 'admin',
+  'cloud-signin': 'settings', 'cloud-signup': 'settings', 'cloud-disconnect': 'settings', 'cloud-create': 'settings', 'cloud-join': 'settings',
+  'go-settings': 'settings',
 };
 function allowed(perm) {
   if (!perm || can(perm)) return true;
@@ -2899,21 +3548,19 @@ function bindEvents() {
     }
   });
 
-  // Online / offline indicator
-  const net = () => {
-    const on = navigator.onLine;
-    const el = $('#netStatus');
-    el.textContent = on ? 'Online' : 'Offline';
-    el.classList.toggle('offline', !on);
-    el.title = on ? 'Connected' : 'No internet — everything still works and is saved on this device';
-  };
-  window.addEventListener('online', net);
-  window.addEventListener('offline', net);
-  net();
+  // Header pill: online / offline, or the cloud sync status
+  window.addEventListener('online', () => { renderCloudStatus(); syncNow(); });
+  window.addEventListener('offline', () => renderCloudStatus());
+  $('#netStatus').addEventListener('click', () => {
+    if (!ui.user || !$('#blocker').hidden) return;
+    if (cloudOn() && Cloud.status !== 'signedout') syncNow();
+    else if (cloudReady() && can('settings')) showView('settings');
+  });
+  renderCloudStatus();
 
   // Save anything pending when the app is hidden or closed (phone locked, app switched).
   const flush = () => { if (ui.appActive) { flushAllAdjust(); saveCart(true); } };
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); else syncNow(); });
   window.addEventListener('pagehide', flush);
 
   window.matchMedia('(min-width: 860px)').addEventListener('change', () => { closeCartSheet(); updateInert(); });
@@ -2932,6 +3579,7 @@ async function startApp() {
   }
   ui.appActive = true;
   hideBlocker();
+  try { await startCloud(); } catch (err) { console.error(err); }
   renderAll();
   if (isWide()) $('#sellSearch').focus();
 }
@@ -2953,6 +3601,7 @@ async function boot() {
 }
 
 // Handle for tests / debugging in the console.
-window.__pos = { state, ui, DB, actions, buildReport, computeShift, receiptText, creditNoteText, zText, cartTotals, flushAllAdjust, checkLogin };
+window.__pos = { state, ui, DB, actions, buildReport, computeShift, receiptText, creditNoteText, zText, cartTotals, flushAllAdjust, checkLogin,
+  Cloud, CLOUD, syncNow, applyRemote };
 
 boot();
