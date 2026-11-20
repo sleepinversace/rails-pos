@@ -37,9 +37,10 @@ const DB_NAME = TEST_MODE ? 'rails-pos-test' + (TEST_DEVICE && TEST_DEVICE !== '
     inside the app — the database's row-level security keeps each shop's
     data private to that shop's login. Leave empty to turn cloud sync off. */
 const CLOUD = {
-  url: '',   // e.g. https://abcdefgh.supabase.co
-  key: '',   // the anon / publishable key
+  url: 'https://dwayjgzfewuiaayixlmb.supabase.co',
+  key: 'sb_publishable_O4YjTjP8eu34O7yxGCq3aQ_jsZ0CyCw', // publishable key (safe to be public)
 };
+if (TEST_MODE) CLOUD.url = ''; // tests never touch the real database (they use a fake one)
 /** SARS: a tax invoice for more than R5 000 must show the buyer's name and address. */
 const FULL_TAX_INVOICE_OVER = 500000;
 
