@@ -17,6 +17,12 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v24 — 2026-11-21 · Import stock, lay-by reminders, reorder list, staff commission
+- ✨ **Import stock from Excel or CSV** (Stock → Import): choose an `.xlsx` or `.csv` file, or copy rows in Excel and paste them. One row per size/colour; only Name and Price are needed (Category, Size, Colour, Cost, Stock, SKU, Barcode, Description optional; headings matched loosely, e.g. "Qty", "Color", "Selling price"). Preview before importing, with problems listed by row. Products with the same name get the new sizes/colours; existing ones are skipped, or updated if ticked. Download a template. Opening stock is recorded as "Imported".
+- ✨ **Lay-by reminders on WhatsApp:** Clients → **To remind** lists lay-bys that are overdue, due within 14 days, or have had no payment for 30 days (and weren't reminded in the last week). One tap opens WhatsApp with a friendly message; the reminder is recorded on the lay-by. "Remind on WhatsApp" is also on each open lay-by. The wording is in Settings → Lay-bys.
+- ✨ **Reorder list** (Reports, and Print A4 → Reorder list): items that are low or will run out within 14 days at the period's selling rate, how long the stock lasts, and how many to buy for about 30 days, with the cost.
+- ✨ **Staff sales & commission** (Reports, and Print A4 → Staff sales & commission): sales, items, refunds, net sales, average sale and commission per employee. Set the commission % on the Reports screen (owners/managers).
+
 ## v23 — 2026-11-21 · Till-slip receipts, receipt printers and label printers
 - 🔧 **New receipt layout** (like a normal till slip): logo **centred** at the top, shop name, slogan, "Contact No:", invoice number with date and time, employee, **Qty · Description · Price · Total** columns, discount, **TOTAL (ZAR) in large print**, total excluding VAT / VAT / total including VAT, payments, **customer name and lay-by number in large print**, optional signature line, footer. Lay-by slips and payment receipts use the same layout.
 - ✨ **Settings → Receipts & printers:** paper **80 mm** (42 characters) or **58 mm**; print the shop name under the logo or not; signature line; **print automatically** after each sale, lay-by and payment; **Print a test receipt**.

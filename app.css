@@ -788,6 +788,8 @@ input:disabled { opacity: .5; }
 /* ----- Printing -----
    Receipts: only the till slip (#printArea).
    A4 reports: body.printing-a4 shows only #printA4 (page size set from app.js). */
+.remind-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.reorder-tag { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--danger); color: var(--danger); margin-left: 6px; }
 .print-a4 { display: none; }
 /* Till slip: width and font size come from app.js (--slip-w, --slip-font) so that
    42 characters fill 80 mm paper (32 on 58 mm). The logo sits centred on top. */

@@ -243,6 +243,8 @@ const DEFAULT_SETTINGS = {
   receiptSignature: false,  // "Signature ____" line on receipts and lay-by slips
   autoPrint: false,         // print new receipts / slips straight away
   laybyMonths: 3,           // default lay-by term
+  laybyReminder: '',        // WhatsApp reminder wording ('' = the built-in message)
+  commissionRate: 0,        // staff commission, % of each person's net sales excl. VAT (Reports)
   vatRegistered: true,      // false = no VAT on receipts or in reports
   vatNumber: '',
   vatRate: 15,              // percent; prices include VAT
@@ -935,7 +937,7 @@ async function saveReceive(productId) {
   toast(`Received ${total} item${total === 1 ? '' : 's'}`);
 }
 
-const REASON_LABEL = { sale: 'Sold', return: 'Returned', adjust: 'Adjusted', count: 'Stock count', receive: 'Received', new: 'New product', opening: 'Opening stock', layby: 'Lay-by (put aside)', 'layby-cancel': 'Lay-by cancelled' };
+const REASON_LABEL = { sale: 'Sold', return: 'Returned', adjust: 'Adjusted', count: 'Stock count', receive: 'Received', new: 'New product', opening: 'Opening stock', layby: 'Lay-by (put aside)', 'layby-cancel': 'Lay-by cancelled', import: 'Imported' };
 
 async function openHistory(productId) {
   const p = findProduct(productId);
@@ -1105,6 +1107,67 @@ function stockSummary() {
   }
   return { rows, units: sum(rows, r => Math.max(0, r.qty)), costValue: sum(rows, r => r.costValue),
     retailValue: sum(rows, r => r.retailValue), lowCount: rows.filter(r => r.low).length };
+}
+
+/* ----- Reorder list -----
+   Sold = items sold in the period (sales minus returns) plus items put on
+   lay-by (cancelled lay-bys left out; a collected lay-by isn't counted twice).
+   From that: sold per day, how many days the stock will last, and how many to
+   buy so there is enough for REORDER_COVER_DAYS. Listed: anything at or below
+   the low-stock level, or that runs out within REORDER_SOON_DAYS. */
+const REORDER_COVER_DAYS = 30;
+const REORDER_SOON_DAYS = 14;
+
+function reorderList(range) {
+  const from = +range.from;
+  const end = Math.min(+range.to, Date.now());
+  const days = Math.max(1, (end - from) / DAY_MS);
+  const inR = iso => { const d = +new Date(iso); return d >= from && d < +range.to; };
+  const sold = new Map();
+  const add = (vid, n) => sold.set(vid, (sold.get(vid) || 0) + n);
+  state.sales.filter(s => inR(s.date) && s.payment !== 'layby').forEach(s => s.items.forEach(it => add(it.variantId, it.qty)));
+  allReturns().filter(x => inR(x.ret.date) && x.sale.payment !== 'layby').forEach(({ sale, ret }) => ret.items.forEach(ri => add(sale.items[ri.idx].variantId, -ri.qty)));
+  state.laybys.filter(l => l.status !== 'cancelled').forEach(l => l.items.forEach(it => { if (inR(it.addedAt || l.date)) add(it.variantId, it.qty); }));
+  const low = Number(state.settings.lowStock) || 0;
+  const rows = [];
+  for (const p of state.products) for (const v of p.variants) {
+    const n = Math.max(0, sold.get(v.id) || 0);
+    const perDay = n / days;
+    const lasts = perDay > 0 ? Math.max(0, v.stock) / perDay : Infinity;
+    const isLow = v.stock <= low;
+    if (!isLow && lasts >= REORDER_SOON_DAYS) continue;
+    const buy = Math.max(0, Math.ceil(perDay * REORDER_COVER_DAYS) - v.stock, isLow ? low + 1 - v.stock : 0);
+    rows.push({ product: p, variant: v, sold: n, stock: v.stock, lasts, buy, cost: costOf(p, v) });
+  }
+  rows.sort((a, b) => (a.stock > 0) - (b.stock > 0) || a.lasts - b.lasts || b.sold - a.sold);
+  return { rows, days: Math.round(days), units: sum(rows, r => r.buy), cost: sum(rows, r => r.buy * r.cost) };
+}
+const lastsText = r => (r.stock <= 0 ? 'Out of stock' : r.lasts === Infinity ? 'Not selling' : `${Math.max(0, Math.floor(r.lasts))} day${Math.floor(r.lasts) === 1 ? '' : 's'}`);
+
+/* ----- Staff sales & commission -----
+   Each sale counts for the person who rang it up (a collected lay-by for the
+   person who collected it). Refunds count against whoever made the original
+   sale, on the day of the refund. Commission = the shop's rate (Reports) on
+   each person's net sales excluding VAT. */
+function staffReport(range) {
+  const inR = iso => { const d = new Date(iso); return d >= range.from && d < range.to; };
+  const rate = Number(state.settings.commissionRate) || 0;
+  const map = new Map();
+  const row = name => {
+    if (!map.has(name)) map.set(name, { name, count: 0, items: 0, gross: 0, refunds: 0, exVat: 0 });
+    return map.get(name);
+  };
+  state.sales.filter(s => inR(s.date)).forEach(s => {
+    const r = row(s.cashier || 'Not recorded');
+    r.count++; r.items += sum(s.items, it => it.qty); r.gross += s.total; r.exVat += s.total - s.vat;
+  });
+  allReturns().filter(x => inR(x.ret.date)).forEach(({ sale, ret }) => {
+    const r = row(sale.cashier || 'Not recorded');
+    r.refunds += ret.amount; r.exVat -= ret.amount - ret.vat;
+  });
+  const rows = [...map.values()].map(r => ({ ...r, net: r.gross - r.refunds, avg: r.count ? Math.round(r.gross / r.count) : 0,
+    commission: Math.max(0, Math.round(r.exVat * rate / 100)) })).sort((a, b) => b.net - a.net);
+  return { rows, rate, net: sum(rows, r => r.net), commission: sum(rows, r => r.commission) };
 }
 
 /** Money movements for a shift (from the last cash-up until now) on THIS till.
@@ -2251,10 +2314,28 @@ function renderReports() {
           <tr><td><span class="rank">${i + 1}</span>${esc(t.name)}</td><td>${t.qty} sold · <span class="money">${money(t.amount)}</span></td></tr>`).join('')}</table>`
           : '<div class="muted small">No sales in this period.</div>'}</div>
 
-        <div class="section-title">By cashier</div>
-        <div class="card">${r.cashiers.length ? `<table class="list-table">${r.cashiers.map(c => `
-          <tr><td>${esc(c.name)} <span class="muted small">· ${c.count} sale${c.count === 1 ? '' : 's'}</span></td><td><span class="money">${money(c.amount)}</span></td></tr>`).join('')}</table>`
-          : '<div class="muted small">No sales in this period.</div>'}</div>
+        <div class="section-title">Staff sales &amp; commission</div>
+        <div class="card" id="staffCard">${(() => {
+          const sr = staffReport(range);
+          return `${sr.rows.length ? `<table class="list-table">${sr.rows.map(c => `
+            <tr><td>${esc(c.name)} <span class="muted small">· ${c.count} sale${c.count === 1 ? '' : 's'} · ${c.items} item${c.items === 1 ? '' : 's'}${c.refunds ? ` · refunds <span class="money neg">${money(c.refunds)}</span>` : ''}</span></td>
+              <td><span class="money" data-k="staff-${esc(c.name)}">${money(c.net)}</span>${sr.rate ? `<br><span class="small muted">commission <span class="money" data-k="comm-${esc(c.name)}">${money(c.commission)}</span></span>` : ''}</td></tr>`).join('')}</table>`
+            : '<div class="muted small">No sales in this period.</div>'}
+          <div class="row gap-s wrap" style="margin-top:8px;align-items:center">
+            ${can('settings') ? `<label class="small">Commission <input class="input sm" style="width:70px" inputmode="decimal" data-setting="commissionRate" value="${esc(sr.rate)}" aria-label="Commission percentage"> % of net sales excl. VAT</label>`
+              : `<span class="small muted">Commission ${sr.rate}% of net sales excl. VAT</span>`}
+          </div>`;
+        })()}</div>
+
+        <div class="section-title">Reorder list</div>
+        <div class="card">${(() => {
+          const ro = reorderList(range);
+          return ro.rows.length ? `<table class="list-table">${ro.rows.slice(0, 10).map(x => `
+            <tr><td>${esc(x.product.name)} <span class="muted small">(${esc(x.variant.size)} / ${esc(x.variant.colour)}) · sold ${x.sold} · ${x.stock} left</span>${x.stock <= 0 ? '<span class="reorder-tag">OUT</span>' : ''}<br>
+              <span class="small muted">Lasts: ${lastsText(x)}</span></td><td>Buy <strong>${x.buy}</strong></td></tr>`).join('')}</table>
+            <p class="small muted" style="margin:6px 0 0">${ro.rows.length > 10 ? `${ro.rows.length} items in all — print the full list with <b>Print A4 → Reorder list</b>. ` : ''}Based on sales in this period (${ro.days} day${ro.days === 1 ? '' : 's'}); "Buy" covers about ${REORDER_COVER_DAYS} days. Choose 30 days above for a better guess.</p>`
+            : '<div class="muted small">Nothing to reorder: no item is low or running out.</div>';
+        })()}</div>
 
         ${vatOn ? `<div class="section-title">VAT summary</div>
         <div class="card"><table class="list-table">
@@ -2275,7 +2356,45 @@ const A4_REPORTS = [
   ['sales', 'Sales list', 'Every sale and refund in the period, with totals — for your bookkeeper'],
   ['stock', 'Stock on hand', 'Every product and size with quantity, cost value and selling value'],
   ['cashups', 'Cash-ups', 'Each Z-report in the period: expected and counted cash, over or short'],
+  ['reorder', 'Reorder list', 'What is low or running out, how long it will last and how many to buy'],
+  ['staff', 'Staff sales & commission', 'Sales, refunds and commission per employee in the period'],
 ];
+
+function a4Reorder(range) {
+  const ro = reorderList(range);
+  return `${a4Header('Reorder list', `Based on sales: ${range.label}`)}
+    <section class="a4-kpis">
+      <div><span>Items to reorder</span><b>${ro.rows.length}</b></div>
+      <div><span>Out of stock</span><b>${ro.rows.filter(r => r.stock <= 0).length}</b></div>
+      <div><span>Units to buy</span><b>${ro.units}</b></div>
+      <div><span>Approx. cost</span>${m4(ro.cost)}</div>
+    </section>
+    <table class="a4-list">
+      <thead><tr><th>Product</th><th>Size / colour</th><th>SKU</th><th class="r">Sold</th><th class="r">In stock</th><th class="r">Lasts</th><th class="r">Buy</th><th class="r">Cost</th></tr></thead>
+      <tbody>${ro.rows.map(x => `<tr class="${x.stock <= 0 ? 'low' : ''}"><td><b>${esc(x.product.name)}</b></td><td>${esc(x.variant.size)} / ${esc(x.variant.colour)}</td><td class="sku">${esc(x.variant.sku)}</td>
+        <td class="r">${x.sold}</td><td class="r">${x.stock}</td><td class="r">${lastsText(x)}</td><td class="r"><b>${x.buy}</b></td><td class="r">${m4(x.buy * x.cost)}</td></tr>`).join('')
+        || '<tr><td colspan="8">Nothing to reorder.</td></tr>'}</tbody>
+      ${ro.rows.length ? `<tfoot><tr class="tot"><td colspan="6">Total</td><td class="r">${ro.units}</td><td class="r">${m4(ro.cost)}</td></tr></tfoot>` : ''}
+    </table>
+    <p class="a4-note">Listed: items at or below the low-stock level (${Number(state.settings.lowStock) || 0}) or that run out within ${REORDER_SOON_DAYS} days at the period's selling rate. "Buy" = enough for about ${REORDER_COVER_DAYS} days. Cost at the saved cost price.</p>
+    ${a4Foot()}`;
+}
+
+function a4Staff(range) {
+  const sr = staffReport(range);
+  return `${a4Header('Staff sales & commission', range.label)}
+    <table class="a4-list">
+      <thead><tr><th>Employee</th><th class="r">Sales</th><th class="r">Items</th><th class="r">Sales value</th><th class="r">Refunds</th><th class="r">Net sales</th><th class="r">Average sale</th><th class="r">Commission${sr.rate ? ` (${sr.rate}%)` : ''}</th></tr></thead>
+      <tbody>${sr.rows.map(c => `<tr><td><b>${esc(c.name)}</b></td><td class="r">${c.count}</td><td class="r">${c.items}</td><td class="r">${m4(c.gross)}</td>
+        <td class="r">${c.refunds ? m4(-c.refunds) : ''}</td><td class="r">${m4(c.net)}</td><td class="r">${m4(c.avg)}</td><td class="r">${m4(c.commission)}</td></tr>`).join('')
+        || '<tr><td colspan="8">No sales in this period.</td></tr>'}</tbody>
+      ${sr.rows.length ? `<tfoot><tr class="tot"><td>Total</td><td class="r">${sum(sr.rows, c => c.count)}</td><td class="r">${sum(sr.rows, c => c.items)}</td><td class="r">${m4(sum(sr.rows, c => c.gross))}</td>
+        <td class="r">${m4(-sum(sr.rows, c => c.refunds))}</td><td class="r">${m4(sr.net)}</td><td></td><td class="r">${m4(sr.commission)}</td></tr></tfoot>` : ''}
+    </table>
+    <p class="a4-note">Refunds count against the person who made the original sale. Commission is ${sr.rate}% of net sales excluding VAT${sr.rate ? '' : ' (set the rate on the Reports screen)'}. Collected lay-bys count for the person who collected them.</p>
+    <p class="a4-note" style="margin-top:28px">Checked by: ______________________ &nbsp;&nbsp; Date: ____________</p>
+    ${a4Foot()}`;
+}
 
 function openPrintMenu() {
   const range = reportRange();
@@ -2414,7 +2533,8 @@ function a4Cashups(range) {
 /** Build the chosen report into #printA4 and open the print dialog on A4 paper. */
 function printA4(kind) {
   const range = reportRange();
-  const html = kind === 'sales' ? a4SalesList(range) : kind === 'stock' ? a4Stock() : kind === 'cashups' ? a4Cashups(range) : a4Summary(range);
+  const html = kind === 'sales' ? a4SalesList(range) : kind === 'stock' ? a4Stock() : kind === 'cashups' ? a4Cashups(range)
+    : kind === 'reorder' ? a4Reorder(range) : kind === 'staff' ? a4Staff(range) : a4Summary(range);
   $('#printA4').innerHTML = html;
   setPrintMode('a4');
   closeModal();
@@ -2479,6 +2599,9 @@ async function renderSettings() {
       <label class="field" style="margin-bottom:0"><span>Months to pay a lay-by (default for new lay-bys)</span>
         <input class="input" inputmode="numeric" data-setting="laybyMonths" value="${esc(st.laybyMonths)}"></label>
       <p class="small muted" style="margin:6px 0 0">Overdue lay-bys are marked in red but can still be paid. Statements can be sent from the client's profile.</p>
+      <label class="field" style="margin:12px 0 0"><span>WhatsApp reminder message</span>
+        <textarea class="plain" data-setting="laybyReminder" rows="4">${esc(st.laybyReminder || DEFAULT_REMINDER)}</textarea></label>
+      <p class="small muted" style="margin:6px 0 0">These words are filled in for each client: {name} {fullname} {shop} {number} {balance} {total} {paid} {due}</p>
     </div>
     <div class="section-title">VAT</div>
     <div class="card">
@@ -2571,6 +2694,10 @@ async function onSettingChange(input) {
     value = parseInt(value, 10);
     if (!Number.isFinite(value) || value < 0) return toast('Threshold must be 0 or more', true);
   }
+  if (key === 'commissionRate') {
+    value = Number(String(value).replace(',', '.').replace('%', '')) || 0;
+    if (!(value >= 0 && value <= 50)) return toast('Commission must be 0 to 50%', true);
+  }
   if (key === 'laybyMonths') {
     value = parseInt(value, 10);
     if (!(value >= 1 && value <= 36)) return toast('Months must be 1 to 36', true);
@@ -2586,6 +2713,7 @@ async function onSettingChange(input) {
   $('#storeNameLabel').textContent = state.settings.storeName;
   if (key === 'theme' || key === 'vatRegistered') renderAll();
   else { renderBanners(); renderSell(); renderTotals(); }
+  if (key === 'commissionRate' && ui.view === 'reports') renderReports();
   if (!(key === 'vatNumber' && value && !/^4\d{9}$/.test(value))) toast('Saved');
 }
 
@@ -4489,13 +4617,15 @@ function paintCustomerList() {
   const f = ui.custFilter || 'all';
   const open = state.laybys.filter(l => l.status === 'open');
   const overdue = open.filter(lbOverdue);
-  $('#custChips').innerHTML = [['all', 'All clients'], ['open', 'Open lay-bys'], ['overdue', `Overdue${overdue.length ? ` (${overdue.length})` : ''}`]]
+  const toRemind = open.filter(l => reminderReason(l)).length;
+  $('#custChips').innerHTML = [['all', 'All clients'], ['open', 'Open lay-bys'], ['overdue', `Overdue${overdue.length ? ` (${overdue.length})` : ''}`], ['remind', `To remind${toRemind ? ` (${toRemind})` : ''}`]]
     .map(([k, l]) => `<button class="chip ${f === k ? 'on' : ''}" aria-pressed="${f === k}" data-action="cust-filter" data-f="${k}">${l}</button>`).join('');
   $('#custKpis').innerHTML = `
     <div class="kpi"><div class="label">Open lay-bys</div><div class="value num">${open.length}</div></div>
     <div class="kpi"><div class="label">Still to be paid</div><div class="value money">${money(sum(open, lbBalance))}</div></div>
     <div class="kpi"><div class="label">Overdue</div><div class="value num ${overdue.length ? 'err-text' : ''}">${overdue.length}</div>
       <div class="sub">${overdue.length ? money(sum(overdue, lbBalance)) + ' owed' : 'none'}</div></div>`;
+  if (f === 'remind') { $('#custList').innerHTML = reminderListHtml(); return; }
   const rows = state.customers
     .filter(c => !q || c.name.toLowerCase().includes(q) || (digits && String(c.phone || '').replace(/\D/g, '').includes(digits)) || String(c.email || '').toLowerCase().includes(q))
     .map(c => { const lbs = customerLaybys(c.id).filter(l => l.status === 'open'); return { c, open: lbs, overdue: lbs.filter(lbOverdue), owed: sum(lbs, lbBalance) }; })
@@ -4564,9 +4694,69 @@ function laybyCard(l) {
       ${l.status === 'open' && bal <= 0 ? `<button class="btn sm primary" data-action="lb-collect" data-id="${esc(l.id)}">Collect &amp; invoice</button>` : ''}
       <button class="btn sm" data-action="open-doc" data-doc="lb:${esc(l.id)}">Slip</button>
       ${l.saleId ? `<button class="btn sm" data-action="open-doc" data-doc="sale:${esc(l.saleId)}">Tax invoice</button>` : ''}
+      ${l.status === 'open' && bal > 0 ? `<button class="btn sm" data-action="lb-remind" data-id="${esc(l.id)}">Remind on WhatsApp</button>` : ''}
       ${l.status === 'open' ? `<button class="btn sm danger" data-action="lb-cancel" data-id="${esc(l.id)}">Cancel lay-by</button>` : ''}
     </div>
+    ${lastReminder(l) && l.status === 'open' ? `<div class="small muted" style="margin-top:6px">Last reminded ${fmtDate(lastReminder(l))}${(l.reminders.length > 1) ? ` · ${l.reminders.length} reminders` : ''}</div>` : ''}
   </div>`;
+}
+
+/* ----- Lay-by reminders (WhatsApp) -----
+   "To remind" lists open lay-bys that are overdue, due within 14 days, or
+   have had no payment for 30 days — and weren't reminded in the last 7 days.
+   One tap opens WhatsApp with a friendly message (Settings → Lay-bys holds the
+   wording); the reminder is recorded on the lay-by so everyone can see it. */
+const DEFAULT_REMINDER = 'Hi {name}, this is {shop}. Just a friendly reminder about your lay-by {number}: the balance is {balance}, to be paid by {due}. You can pay in store or by EFT. Thank you!';
+const lastReminder = l => (l.reminders || []).slice(-1)[0]?.date || null;
+const lastPaymentDate = l => (l.payments.length ? l.payments[l.payments.length - 1].date : l.date);
+
+/** Why this lay-by needs a reminder ('' = it doesn't). */
+function reminderReason(l, now = Date.now()) {
+  if (l.status !== 'open' || lbBalance(l) <= 0) return '';
+  const last = lastReminder(l);
+  if (last && now - new Date(last) < 7 * DAY_MS) return '';
+  const dueIn = Math.round((fromDateInput(l.dueDate) - startOfDay(new Date(now))) / DAY_MS);
+  const quiet = Math.floor((now - new Date(lastPaymentDate(l))) / DAY_MS);
+  if (lbOverdue(l)) return `Overdue since ${dueDateText(l)}`;
+  if (dueIn <= 14) return dueIn === 0 ? 'Due today' : `Due in ${dueIn} day${dueIn === 1 ? '' : 's'}`;
+  if (quiet >= 30) return `No payment for ${quiet} days`;
+  return '';
+}
+
+function reminderText(l) {
+  const vals = {
+    name: String(l.customer.name).trim().split(/\s+/)[0], fullname: l.customer.name, shop: state.settings.storeName,
+    number: lbNo(l), balance: money(Math.max(0, lbBalance(l))), total: money(l.total), paid: money(lbPaid(l)), due: dueDateText(l),
+  };
+  return String(state.settings.laybyReminder || DEFAULT_REMINDER).replace(/\{(\w+)\}/g, (m, k) => (k in vals ? vals[k] : m));
+}
+
+async function remindLayby(id) {
+  const l = findLayby(id);
+  if (!l) return;
+  const c = findCustomer(l.customerId);
+  const num = waNumber(c?.phone || l.customer.phone);
+  if (!num) return toast('This client has no phone number — add it with Edit on their profile', true);
+  window.open(`https://wa.me/${num}?text=${encodeURIComponent(reminderText(l))}`, '_blank', 'noopener');
+  l.reminders = [...(l.reminders || []), { date: new Date().toISOString(), by: ui.user?.name || '' }];
+  await persist([opPut('laybys', l)]);
+  renderCustomers();
+  toast(`Reminder for ${lbNo(l)} opened in WhatsApp`);
+}
+
+/** The "To remind" list on the Clients screen. */
+function reminderListHtml() {
+  const due = state.laybys.map(l => ({ l, why: reminderReason(l) })).filter(x => x.why)
+    .sort((a, b) => lbOverdue(b.l) - lbOverdue(a.l) || a.l.dueDate.localeCompare(b.l.dueDate));
+  if (!due.length) return '<div class="empty">Nobody to remind right now. Lay-bys show here when they are overdue, due within 14 days, or have had no payment for 30 days (and weren\'t reminded in the last week).</div>';
+  return due.map(({ l, why }) => `<div class="card remind-row">
+      <div class="grow"><strong>${esc(l.customer.name)}</strong> <span class="muted small">· ${lbNo(l)}</span>
+        <div class="small ${lbOverdue(l) ? 'err-text' : 'muted'}">${esc(why)} · balance <span class="money">${money(Math.max(0, lbBalance(l)))}</span>${lastReminder(l) ? ` · last reminded ${fmtDate(lastReminder(l))}` : ''}</div></div>
+      <div class="row gap-s wrap">
+        <button class="btn sm primary" data-action="lb-remind" data-id="${esc(l.id)}">Remind on WhatsApp</button>
+        <button class="btn sm" data-action="open-customer" data-id="${esc(l.customerId)}">Open</button>
+      </div>
+    </div>`).join('');
 }
 
 function openCustomer(id) {
@@ -5051,6 +5241,291 @@ async function onLogoPicked(input) {
   }
 }
 
+/* ===== 14g. Import stock from Excel / CSV ===============================
+   Stock → Import. One row per size/colour:
+     Name, Category, Size, Colour, Price, Cost, Stock, SKU, Barcode, Description
+   Only Name and Price are needed; headings are matched loosely ("Qty",
+   "Selling price", "Color"…). Rows with the same Name become one product.
+   Reads .xlsx (Excel), .csv and text pasted from a spreadsheet. The .xlsx file
+   is unzipped with the browser's own DecompressionStream — no library.
+   Existing products (same name) get the new sizes/colours; existing
+   sizes/colours are skipped, or updated if the box is ticked (stock change
+   recorded as a stock count). New stock is recorded as "Imported".
+   ======================================================================== */
+
+const IMPORT_FIELDS = {
+  name: ['name', 'product', 'productname', 'item', 'itemname', 'style', 'stylename'],
+  category: ['category', 'cat', 'department', 'dept', 'type', 'group'],
+  size: ['size', 'sizes'],
+  colour: ['colour', 'color', 'colours', 'colors'],
+  price: ['price', 'sellingprice', 'retailprice', 'sellprice', 'priceincl', 'priceinclvat', 'rrp', 'sellingpriceinclvat'],
+  cost: ['cost', 'costprice', 'buyprice', 'purchaseprice', 'costexcl', 'costinclvat'],
+  stock: ['stock', 'qty', 'quantity', 'onhand', 'stockonhand', 'soh', 'instock', 'openingstock'],
+  sku: ['sku', 'code', 'itemcode', 'productcode', 'stockcode'],
+  barcode: ['barcode', 'ean', 'upc', 'barcodenumber', 'ean13'],
+  description: ['description', 'desc', 'details', 'notes'],
+};
+const IMPORT_MAX_ROWS = 5000;
+const IMPORT_TEMPLATE = [
+  ['Name', 'Category', 'Size', 'Colour', 'Price', 'Cost', 'Stock', 'SKU', 'Barcode', 'Description'],
+  ['Evening gown', 'Gowns', '34', 'Gold', '14999.00', '7000.00', '1', '', '', 'Sequinned bodice, full skirt'],
+  ['Evening gown', 'Gowns', '36', 'Gold', '14999.00', '7000.00', '2', '', '', 'Sequinned bodice, full skirt'],
+  ['Silk scarf', 'Accessories', '', 'Ivory', '450', '180', '10', '', '6001234567899', ''],
+];
+
+/** Split CSV / TSV text into rows of cells (handles "quoted, cells" and doubled quotes). */
+function parseDelimited(text) {
+  text = String(text).replace(/^﻿/, '');
+  const first = text.split(/\r?\n/, 1)[0] || '';
+  const count = ch => first.split(ch).length - 1;
+  const sep = count('\t') ? '\t' : count(';') > count(',') ? ';' : ',';
+  const rows = [];
+  let row = [], cell = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) {
+      if (ch === '"' && text[i + 1] === '"') { cell += '"'; i++; } else if (ch === '"') q = false; else cell += ch;
+    } else if (ch === '"' && cell === '') q = true;
+    else if (ch === sep) { row.push(cell); cell = ''; }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell); rows.push(row); row = []; cell = '';
+    } else cell += ch;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+/** Read the first worksheet of an .xlsx file into rows of cells. */
+async function readXlsx(buf) {
+  const files = await unzip(buf, n => n === 'xl/sharedStrings.xml' || n === 'xl/workbook.xml' || n === 'xl/_rels/workbook.xml.rels' || /^xl\/worksheets\/sheet\d+\.xml$/.test(n));
+  const xml = s => new DOMParser().parseFromString(s, 'application/xml');
+  const shared = files['xl/sharedStrings.xml'] ? [...xml(files['xl/sharedStrings.xml']).getElementsByTagName('si')].map(si => [...si.getElementsByTagName('t')].map(t => t.textContent).join('')) : [];
+  // First sheet in the workbook's order (fall back to the lowest-numbered sheet file)
+  let path = Object.keys(files).filter(n => n.startsWith('xl/worksheets/')).sort((a, b) => parseInt(a.match(/\d+/)) - parseInt(b.match(/\d+/)))[0];
+  try {
+    const sheet = xml(files['xl/workbook.xml']).getElementsByTagName('sheet')[0];
+    const rid = sheet.getAttribute('r:id') || sheet.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
+    const rel = [...xml(files['xl/_rels/workbook.xml.rels']).getElementsByTagName('Relationship')].find(r => r.getAttribute('Id') === rid);
+    const target = rel?.getAttribute('Target')?.replace(/^\/?(xl\/)?/, 'xl/');
+    if (target && files[target]) path = target;
+  } catch { /* use the fallback */ }
+  if (!path) throw new Error('No worksheet found in this file');
+  const colIndex = ref => { let n = 0; for (const ch of String(ref).replace(/\d+/g, '')) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1; };
+  const rows = [];
+  for (const r of xml(files[path]).getElementsByTagName('row')) {
+    const out = [];
+    let next = 0;
+    for (const c of r.getElementsByTagName('c')) {
+      const i = c.getAttribute('r') ? colIndex(c.getAttribute('r')) : next;
+      next = i + 1;
+      const t = c.getAttribute('t');
+      const v = c.getElementsByTagName('v')[0]?.textContent ?? '';
+      out[i] = t === 's' ? (shared[Number(v)] ?? '') : t === 'inlineStr' ? [...c.getElementsByTagName('t')].map(x => x.textContent).join('') : t === 'b' ? (v === '1' ? 'TRUE' : 'FALSE') : v;
+    }
+    rows.push(Array.from(out, x => x ?? ''));
+  }
+  return rows;
+}
+
+/** Minimal zip reader: returns {name: text} for the entries `want` accepts. */
+async function unzip(buf, want) {
+  const dv = new DataView(buf);
+  let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 66000); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error('This is not an Excel (.xlsx) file');
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const out = {};
+  const dec = new TextDecoder();
+  for (let k = 0; k < count; k++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true);
+    const size = dv.getUint32(p + 20, true);
+    const nameLen = dv.getUint16(p + 28, true), extraLen = dv.getUint16(p + 30, true), commentLen = dv.getUint16(p + 32, true);
+    const local = dv.getUint32(p + 42, true);
+    const name = dec.decode(new Uint8Array(buf, p + 46, nameLen));
+    p += 46 + nameLen + extraLen + commentLen;
+    if (!want(name)) continue;
+    const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
+    const data = new Uint8Array(buf, start, size);
+    if (method === 0) out[name] = dec.decode(data);
+    else if (method === 8) out[name] = await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+  }
+  return out;
+}
+
+/** Rows of cells → import items, with problems listed by spreadsheet row number. */
+function rowsToItems(rows) {
+  const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const headAt = rows.findIndex(r => r.some(c => IMPORT_FIELDS.name.includes(norm(c))));
+  if (headAt < 0) return { error: 'No "Name" column found. The first row must have headings such as Name, Size, Colour, Price, Stock — download the template to see.' };
+  const head = rows[headAt].map(norm);
+  const col = {};
+  for (const [f, names] of Object.entries(IMPORT_FIELDS)) { const i = head.findIndex(h => names.includes(h)); if (i >= 0) col[f] = i; }
+  if (col.price === undefined) return { error: 'No "Price" column found. Add a column called Price (selling price).' };
+  const items = [], problems = [];
+  const body = rows.slice(headAt + 1);
+  if (body.length > IMPORT_MAX_ROWS) return { error: `Too many rows (${body.length}). Import at most ${IMPORT_MAX_ROWS} at a time.` };
+  body.forEach((r, k) => {
+    const n = headAt + k + 2; // spreadsheet row number
+    const get = f => (col[f] === undefined ? '' : String(r[col[f]] ?? '').trim());
+    if (!r.some(c => String(c).trim())) return; // blank row
+    const name = get('name');
+    if (!name) return problems.push(`Row ${n}: no name — skipped`);
+    const price = parseMoney(get('price'));
+    if (!Number.isFinite(price) || price <= 0) return problems.push(`Row ${n} (${name}): price "${get('price')}" is not a valid amount — skipped`);
+    let cost = get('cost') === '' ? 0 : parseMoney(get('cost'));
+    if (!Number.isFinite(cost) || cost < 0) { problems.push(`Row ${n} (${name}): cost "${get('cost')}" ignored`); cost = 0; }
+    let stock = get('stock') === '' ? 0 : Number(String(get('stock')).replace(',', '.'));
+    if (!Number.isFinite(stock)) { problems.push(`Row ${n} (${name}): stock "${get('stock')}" taken as 0`); stock = 0; }
+    items.push({ row: n, name: name.slice(0, 80), category: get('category').slice(0, 40) || 'General', size: get('size').slice(0, 20) || 'One size',
+      colour: get('colour').slice(0, 30) || 'Any', price, cost, stock: Math.max(0, Math.round(stock)),
+      sku: get('sku').toUpperCase().replace(/\s+/g, '-').slice(0, 40), barcode: get('barcode').replace(/\s/g, '').replace(/\.0+$/, ''), description: get('description').slice(0, 200) });
+  });
+  return { items, problems, columns: Object.keys(col) };
+}
+
+/** Work out what the import will do (nothing is saved yet). */
+function planImport(items, update) {
+  const low = s => String(s).trim().toLowerCase();
+  const products = new Map(state.products.map(p => [low(p.name), p]));
+  const taken = new Map(); // SKU → variant id
+  const codes = new Map(); // barcode → variant id
+  state.products.forEach(p => p.variants.forEach(v => { taken.set(v.sku.toUpperCase(), v.id); if (v.barcode) codes.set(v.barcode, v.id); }));
+  const plan = { newProducts: new Map(), addTo: [], updates: [], skipped: 0, notes: [] };
+  for (const it of items) {
+    const key = low(it.name);
+    let p = products.get(key) || plan.newProducts.get(key);
+    const isNew = !products.has(key);
+    if (!p) {
+      p = { id: uid('p'), name: it.name, category: it.category, price: it.price, cost: it.cost, created: Date.now(), variants: [], ...(it.description ? { description: it.description } : {}) };
+      plan.newProducts.set(key, p);
+    }
+    const same = v => low(v.size) === low(it.size) && low(v.colour) === low(it.colour);
+    const existing = p.variants.find(same) || (it.sku && p.variants.find(v => v.sku.toUpperCase() === it.sku));
+    const twice = (isNew && existing) || plan.addTo.some(x => x.p === p && same(x.v)) || plan.updates.some(x => x.p === p && x.v === existing);
+    if (twice) { plan.notes.push(`Row ${it.row}: ${it.name} ${it.size}/${it.colour} appears twice — the first one is used`); continue; }
+    if (existing) {
+      if (update) plan.updates.push({ p, v: existing, it }); else plan.skipped++;
+      continue;
+    }
+    let sku = it.sku;
+    if (sku && taken.has(sku)) { plan.notes.push(`Row ${it.row}: SKU ${sku} is already used — a new SKU was made`); sku = ''; }
+    const v = { id: uid('v'), size: it.size, colour: it.colour, sku: sku || makeSku(it.name, it.size, it.colour, [...p.variants, ...[...plan.newProducts.values()].flatMap(x => x.variants), ...plan.addTo.map(x => x.v)]), stock: it.stock };
+    taken.set(v.sku.toUpperCase(), v.id);
+    if (it.barcode) {
+      if (codes.has(it.barcode)) plan.notes.push(`Row ${it.row}: barcode ${it.barcode} is already used — left off`);
+      else { v.barcode = it.barcode; codes.set(it.barcode, v.id); }
+    }
+    if (it.price !== p.price) v.price = it.price;
+    if (it.cost !== p.cost) v.cost = it.cost;
+    if (isNew) p.variants.push(v); else plan.addTo.push({ p, v });
+  }
+  plan.variantCount = sum([...plan.newProducts.values()], p => p.variants.length) + plan.addTo.length;
+  return plan;
+}
+
+function openImport() {
+  ui.imp = { items: null, problems: [], update: false, error: '' };
+  openModal({
+    title: 'Import stock from Excel',
+    body: '<div id="impBody"></div>',
+    foot: '<div id="impFoot" class="foot-row"></div>',
+  });
+  renderImport();
+}
+
+function renderImport() {
+  const I = ui.imp;
+  if (!I || !$('#impBody')) return;
+  const plan = I.items ? planImport(I.items, I.update) : null;
+  $('#impBody').innerHTML = `
+    <p style="margin-top:0">One row per size and colour, with headings in the first row: <b>Name, Category, Size, Colour, Price, Cost, Stock</b> (and SKU, Barcode, Description if you have them). Only Name and Price are needed.</p>
+    <div class="row gap-s wrap" style="margin-bottom:10px">
+      <button class="btn sm" data-action="imp-template">Download template</button>
+      <label class="btn sm primary" tabindex="0" role="button" data-file-trigger>Choose Excel or CSV file<input type="file" id="impFile" accept=".xlsx,.csv,.txt,text/csv" hidden></label>
+    </div>
+    <label class="field"><span>…or copy the rows in Excel (with the headings) and paste here</span>
+      <textarea id="impPaste" class="plain" rows="3" placeholder="Name	Size	Colour	Price	Stock"></textarea></label>
+    <button class="btn sm" data-action="imp-paste">Read pasted rows</button>
+    ${I.error ? `<div class="banner error" style="margin-top:10px"><p>${esc(I.error)}</p></div>` : ''}
+    ${plan ? `<div class="card" style="margin-top:12px">
+      <p style="margin-top:0"><strong>${I.items.length} row${I.items.length === 1 ? '' : 's'} read.</strong>
+        This will add <strong>${plan.newProducts.size}</strong> new product${plan.newProducts.size === 1 ? '' : 's'} and <strong>${plan.variantCount}</strong> size/colour${plan.variantCount === 1 ? '' : 's'}${I.update ? `, and update <strong>${plan.updates.length}</strong> that already exist` : plan.skipped ? `; <strong>${plan.skipped}</strong> already exist and will be skipped` : ''}.</p>
+      <label class="check"><input type="checkbox" id="impUpdate" ${I.update ? 'checked' : ''}>
+        <span>Update price, cost and stock of sizes/colours that already exist</span></label>
+      <table class="list-table small" style="margin-top:8px">${I.items.slice(0, 8).map(it => `<tr><td>${esc(it.name)} <span class="muted">(${esc(it.size)} / ${esc(it.colour)})</span></td><td>${money(it.price)} · ${it.stock} in stock</td></tr>`).join('')}</table>
+      ${I.items.length > 8 ? `<p class="small muted" style="margin:4px 0 0">…and ${I.items.length - 8} more.</p>` : ''}
+      ${[...I.problems, ...plan.notes].length ? `<details style="margin-top:8px" open><summary class="small warn-text">${[...I.problems, ...plan.notes].length} thing${[...I.problems, ...plan.notes].length === 1 ? '' : 's'} to check</summary>
+        <ul class="small">${[...I.problems, ...plan.notes].slice(0, 30).map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}
+    </div>` : ''}`;
+  const n = plan ? plan.variantCount + (I.update ? plan.updates.length : 0) : 0;
+  $('#impFoot').innerHTML = `<span class="grow"></span><button class="btn" data-action="close-modal">Cancel</button>
+    <button class="btn primary" data-action="imp-save" ${n ? '' : 'disabled'}>Import${n ? ` ${n}` : ''}</button>`;
+}
+
+async function loadImportFile(input) {
+  const f = input.files?.[0];
+  input.value = '';
+  if (!f || !ui.imp) return;
+  try {
+    const rows = /\.xlsx$/i.test(f.name) ? await readXlsx(await f.arrayBuffer()) : parseDelimited(await f.text());
+    setImportRows(rows);
+  } catch (e) {
+    ui.imp.items = null;
+    ui.imp.error = /\.xls$/i.test(f.name) ? 'Old Excel (.xls) files can\'t be read. In Excel use File → Save As → "Excel Workbook (.xlsx)" or "CSV".' : `Couldn't read that file: ${e.message}`;
+    renderImport();
+  }
+}
+
+function setImportRows(rows) {
+  const res = rowsToItems(rows);
+  Object.assign(ui.imp, res.error ? { items: null, problems: [], error: res.error } : { items: res.items, problems: res.problems, error: res.items.length ? '' : 'No rows with a name and price were found.' });
+  if (ui.imp.items && !ui.imp.items.length) ui.imp.items = null;
+  renderImport();
+}
+
+async function saveImport() {
+  const I = ui.imp;
+  if (!I?.items) return;
+  const plan = planImport(I.items, I.update);
+  const ops = [];
+  for (const p of plan.newProducts.values()) {
+    state.products.push(p);
+    ops.push(opPut('products', p));
+    p.variants.filter(v => v.stock).forEach(v => ops.push(opPut('movements', movement(p, v, v.stock, 'import'))));
+  }
+  const touched = new Set();
+  for (const { p, v } of plan.addTo) {
+    p.variants.push(v); touched.add(p);
+    if (v.stock) ops.push(opPut('movements', movement(p, v, v.stock, 'import')));
+  }
+  for (const { p, v, it } of plan.updates) {
+    touched.add(p);
+    if (it.price !== p.price) v.price = it.price; else delete v.price;
+    if (it.cost !== p.cost) v.cost = it.cost; else delete v.cost;
+    if (it.barcode && !v.barcode && !state.products.some(x => x.variants.some(y => y.barcode === it.barcode))) v.barcode = it.barcode;
+    const diff = it.stock - v.stock;
+    if (diff) { v.stock = it.stock; ops.push(opPut('movements', { ...movement(p, v, diff, 'count'), ref: 'Import' })); }
+  }
+  touched.forEach(p => ops.push(opPut('products', p)));
+  await persist(ops);
+  closeModal();
+  renderAll();
+  toast(`Imported: ${plan.newProducts.size} new product${plan.newProducts.size === 1 ? '' : 's'}, ${plan.variantCount} size/colour${plan.variantCount === 1 ? '' : 's'}${I.update && plan.updates.length ? `, ${plan.updates.length} updated` : ''}`);
+  ui.imp = null;
+}
+
+function downloadImportTemplate() {
+  const csv = IMPORT_TEMPLATE.map(r => r.map(c => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(',')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' }));
+  a.download = 'rails-pos-stock-template.csv';
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
 /* ===== 15. One tab at a time ============================================
    Each tab keeps the data in memory, so two open tabs could overwrite each
    other's work. A Web Lock makes sure only one tab is "active"; any other
@@ -5266,6 +5741,7 @@ const actions = {
   'lbf-method': el => { ui.lbf.method = el.dataset.m; setPressed('[data-action="lbf-method"]', b => b.dataset.m === ui.lbf.method); },
   'lbf-save': () => saveLayby(),
   'lb-pay': el => openLaybyPayment(el.dataset.id),
+  'lb-remind': el => remindLayby(el.dataset.id),
   'lbp-method': el => { ui.lbp.method = el.dataset.m; setPressed('[data-action="lbp-method"]', b => b.dataset.m === ui.lbp.method); },
   'lbp-save': () => saveLaybyPayment(),
   'lb-collect': el => collectLayby(el.dataset.id),
@@ -5280,10 +5756,15 @@ const actions = {
   'lb-fill': el => fillLabels(el.dataset.mode),
   'lb-print': () => printLabels(),
   'test-print': () => printDoc('test'),
+  'import-stock': () => openImport(),
+  'imp-template': () => downloadImportTemplate(),
+  'imp-paste': () => { const t = $('#impPaste').value; if (!t.trim()) return toast('Paste the rows first', true); setImportRows(parseDelimited(t)); },
+  'imp-save': () => saveImport(),
 };
 
 /* Actions that need a permission. Buttons are hidden too, but this is the real check. */
 const ACTION_PERMS = {
+  'import-stock': 'stock', 'imp-template': 'stock', 'imp-paste': 'stock', 'imp-save': 'stock',
   'open-return': 'returns', 'ret-qty': 'returns', 'ret-all': 'returns', 'ret-method': 'returns', 'ret-go': 'returns',
   'toggle-low': 'stock', 'add-product': 'stock', 'np-all': 'stock', 'np-save': 'stock', 'edit-product': 'stock', 'ep-save': 'stock',
   'add-variant': 'stock', 'edit-variant': 'stock', 'variant-save': 'stock', 'delete-variant': 'stock', 'delete-product': 'stock',
@@ -5296,7 +5777,7 @@ const ACTION_PERMS = {
   'go-settings': 'settings',
   labels: 'stock', 'lb-fill': 'stock', 'lb-print': 'stock',
   'open-customer': 'customers', 'cust-new': 'customers', 'cust-edit': 'customers', 'cust-save': 'customers', 'cust-sell': 'customers',
-  'layby-start': 'customers', 'lbf-save': 'customers', 'lb-pay': 'customers', 'lbp-save': 'customers',
+  'layby-start': 'customers', 'lbf-save': 'customers', 'lb-pay': 'customers', 'lbp-save': 'customers', 'lb-remind': 'customers',
   'lb-collect': 'customers', 'lb-cancel': 'customers', 'lbc-save': 'customers', 'stmt-a4': 'customers',
   'logo-remove': 'settings',
 };
@@ -5338,6 +5819,8 @@ function bindEvents() {
     if (t.id === 'fPhoto') onPhotoPicked(t);
     if (t.id === 'logoFile' && allowed('settings')) onLogoPicked(t);
     if (t.closest?.('#labelsBody')) onLabelsChange(t);
+    if (t.id === 'impFile' && allowed('stock')) loadImportFile(t);
+    if (t.id === 'impUpdate' && ui.imp) { ui.imp.update = t.checked; renderImport(); }
     if ((t.id === 'rFrom' || t.id === 'rTo') && t.value) {
       ui.customFrom = $('#rFrom').value; ui.customTo = $('#rTo').value;
       renderReports();

@@ -279,7 +279,7 @@ test('Reports: periods, chart, green money and A4 printouts', async () => {
   ok(docs[1].includes('CN00001') && docs[1].includes('-R230.00'), 'sales list has the refund');
   ok(docs[2].includes('Test &lt;b&gt;Tee&lt;/b&gt;') && docs[2].includes('TB-RED-S'), 'stock report escaped, lists SKUs');
   click('[data-action="print-menu"]'); await tick();
-  eq(d.querySelectorAll('#modal input[name="a4kind"]').length, 4, 'four A4 reports offered');
+  eq(d.querySelectorAll('#modal input[name="a4kind"]').length, 6, 'six A4 reports offered');
   const origPrint = w.print; let printed = false; w.print = () => { printed = true; };
   $('#modal input[value="stock"]').checked = true;
   click('[data-action="print-a4"]'); await tick(150);
@@ -687,6 +687,122 @@ test('Lay-by cancel: refund minus a fee, or store credit (then used); items go b
   click('[data-action="lbc-save"]'); await tick(300);
   eq(c.credit, 10000, 'credit returned when cancelled again');
   closeModal();
+});
+
+/** A tiny .xlsx (zip) built in the test: one entry stored, the others deflated. */
+async function makeXlsx(files) {
+  const enc = new TextEncoder();
+  const parts = [], central = [];
+  let offset = 0;
+  for (const [name, text] of Object.entries(files)) {
+    const raw = enc.encode(text);
+    const deflate = name.includes('sheet');
+    const data = deflate ? new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer()) : raw;
+    const nm = enc.encode(name);
+    const head = new DataView(new ArrayBuffer(30));
+    head.setUint32(0, 0x04034b50, true); head.setUint16(8, deflate ? 8 : 0, true);
+    head.setUint32(18, data.length, true); head.setUint32(22, raw.length, true); head.setUint16(26, nm.length, true);
+    const cd = new DataView(new ArrayBuffer(46));
+    cd.setUint32(0, 0x02014b50, true); cd.setUint16(10, deflate ? 8 : 0, true);
+    cd.setUint32(20, data.length, true); cd.setUint32(24, raw.length, true); cd.setUint16(28, nm.length, true); cd.setUint32(42, offset, true);
+    parts.push(head.buffer, nm, data); central.push(cd.buffer, nm);
+    offset += 30 + nm.length + data.length;
+  }
+  const cdSize = central.reduce((a, b) => a + b.byteLength, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, Object.keys(files).length, true); end.setUint16(10, Object.keys(files).length, true);
+  end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, end.buffer]).arrayBuffer();
+}
+
+test('Import stock (pasted from Excel, and an .xlsx file); existing items skipped or updated', async () => {
+  await nav('stock');
+  click('[data-action="import-stock"]'); await tick();
+  const tsv = ['Product Name\tCategory\tSize\tColor\tSelling Price\tCost\tQty\tBarcode',
+    'Import Dress\tGowns\t34\tGold\tR1 499,00\t700\t2\t',
+    'Import Dress\tGowns\t36\tGold\t1499\t700\t1\t',
+    'Import Dress\tGowns\t38\tGold\t1599\t700\t0\t',
+    'Import Scarf\t\t\tIvory\t450\t180\t10\t6009876543210',
+    'No Price Item\tTops\tM\tRed\t\t\t3\t'].join('\n');
+  type('#impPaste', tsv);
+  click('[data-action="imp-paste"]'); await tick();
+  ok($('#impBody').textContent.includes('4 rows read') && $('#impBody').textContent.includes('2 new products'), 'preview: ' + $('#impBody .card')?.textContent.slice(0, 120));
+  ok($('#impBody').textContent.includes('Row 6 (No Price Item)'), 'row without a price is reported');
+  click('[data-action="imp-save"]'); await tick(300);
+  const dress = product('Import Dress'), scarf = product('Import Scarf');
+  eq(dress.variants.map(v => [v.size, v.colour, v.stock, v.price ?? null]), [['34', 'Gold', 2, null], ['36', 'Gold', 1, null], ['38', 'Gold', 0, 159900]], 'dress variants (own price for 38)');
+  eq([dress.price, dress.cost, dress.category], [149900, 70000, 'Gowns'], 'dress price and cost');
+  eq([scarf.variants[0].size, scarf.variants[0].barcode, scarf.category, scarf.variants[0].stock], ['One size', '6009876543210', 'General', 10], 'scarf defaults and barcode');
+  const imported = (await movements()).filter(m => m.reason === 'import');
+  eq(imported.length, 3, 'opening stock recorded as "Imported" (items with stock)');
+  // Same file again: nothing new; with "update" ticked the stock is set as a count
+  click('[data-action="import-stock"]'); await tick();
+  const xml = s => `<?xml version="1.0" encoding="UTF-8"?>${s}`;
+  const buf = await makeXlsx({
+    'xl/workbook.xml': xml('<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Stock" sheetId="1" r:id="rId1"/></sheets></workbook>'),
+    'xl/_rels/workbook.xml.rels': xml('<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>'),
+    'xl/sharedStrings.xml': xml('<sst><si><t>Name</t></si><si><t>Size</t></si><si><t>Colour</t></si><si><t>Price</t></si><si><t>Stock</t></si><si><t>Import Dress</t></si><si><t>Gold</t></si><si><r><t>New </t></r><r><t>Top</t></r></si><si><t>S</t></si></sst>'),
+    'xl/worksheets/sheet1.xml': xml(`<worksheet><sheetData>
+      <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c><c r="D1" t="s"><v>3</v></c><c r="E1" t="s"><v>4</v></c></row>
+      <row r="2"><c r="A2" t="s"><v>5</v></c><c r="B2"><v>34</v></c><c r="C2" t="s"><v>6</v></c><c r="D2"><v>1499</v></c><c r="E2"><v>5</v></c></row>
+      <row r="3"><c r="A3" t="s"><v>7</v></c><c r="B3" t="s"><v>8</v></c><c r="D3"><v>299.5</v></c><c r="E3"><v>4</v></c></row>
+    </sheetData></worksheet>`),
+  });
+  const rows = await w.readXlsx(buf);
+  eq(rows, [['Name', 'Size', 'Colour', 'Price', 'Stock'], ['Import Dress', '34', 'Gold', '1499', '5'], ['New Top', 'S', '', '299.5', '4']], 'xlsx read (shared strings, rich text, numbers, empty cell)');
+  w.setImportRows(rows); await tick();
+  ok($('#impBody').textContent.includes('1 already exist'), 'existing size/colour would be skipped');
+  $('#impUpdate').checked = true; $('#impUpdate').dispatchEvent(new w.Event('change', { bubbles: true })); await tick();
+  click('[data-action="imp-save"]'); await tick(300);
+  eq([variant(dress, '34', 'Gold').stock, product('New Top').variants[0].price ?? product('New Top').price], [5, 29950], 'updated stock; new product from xlsx');
+  ok((await movements()).some(m => m.reason === 'count' && m.ref === 'Import' && m.change === 3), 'stock change recorded as a count');
+});
+
+test('Reports: reorder list, staff sales and commission; lay-by WhatsApp reminders', async () => {
+  const range = { from: new Date(Date.now() - 30 * 86400000), to: new Date(Date.now() + 86400000), label: 'test' };
+  // Reorder: out-of-stock and low items are listed with how many to buy
+  const ro = w.reorderList(range);
+  ok(ro.rows.length && ro.rows.every(r => r.stock <= P.state.settings.lowStock || r.lasts < 14), 'only low / running-out items');
+  ok(ro.rows.some(r => r.variant.size === '38' && r.product.name === 'Import Dress' && r.buy >= 1), 'out-of-stock size 38 listed with something to buy');
+  ok(ro.rows[0].stock <= 0, 'out of stock first');
+  // Staff: net per person adds up to the report's net takings; commission on net excl. VAT
+  const rep = w.buildReport(range);
+  P.state.settings.commissionRate = 10;
+  const sr = w.staffReport(range);
+  eq(sr.net, rep.revenue, 'staff net sales = net takings');
+  ok(Math.abs(sr.commission - Math.round(rep.exVat * 0.1)) <= sr.rows.length, `commission ≈ 10% of net excl. VAT (${sr.commission} vs ${Math.round(rep.exVat * 0.1)})`);
+  await nav('reports');
+  ok($('#staffCard').textContent.includes('commission'), 'staff card shows commission');
+  type('#staffCard [data-setting="commissionRate"]', '0'); await tick(150);
+  eq(P.state.settings.commissionRate, 0, 'rate saved from the Reports screen');
+  const orig = w.print; w.print = () => {};
+  w.printA4('reorder'); await tick(100);
+  ok($('#printA4').textContent.includes('Reorder list') && $('#printA4').textContent.includes('Import Dress'), 'A4 reorder list');
+  w.printA4('staff'); await tick(100);
+  ok($('#printA4').textContent.includes('Staff sales & commission'), 'A4 staff report');
+  w.print = orig; w.setPrintMode('none');
+  // Reminders: overdue / due soon / quiet lay-bys; message filled in; not again within a week
+  const day = 86400000, iso = t => new Date(t).toISOString(), ymd = t => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  const lb = (due, pays = [], reminders) => ({ status: 'open', number: 7, total: 100000, payments: pays, date: iso(Date.now() - 40 * day), dueDate: ymd(due), customer: { name: 'Ayesha Khan' }, reminders });
+  ok(w.reminderReason(lb(Date.now() - 2 * day)).startsWith('Overdue'), 'overdue');
+  eq(w.reminderReason(lb(Date.now() + 5 * day, [{ amount: 100, date: iso(Date.now()) }])), 'Due in 5 days', 'due soon');
+  ok(w.reminderReason(lb(Date.now() + 60 * day)).startsWith('No payment for 40 days'), 'no payment for a month');
+  eq(w.reminderReason(lb(Date.now() + 60 * day, [{ amount: 100, date: iso(Date.now() - 2 * day) }])), '', 'paying regularly: no reminder');
+  eq(w.reminderReason(lb(Date.now() - 2 * day, [], [{ date: iso(Date.now() - 2 * day) }])), '', 'reminded 2 days ago: not again yet');
+  const msg = w.reminderText(lb(Date.now() + 5 * day));
+  ok(msg.startsWith('Hi Ayesha,') && msg.includes('R1 000.00') && msg.includes('LB'), 'message: ' + msg);
+  await nav('customers');
+  click('[data-action="cust-filter"][data-f="remind"]'); await tick();
+  ok($('#custList .remind-row') || $('#custList .empty'), 'To remind list shows');
+  const open = P.state.laybys.find(l => l.status === 'open' && P.state.customers.find(c => c.id === l.customerId)?.phone && l.total > l.payments.reduce((a, p) => a + p.amount, 0));
+  if (open) {
+    const before = (open.reminders || []).length;
+    let url = ''; const wo = w.open; w.open = u => { url = u; };
+    w.remindLayby(open.id); await tick(200);
+    w.open = wo;
+    ok(url.startsWith('https://wa.me/27') && decodeURIComponent(url).includes("LB"), 'WhatsApp opened with the reminder');
+    eq((open.reminders || []).length, before + 1, 'reminder recorded on the lay-by');
+  }
 });
 
 test('Only one tab at a time; the other can take over', async () => {
