@@ -41,6 +41,12 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
 - **Safety in use**
   - Only one tab can be open at a time, so two copies can't overwrite each other.
   - When a new version is downloaded, the app shows "A new version is ready" and switches over only when you tap Reload.
+- **First-time setup**
+  - A new device asks: *Set up my shop* (shop name, owner name, 4-digit PIN), *Try it with demo data*, or *My shop already uses Rails POS* (sign in to the shop's cloud and download everything, including staff logins). There is no built-in account.
+- **Barcodes and photos**
+  - **Scan** button on the Sell screen uses the phone/tablet camera. Android/Chrome use the device's built-in reader; iPhone/iPad use the app's own reader (EAN-13, UPC-A, EAN-8 tag barcodes and Code 128 SKU labels, read with a check digit and two agreeing lines).
+  - Each size/colour can store the **barcode printed on its tag** (Stock → tap the size → Barcode → Scan). USB/Bluetooth scanners work too (they type the code + Enter).
+  - Optional **product photo**, shrunk to a 160 × 160 picture (about 3–10 KB) and shown small on the till, cart, picker and stock list.
 - **Sign-in**
   - The till is covered by a sign-in screen: username (not case-sensitive) and a 4-digit PIN.
   - You stay signed in when the page reloads or updates; closing the app or tapping the lock button in the header asks again.
@@ -92,7 +98,7 @@ Then open http://localhost:8000. Offline mode only works over `http://localhost`
 
 With the server running, open **http://localhost:8000/tests.html** and click **Run all tests**, or open `tests.html?auto` to run them straight away.
 
-The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 28 tests should pass (one runs two "devices" against a fake Supabase to test syncing). They cover:
+The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 31 tests should pass (one runs two "devices" against a fake Supabase to test syncing; one reads drawn barcodes that are blurred, noisy and upside down). They cover:
 - sign-in, lock and changing the PIN
 - admin: adding, editing and deleting users, and what a cashier can't do
 - selling and stock

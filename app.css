@@ -18,28 +18,28 @@
   --brand: #05060c;
   --brand-ink: #ffffff;
   --brand-muted: #a6acc8;
-  --accent: #ffe500;
-  --accent-hover: #fff27a;
+  --accent: #f5dc3c;
+  --accent-hover: #fbe77a;
   --accent-ink: #141200;
-  --accent-text: #ffe500;
-  --accent-soft: #2a2708;
-  --neon: #22e6ff;        /* cyan: outlines of buttons and tiles */
-  --neon-pink: #ff3df2;
-  --danger: #ff4d6d;
+  --accent-text: #f5dc3c;
+  --accent-soft: #29270f;
+  --neon: #45d3e8;        /* cyan: outlines of buttons and tiles */
+  --neon-pink: #e45ad6;
+  --danger: #f0627a;
   --danger-soft: #3a0f1d;
-  --warn: #ff7af0;
+  --warn: #e58ad9;
   --warn-soft: #33102f;
-  --ok: #39ff88;
+  --ok: #4fe08e;
   --ok-soft: #0b2a18;
-  --money: #39ff88;       /* rand amounts in reports */
-  --money-bar: #20e57a;   /* chart bars */
-  --pay-cash: #39ff88;
-  --pay-card: #22e6ff;
-  --pay-eft: #ff3df2;
+  --money: #4fe08e;       /* rand amounts in reports */
+  --money-bar: #2cc777;   /* chart bars */
+  --pay-cash: #4fe08e;
+  --pay-card: #45d3e8;
+  --pay-eft: #e45ad6;
   --pay-ink: #05060c;     /* text on a lit-up payment button */
   --pay-eft-ink: #05060c;
-  --g1: 65%;              /* inner glow strength */
-  --g2: 30%;              /* outer glow strength */
+  --g1: 42%;              /* inner glow strength */
+  --g2: 18%;              /* outer glow strength */
   --shadow-sm: 0 1px 2px rgba(0,0,0,.5);
   --shadow: 0 1px 3px rgba(0,0,0,.5), 0 10px 28px rgba(0,0,0,.55);
   --radius: 14px;
@@ -82,8 +82,8 @@
   --pay-eft: #c400ab;
   --pay-ink: #05060c;
   --pay-eft-ink: #ffffff;
-  --g1: 40%;
-  --g2: 14%;
+  --g1: 30%;
+  --g2: 10%;
   --shadow-sm: 0 1px 2px rgba(13,15,28,.07);
   --shadow: 0 1px 3px rgba(13,15,28,.08), 0 10px 28px rgba(13,15,28,.10);
   color-scheme: light;
@@ -236,7 +236,39 @@ label.field > span { display: block; font-size: 13px; font-weight: 600; color: v
 .seg.range { max-width: 420px; margin-bottom: 12px; }
 
 /* ----- Sell screen ----- */
-.search-row { position: sticky; top: calc(var(--header-h) + 0px); z-index: 5; background: var(--bg); padding: 0 0 8px; }
+.search-row { position: sticky; top: calc(var(--header-h) + 0px); z-index: 5; background: var(--bg); padding: 0 0 8px; display: flex; gap: 8px; }
+.search-row #sellSearch { flex: 1 1 auto; min-width: 0; }
+.scan-btn { flex: none; min-height: 42px; }
+
+/* ----- Product photos (small thumbnails) ----- */
+.thumb { width: 40px; height: 40px; border-radius: 9px; object-fit: cover; flex: none; background: var(--surface-2); display: inline-block; }
+.thumb.sm { width: 32px; height: 32px; border-radius: 7px; }
+.thumb.md { width: 48px; height: 48px; border-radius: 10px; }
+.thumb.lg { width: 64px; height: 64px; border-radius: 12px; }
+.empty-thumb { display: inline-grid; place-items: center; color: var(--muted); border: 1px dashed var(--border); }
+.product-card .thumb { position: absolute; top: 10px; right: 10px; }
+.product-card.has-photo .name, .product-card.has-photo .cat { padding-right: 46px; }
+.cl-name { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.picker-head { display: flex; gap: 12px; align-items: center; margin: 0 0 12px; }
+.photo-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.photo-row label.btn { cursor: pointer; }
+
+/* ----- Camera scanner ----- */
+.scanner { position: fixed; inset: 0; z-index: 80; background: rgba(3, 4, 10, .92); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.scanner-box { width: min(520px, 100%); display: flex; flex-direction: column; gap: 10px; text-align: center; color: #f3f5ff; }
+.scan-view { position: relative; border-radius: 16px; overflow: hidden; background: #000; aspect-ratio: 4 / 3; }
+.scan-view video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.scan-frame { position: absolute; left: 8%; right: 8%; top: 30%; bottom: 30%; border: 2px solid var(--accent); border-radius: 12px;
+  box-shadow: 0 0 0 999px rgba(0, 0, 0, .35), 0 0 14px color-mix(in srgb, var(--accent) 50%, transparent); }
+.scan-laser { position: absolute; left: 4%; right: 4%; top: 50%; height: 2px; background: #ff4d6d; box-shadow: 0 0 8px #ff4d6d; }
+.scanner .btn { color: var(--text); }
+
+/* ----- First-time setup ----- */
+.setup-box { max-width: 380px; }
+.setup-box .field { text-align: left; }
+.setup-choices { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.setup-box .btn.ghost { margin-top: 6px; }
+#setupErr { min-height: 1.4em; margin: 0 0 10px; }
 .chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 10px; scrollbar-width: none; }
 .chips::-webkit-scrollbar { display: none; }
 .chip {
@@ -326,7 +358,7 @@ label.field > span { display: block; font-size: 13px; font-weight: 600; color: v
 .section-title { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 18px 0 8px; font-weight: 700; }
 
 /* Stock rows */
-.prod-head { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+.prod-head { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
 .prod-head .info { flex: 1 1 200px; min-width: 0; }
 .prod-head .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .var-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--border); }
@@ -552,7 +584,7 @@ input:disabled { opacity: .5; }
 .btn:not(.primary):not(.danger):not(.ghost):hover { border-color: var(--neon); box-shadow: 0 0 12px color-mix(in srgb, var(--neon) var(--g2), transparent); }
 #chargeBtn:not(:disabled) { animation: neon-pulse 2.6s ease-in-out infinite; }
 @keyframes neon-pulse {
-  50% { box-shadow: 0 0 0 1px var(--accent), 0 0 22px color-mix(in srgb, var(--accent) var(--g1), transparent), 0 0 48px color-mix(in srgb, var(--accent) var(--g1), transparent); }
+  50% { box-shadow: 0 0 0 1px var(--accent), 0 0 20px color-mix(in srgb, var(--accent) var(--g1), transparent), 0 0 36px color-mix(in srgb, var(--accent) var(--g2), transparent); }
 }
 
 /* Inputs */
@@ -581,7 +613,7 @@ input:disabled { opacity: .5; }
 .seg.pay button[data-pay="cash"] { --c: var(--pay-cash); --ci: var(--pay-ink); }
 .seg.pay button[data-pay="card"] { --c: var(--pay-card); --ci: var(--pay-ink); }
 .seg.pay button[data-pay="eft"]  { --c: var(--pay-eft);  --ci: var(--pay-eft-ink); }
-.seg.pay button { border-color: var(--c); box-shadow: 0 0 10px color-mix(in srgb, var(--c) var(--g2), transparent), inset 0 0 10px color-mix(in srgb, var(--c) var(--g2), transparent); }
+.seg.pay button { border-color: color-mix(in srgb, var(--c) 85%, transparent); box-shadow: 0 0 8px color-mix(in srgb, var(--c) var(--g2), transparent); }
 .seg.pay button.on {
   background: var(--c); color: var(--ci); border-color: var(--c);
   box-shadow: 0 0 0 1px var(--c), 0 0 18px color-mix(in srgb, var(--c) var(--g1), transparent), 0 0 40px color-mix(in srgb, var(--c) var(--g2), transparent);

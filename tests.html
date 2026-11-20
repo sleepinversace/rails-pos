@@ -113,8 +113,32 @@ async function signIn(user, pin) {
   await waitFor(() => !$('#siGo').disabled && ($('#signin').hidden || $('#siError').textContent), 4000, 'sign-in result');
 }
 
+/** First-time setup on a new device: create the owner (and shop / demo). */
+async function setupShop(mode, shop, name, pin) {
+  click(`[data-action="setup-go"][data-step="${mode}"]`); await tick();
+  if (shop != null) type('#suShop', shop);
+  type('#suName', name); type('#suPin', pin); type('#suPin2', pin);
+  $('#setupForm').requestSubmit();
+  await tick(400);
+}
+
+test('First-time setup: no built-in login; the owner creates their own; demo data on request', async () => {
+  ok(!$('#setup').hidden, 'setup screen on a new device');
+  ok($('#signin').hidden && $('.app-nav').inert, 'till locked behind it');
+  eq(await P.DB.get('kv', 'auth'), undefined, 'no accounts exist yet');
+  eq(await P.checkLogin('amish', OWNER.pin), null, 'no built-in Amish account');
+  await setupShop('demo', 'Demo Boutique', 'Amish', '12');
+  ok($('#setupErr').textContent.includes('4-digit'), 'short PIN refused');
+  type('#suPin', OWNER.pin); type('#suPin2', '9999'); $('#setupForm').requestSubmit(); await tick(300);
+  ok($('#setupErr').textContent.includes('not the same'), 'mismatched PINs refused');
+  type('#suPin2', OWNER.pin); $('#setupForm').requestSubmit();
+  await waitFor(() => $('#setup').hidden && P.ui.user, 4000, 'setup to finish');
+  eq([$('#userLabel').textContent, P.state.settings.storeName, P.ui.user.role], ['Amish', 'Demo Boutique', 'owner'], 'signed in as the new owner');
+  click('#lockBtn'); await tick(100);
+});
+
 test('Sign-in: covers the till; username is not case-sensitive; wrong PIN is refused', async () => {
-  ok(!$('#signin').hidden, 'sign-in screen shown on first open');
+  ok(!$('#signin').hidden, 'sign-in screen shown');
   ok($('.app-nav').inert, 'till is locked behind it');
   await signIn('amish', '1234');
   ok(!$('#signin').hidden && $('#siError').textContent.includes('Wrong'), 'wrong PIN refused');
@@ -353,6 +377,85 @@ test('Receive a delivery and see it in the stock history', async () => {
   closeModal();
 });
 
+/** Draw bar/space widths like a printed label; optional fractional module size, blur, noise, upside down. */
+function drawBarcode(widths, { module = 3, blur = 0, noise = 0, upsideDown = false } = {}) {
+  const ws = upsideDown ? widths.slice().reverse() : widths;
+  const quiet = 14 * module;
+  const W = Math.ceil(ws.reduce((a, b) => a + b, 0) * module + quiet * 2), H = 110;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgb(232,232,226)'; g.fillRect(0, 0, W, H);
+  g.fillStyle = 'rgb(28,28,34)';
+  let x = quiet;
+  ws.forEach((wd, i) => { if (i % 2 === 0) g.fillRect(x, 8, wd * module, H - 16); x += wd * module; });
+  let out = c;
+  if (blur) { out = document.createElement('canvas'); out.width = W; out.height = H; const g2 = out.getContext('2d'); g2.filter = `blur(${blur}px)`; g2.drawImage(c, 0, 0); }
+  const img = out.getContext('2d').getImageData(0, 0, W, H);
+  if (noise) for (let i = 0; i < img.data.length; i += 4) { const n = (Math.random() - 0.5) * noise; for (let k = 0; k < 3; k++) img.data[i + k] = Math.max(0, Math.min(255, img.data[i + k] + n)); }
+  return img;
+}
+
+test('Barcodes: the built-in reader reads tag (EAN-13) and SKU (Code 128) barcodes; a scan finds the product', async () => {
+  const B = P.Barcode;
+  ok(B.C128.slice(0, 106).every(p => p.reduce((a, b) => a + b, 0) === 11) && B.C128[106].reduce((a, b) => a + b, 0) === 13, 'Code 128 table widths');
+  eq(new Set(B.C128.map(p => p.join(''))).size, 107, 'Code 128 patterns are all different');
+  const ean = B.encodeEAN13('600123456789');
+  eq(ean.text, '6001234567899', 'EAN-13 check digit'); // 6+0+2+4+6+8 + 3×(0+1+3+5+7+9) = 101 → 9
+  const cases = [
+    [ean.widths, ean.text, {}],
+    [ean.widths, ean.text, { module: 2.3, blur: 1, noise: 40 }],
+    [ean.widths, ean.text, { module: 3, blur: 1.5, noise: 40 }],
+    [ean.widths, ean.text, { module: 4, blur: 2 }],
+    [ean.widths, ean.text, { upsideDown: true, module: 2.6, blur: 0.8 }],
+    [B.encodeEAN13('012345678905').widths, B.encodeEAN13('012345678905').text, { module: 2.4 }], // a UPC-A product (leading 0)
+    [B.encode128('TB-RED-S').widths, 'TB-RED-S', { module: 2.6, blur: 1, noise: 30 }],
+    [B.encode128('SS3-BLA-ONES').widths, 'SS3-BLA-ONES', { upsideDown: true, module: 2.5 }],
+    [B.encode128('SS3-BLA-ONES').widths, 'SS3-BLA-ONES', { module: 3, blur: 1.5, noise: 40 }],
+  ];
+  for (const [widths, text, opt] of cases) {
+    const got = B.decodeImageData(drawBarcode(widths, opt));
+    ok(got.length >= 2 && got.every(c => c === text), `read ${text} ${JSON.stringify(opt)} → ${JSON.stringify(got.slice(0, 3))}`);
+  }
+  const bad = ean.widths.slice(); bad[21] += 2; // a smudged bar
+  ok(!B.decodeImageData(drawBarcode(bad)).length, 'a damaged barcode is not accepted');
+
+  // Give a size its tag barcode; a USB scanner (types + Enter) and the camera both find it
+  await nav('stock');
+  const v = variant(product('Test <b>Tee</b>'), 'M', 'Blue');
+  click(`[data-action="edit-variant"][data-id="${v.id}"]`); await tick();
+  type('#vBarcode', ean.text);
+  click('[data-action="variant-save"]'); await tick(200);
+  eq(variant(product('Test <b>Tee</b>'), 'M', 'Blue').barcode, ean.text, 'barcode saved on the variant');
+  await nav('sell');
+  type('#sellSearch', ean.text);
+  $('#sellSearch').dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await tick();
+  eq(P.cartTotals().count, 1, 'scanner + Enter adds the item');
+  w.onScanned(ean.text, 'sell'); await tick();
+  eq(P.cartTotals().count, 2, 'camera scan adds it too');
+  ok($('#scanner').hidden, 'scanner closed');
+  await P.actions['clear-cart'](); await tick();
+  eq(P.cartTotals().count, 0, 'cart emptied');
+});
+
+test('Product photo: shrunk to a small square and shown on the till', async () => {
+  const c = document.createElement('canvas'); c.width = 1600; c.height = 1000;
+  const g = c.getContext('2d'); g.fillStyle = '#c33'; g.fillRect(0, 0, 1600, 1000); g.fillStyle = '#fff'; g.fillRect(700, 400, 200, 200);
+  const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+  const url = await P.resizePhoto(new w.File([await blob.arrayBuffer()], 'shirt.png', { type: 'image/png' }));
+  ok(url.startsWith('data:image/jpeg;base64,') && url.length < 20000, 'small JPEG (' + url.length + ' chars)');
+  await nav('stock');
+  const tee = product('Test <b>Tee</b>');
+  click(`[data-action="edit-product"][data-id="${tee.id}"]`); await tick();
+  P.ui.formPhoto = url;
+  click('[data-action="ep-save"]'); await tick(200);
+  eq(product('Test <b>Tee</b>').photo, url, 'saved on the product');
+  await nav('sell');
+  ok($(`[data-action="pick"][data-id="${tee.id}"] img.thumb`), 'thumbnail on the product tile');
+  const p2 = product('Test <b>Tee</b>'); const keep = p2.photo; p2.photo = 'javascript:alert(1)'; w.renderSell();
+  ok(!$(`[data-action="pick"][data-id="${tee.id}"] img`), 'anything that is not a small picture is never shown');
+  p2.photo = keep; w.renderSell();
+});
+
 test('Cart (with discount) survives a reload', async () => {
   await addItem(product('Test <b>Tee</b>'), 'S', 'Red');
   click('[data-action="open-cart"]'); await tick();
@@ -572,7 +675,8 @@ function fakeCloud() {
 function deleteDbNamed(name) {
   return new Promise(resolve => { const r = indexedDB.deleteDatabase(name); r.onsuccess = resolve; r.onerror = resolve; r.onblocked = () => setTimeout(resolve, 300); });
 }
-async function openDeviceB() {
+/** A brand-new second device joins the shop from its setup screen ("My shop already uses Rails POS"). */
+async function openDeviceB(cloud) {
   const B = document.getElementById('app2');
   await blank(B);
   await deleteDbNamed('rails-pos-test-b');
@@ -581,7 +685,16 @@ async function openDeviceB() {
   await new Promise(r => { B.onload = r; });
   await waitFor(() => B.contentWindow.__pos?.ui.appActive, 6000, 'device B to start');
   use(B);
-  await signIn('amish', OWNER.pin); // a new device starts with the default owner
+  ok(!$('#setup').hidden && !P.state.products.length, 'a new device shows the setup screen and has no data');
+  w.__cloudFetch = cloud.fetch; P.CLOUD.url = 'https://fake.supabase.test'; P.CLOUD.key = 'anon-test-key';
+  w.showSetup('welcome');
+  click('[data-action="setup-go"][data-step="cloud"]'); await tick();
+  type('#suEmail', SHOP.email); type('#suPass', SHOP.password);
+  $('#setupForm').requestSubmit();
+  await waitFor(() => P.ui.setupStep === 'join', 4000, 'shop found');
+  $('#setupForm').requestSubmit();
+  await waitFor(() => P.Cloud.status === 'ok' && $('#setup').hidden && !$('#signin').hidden, 8000, 'B joined; sign-in shown');
+  await signIn('amish', OWNER.pin); // the shop's staff logins came down from the cloud
 }
 const SHOP = { email: 'shop@example.test', password: 'test-pass-123' }; // fake cloud only
 async function cloudLogin(cloud, button) {
@@ -615,11 +728,8 @@ test('Cloud sync: two tills share sales, stock and settings; a wiped device gets
   ok($('#netStatus').textContent === 'Synced', 'header says Synced');
 
   // Till B: a brand-new device joins and downloads the shop
-  await openDeviceB();
-  await cloudLogin(cloud, 'cloud-signin');
-  await waitFor(() => $('[data-action="cloud-join"]'), 4000, 'join dialog');
-  click('[data-action="cloud-join"]');
-  await waitFor(() => P.Cloud.conf?.deviceCode === 'B' && P.state.sales.length === nSales && P.Cloud.status === 'ok', 8000, 'B to download the shop');
+  await openDeviceB(cloud);
+  await waitFor(() => P.Cloud.conf?.deviceCode === 'B' && P.state.sales.length === nSales, 4000, 'B to have the shop');
   eq(variant(product('Test <b>Tee</b>'), 'S', 'Red').stock, stock0, 'B has the same stock');
 
   // Both tills sell the same shirt while offline, and A changes the address
@@ -648,12 +758,8 @@ test('Cloud sync: two tills share sales, stock and settings; a wiped device gets
   eq(P.computeShift(P.state.meta.lastCashupAt, new Date().toISOString()).salesCount, 1, "B's cash-up counts only B's own sale");
 
   // Wipe device B completely, then sign in again: everything comes back
-  await openDeviceB();
-  eq(P.state.meta.demo, true, 'wiped device starts empty (demo)');
-  await cloudLogin(cloud, 'cloud-signin');
-  await waitFor(() => $('[data-action="cloud-join"]'), 4000, 'join dialog after wipe');
-  click('[data-action="cloud-join"]');
-  await waitFor(() => P.state.sales.length === nSales + 2 && P.Cloud.status === 'ok', 8000, 'B restored from the cloud');
+  await openDeviceB(cloud);
+  await waitFor(() => P.state.sales.length === nSales + 2, 4000, 'B restored from the cloud');
   eq(variant(product('Test <b>Tee</b>'), 'S', 'Red').stock, stock0 - 2, 'restored stock is right');
   eq(P.Cloud.conf.deviceCode, 'C', 'a re-joined device gets a new till letter');
 

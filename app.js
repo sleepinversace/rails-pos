@@ -294,11 +294,15 @@ async function loadState() {
     DB.getAll('products'), DB.getAll('sales'), DB.getAll('cashups'),
   ]);
   if (!meta) {
-    // First run: load demo data so the app isn't empty.
-    loadDemoData();
-    await persistEverything();
+    // A brand-new device: start empty; the first-time setup (section 14d)
+    // creates the shop, or loads demo data, or joins a synced shop.
+    ui.firstRun = true;
+    state.settings = { ...DEFAULT_SETTINGS };
+    state.meta = { ...DEFAULT_META };
+    state.products = []; state.sales = []; state.cashups = [];
     return;
   }
+  ui.firstRun = false;
   state.settings = { ...DEFAULT_SETTINGS, ...settings };
   state.meta = { ...DEFAULT_META, ...meta };
   state.products = products.sort((a, b) => (a.created || 0) - (b.created || 0) || a.name.localeCompare(b.name));
@@ -1369,9 +1373,13 @@ function closeCartSheet() {
 
 /** Keep keyboard / screen-reader focus inside whatever is on top (blocker, modal, cart sheet). */
 function updateInert() {
-  const blocked = !$('#blocker').hidden || !$('#signin').hidden;
+  const tabBlocked = !$('#blocker').hidden;
+  const scanning = !$('#scanner').hidden;
+  const blocked = tabBlocked || !$('#signin').hidden || !$('#setup').hidden || scanning;
   const modal = !$('#modal').hidden;
-  $('#signin').inert = !$('#blocker').hidden;
+  $('#signin').inert = tabBlocked;
+  $('#setup').inert = tabBlocked;
+  $('#scanner').inert = tabBlocked;
   const sheet = $('#cartPanel').classList.contains('open') && !isWide();
   const back = blocked || modal || sheet;
   $('.app-header').inert = back;
@@ -1478,16 +1486,17 @@ function renderSell() {
   const list = state.products.filter(p =>
     (ui.category === 'All' || p.category === ui.category) &&
     (!q || p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) ||
-      p.variants.some(v => v.sku.toLowerCase().includes(q))));
+      p.variants.some(v => v.sku.toLowerCase().includes(q) || String(v.barcode || '').includes(q))));
 
   $('#productGrid').innerHTML = list.length ? list.map(p => {
     const stock = productStock(p);
     const badge = stock === 0 ? '<span class="badge out">Out</span>'
       : stock <= low ? `<span class="badge low">${stock} left</span>`
       : `<span class="badge">${stock}</span>`;
-    return `<button class="product-card ${stock === 0 ? 'out' : ''}" data-action="pick" data-id="${esc(p.id)}"
+    const photo = thumbHtml(p);
+    return `<button class="product-card ${stock === 0 ? 'out' : ''} ${photo ? 'has-photo' : ''}" data-action="pick" data-id="${esc(p.id)}"
         aria-label="${esc(p.name)}, ${esc(priceLabel(p))}, ${stock} in stock">
-        <span class="name">${esc(p.name)}</span>
+        ${photo}<span class="name">${esc(p.name)}</span>
         <span class="cat">${esc(p.category)} · ${p.variants.length} option${p.variants.length === 1 ? '' : 's'}</span>
         <span class="bottom"><span class="price money">${priceLabel(p)}</span>${badge}</span>
       </button>`;
@@ -1522,7 +1531,7 @@ function renderPicker() {
   const price = chosen ? priceOf(p, chosen) : null;
 
   $('#pickerBody').innerHTML = `
-    <p class="muted" style="margin:0 0 12px">${esc(p.category)} · <strong class="money">${price != null ? money(price) : esc(priceLabel(p))}</strong></p>
+    <div class="picker-head">${thumbHtml(p, 'md')}<p class="muted" style="margin:0">${esc(p.category)} · <strong class="money">${price != null ? money(price) : esc(priceLabel(p))}</strong></p></div>
     <div class="small-label" id="lblSize">Size</div>
     <div class="opt-group" role="group" aria-labelledby="lblSize">${sizes.map(s => `<button class="opt ${pk.size === s ? 'on' : ''}" aria-pressed="${pk.size === s}" data-action="pk-size" data-v="${esc(s)}" ${has(s, pk.colour) ? '' : 'disabled'}>${esc(s)}</button>`).join('')}</div>
     <div class="small-label" id="lblColour">Colour</div>
@@ -1538,7 +1547,7 @@ function renderPicker() {
 /** Search box Enter: exact SKU (barcode scanner) adds 1; one match opens it. */
 function onSellSearchEnter() {
   const input = $('#sellSearch');
-  const found = findBySku(input.value);
+  const found = findByCode(input.value); // SKU or tag barcode (USB/Bluetooth scanners type + Enter)
   if (found) {
     if (addToCart(found.variant.id, 1)) toast(`Added ${found.product.name} ${found.variant.size}/${found.variant.colour}`);
     input.value = '';
@@ -1560,8 +1569,8 @@ function renderCart() {
     <button class="btn sm ghost" data-action="cancel-credit">Cancel</button></div>` : '';
   $('#cartItems').innerHTML = t.lines.length ? t.lines.map(l => `
     <div class="cart-line">
-      <div><div><strong>${esc(l.product.name)}</strong></div>
-        <div class="meta">${esc(l.variant.size)} / ${esc(l.variant.colour)} · ${money(l.price)} · ${l.variant.stock} in stock</div></div>
+      <div class="cl-name">${thumbHtml(l.product, 'sm')}<div><div><strong>${esc(l.product.name)}</strong></div>
+        <div class="meta">${esc(l.variant.size)} / ${esc(l.variant.colour)} · ${money(l.price)} · ${l.variant.stock} in stock</div></div></div>
       <div class="lt money">${money(l.price * l.qty)}</div>
       <div><span class="stepper">
         <button data-action="line-qty" data-id="${esc(l.variantId)}" data-d="-1" aria-label="One less ${esc(l.product.name)}">−</button>
@@ -1631,14 +1640,14 @@ function renderStock() {
 
   const cards = state.products.map(p => {
     const match = !q || p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q);
-    let variants = p.variants.filter(v => match || v.sku.toLowerCase().includes(q) || `${v.size} ${v.colour}`.toLowerCase().includes(q));
+    let variants = p.variants.filter(v => match || v.sku.toLowerCase().includes(q) || String(v.barcode || '').includes(q) || `${v.size} ${v.colour}`.toLowerCase().includes(q));
     if (ui.lowOnly) variants = variants.filter(v => v.stock <= low);
     if (!variants.length && (ui.lowOnly || !match)) return '';
     const exVat = p.price - vatFromInclusive(p.price, rate);
     const margin = exVat ? Math.round((exVat - p.cost) / exVat * 100) : 0;
     return `<div class="card">
       <div class="prod-head">
-        <div class="info"><h3>${esc(p.name)}</h3>
+        ${thumbHtml(p, 'md')}<div class="info"><h3>${esc(p.name)}</h3>
           <div class="small muted">${esc(p.category)} · Price <strong class="money">${money(p.price)}</strong> · Cost ${money(p.cost)} · Margin ${margin}% · ${productStock(p)} in stock</div></div>
         <div class="actions">
           <button class="btn sm" data-action="receive" data-id="${esc(p.id)}">Receive</button>
@@ -1651,7 +1660,7 @@ function renderStock() {
         <div class="var-row ${v.stock === 0 ? 'out' : v.stock <= low ? 'low' : ''}">
           <button class="var-label" data-action="edit-variant" data-id="${esc(v.id)}" aria-label="Edit variant ${esc(v.size)} ${esc(v.colour)}">
             <span class="label"><strong>${esc(v.size)} / ${esc(v.colour)}</strong><span class="state-tag">${v.stock === 0 ? ' · out' : v.stock <= low ? ' · low' : ''}</span></span>
-            <span class="sku">${esc(v.sku)}${v.price != null ? ` · <span class="price-tag">${money(v.price)}</span>` : ''}</span>
+            <span class="sku">${esc(v.sku)}${v.barcode ? ` · ${esc(v.barcode)}` : ''}${v.price != null ? ` · <span class="price-tag">${money(v.price)}</span>` : ''}</span>
           </button>
           <span class="stepper">
             <button data-action="stock-d" data-id="${esc(v.id)}" data-d="-1" aria-label="Decrease stock ${esc(v.size)} ${esc(v.colour)}">−</button>
@@ -1673,6 +1682,15 @@ function productForm(p) {
     <div class="grid-2">
       <label class="field"><span>Price${state.settings.vatRegistered ? ' incl. VAT' : ''} (R)</span><input class="input" id="fPrice" inputmode="decimal" value="${p ? centsToPlain(p.price) : ''}"></label>
       <label class="field"><span>Cost (R)</span><input class="input" id="fCost" inputmode="decimal" value="${p ? centsToPlain(p.cost) : ''}"></label>
+    </div>
+    <div class="field"><span>Photo (optional, kept small)</span>
+      <div class="photo-row">
+        <span id="fPhotoPrev"></span>
+        <label class="btn sm" tabindex="0" role="button" data-file-trigger>
+          <svg class="ico-sm" aria-hidden="true"><use href="#i-camera"/></svg>Take or choose photo
+          <input type="file" id="fPhoto" accept="image/*" hidden></label>
+        <button type="button" class="btn sm ghost" data-action="photo-remove">Remove</button>
+      </div>
     </div>`;
 }
 
@@ -1684,10 +1702,11 @@ function readProductForm() {
   if (!name) { toast('Enter a product name', true); return null; }
   if (!Number.isFinite(price) || price <= 0) { toast('Enter a valid price', true); return null; }
   if (!Number.isFinite(cost) || cost < 0) { toast('Enter a valid cost', true); return null; }
-  return { name, category, price, cost };
+  return { name, category, price, cost, photo: ui.formPhoto || null };
 }
 
 function openAddProduct() {
+  ui.formPhoto = null;
   openModal({
     title: 'Add product',
     body: productForm(null) + `
@@ -1699,6 +1718,7 @@ function openAddProduct() {
     foot: `<button class="btn" data-action="close-modal">Cancel</button><button class="btn primary" data-action="np-save">Save product</button>`,
   });
   renderVariantGrid();
+  paintPhotoPreview();
 }
 
 /** Rebuild the size × colour grid in the Add product form, keeping typed values. */
@@ -1723,6 +1743,7 @@ async function saveNewProduct() {
   if (!sizes.length || !colours.length) return toast('Add at least one size and one colour', true);
   const stockByKey = Object.fromEntries($$('#variantGrid input[data-key]').map(i => [i.dataset.key, i.value]));
   const product = { id: uid('p'), ...base, created: Date.now(), variants: [] };
+  if (!product.photo) delete product.photo;
   for (const colour of colours) for (const size of sizes) {
     product.variants.push({
       id: uid('v'), size, colour,
@@ -1741,12 +1762,14 @@ async function saveNewProduct() {
 function openEditProduct(id) {
   const p = findProduct(id);
   if (!p) return;
+  ui.formPhoto = photoSrc(p);
   openModal({
     title: 'Edit product',
     body: productForm(p) + '<p class="small muted">Price changes apply to new sales only. Past receipts keep the price they were sold at. Variants with their own price keep it.</p>',
     foot: `<button class="btn danger" data-action="delete-product" data-id="${esc(id)}">Delete product</button>
       <button class="btn" data-action="close-modal">Cancel</button><button class="btn primary" data-action="ep-save" data-id="${esc(id)}">Save</button>`,
   });
+  paintPhotoPreview();
 }
 
 async function saveEditProduct(id) {
@@ -1754,6 +1777,7 @@ async function saveEditProduct(id) {
   const base = p && readProductForm();
   if (!base) return;
   Object.assign(p, base);
+  if (!p.photo) delete p.photo;
   await persist([opPut('products', p)]);
   closeModal();
   renderAll();
@@ -1775,6 +1799,12 @@ function openVariantForm(productId, variantId = null) {
       <div class="grid-2">
         <label class="field"><span>SKU ${v ? '' : '(blank = auto)'}</span><input class="input" id="vSku" value="${esc(v?.sku || '')}"></label>
         ${v ? '' : '<label class="field"><span>Stock</span><input class="input" id="vStock" inputmode="numeric" value="0"></label>'}
+      </div>
+      <div class="field"><label for="vBarcode">Barcode on the tag (optional)</label>
+        <div class="row gap-s">
+          <input class="input grow" id="vBarcode" inputmode="numeric" autocomplete="off" value="${esc(v?.barcode || '')}" placeholder="Scan or type it">
+          <button type="button" class="btn" data-action="scan" data-target="vBarcode" aria-label="Scan the barcode with the camera"><svg class="ico-sm" aria-hidden="true"><use href="#i-scan"/></svg>Scan</button>
+        </div>
       </div>
       <div class="grid-2">
         <label class="field"><span>Own price (R)</span><input class="input" id="vPrice" inputmode="decimal" placeholder="${centsToPlain(p.price)}" value="${v?.price != null ? centsToPlain(v.price) : ''}"></label>
@@ -1800,6 +1830,9 @@ async function saveVariant(productId, variantId) {
   let sku = $('#vSku').value.trim().toUpperCase();
   const clash = sku && findBySku(sku);
   if (clash && clash.variant !== v) return toast('That SKU is already used', true);
+  const barcode = $('#vBarcode').value.trim().replace(/\s+/g, '');
+  const bClash = barcode && findByCode(barcode);
+  if (bClash && bClash.variant !== v) return toast(`That barcode is already on ${bClash.product.name} ${bClash.variant.size}/${bClash.variant.colour}`, true);
   const priceTxt = $('#vPrice').value.trim();
   const costTxt = $('#vCost').value.trim();
   const price = priceTxt === '' ? null : parseMoney(priceTxt);
@@ -1811,8 +1844,10 @@ async function saveVariant(productId, variantId) {
     Object.assign(v, { size, colour, sku: sku || v.sku });
     if (price === null) delete v.price; else v.price = price;
     if (cost === null) delete v.cost; else v.cost = cost;
+    if (barcode) v.barcode = barcode; else delete v.barcode;
   } else {
     const nv = { id: uid('v'), size, colour, sku: sku || makeSku(p.name, size, colour), stock: Math.max(0, parseInt($('#vStock').value, 10) || 0) };
+    if (barcode) nv.barcode = barcode;
     if (price !== null) nv.price = price;
     if (cost !== null) nv.cost = cost;
     p.variants.push(nv);
@@ -2426,13 +2461,9 @@ const ROLES = {
 /* Which permission each screen needs (Sell needs none). */
 const VIEW_PERMS = { stock: 'stock', sales: 'sales', reports: 'reports', settings: 'settings', admin: 'admin' };
 
-// The owner account created on first run (PIN stored as a hash only).
-const DEFAULT_AUTH = {
-  users: [{
-    id: 'u-amish', name: 'Amish', role: 'owner', perms: [...ALL_PERMS],
-    salt: 'DTcSYbvG4OYR8B5sHx9K0Q==', hash: 'zMlfNbdHmzdX1/zOgfOfG1N0mOQBaWlTbg3lN6KwEXY=',
-  }],
-};
+// There is no built-in account: a new device runs the first-time setup
+// (section 14d), where the shop owner chooses their own name and PIN.
+const DUMMY_SALT = 'DTcSYbvG4OYR8B5sHx9K0Q=='; // only used to hash a wrong username (equal timing)
 const signinState = { failures: 0, lockedUntil: 0 };
 
 /** Does the signed-in user have this permission? */
@@ -2449,11 +2480,11 @@ async function hashPin(pin, saltB64) {
   return toB64(bits);
 }
 
-/** The accounts record; creates the default owner on first run. */
+/** The accounts record ({users: []} on a device that hasn't been set up yet). */
 async function loadAuth() {
-  let auth = await DB.get('kv', 'auth');
+  const auth = (await DB.get('kv', 'auth')) || { users: [] };
+  auth.users ||= [];
   let changed = false;
-  if (!auth?.users?.length) { auth = structuredClone(DEFAULT_AUTH); changed = true; }
   // Accounts from the first sign-in version had no id or permissions.
   for (const u of auth.users) {
     if (!u.id) { u.id = 'u-' + normUser(u.name || u.username); changed = true; }
@@ -2471,7 +2502,7 @@ async function checkLogin(username, pin) {
   const auth = await loadAuth();
   const user = auth.users.find(u => normUser(u.name) === normUser(username));
   // Hash even for an unknown name, so both kinds of mistake take equally long.
-  const hash = await hashPin(pin, user?.salt || DEFAULT_AUTH.users[0].salt);
+  const hash = await hashPin(pin, user?.salt || DUMMY_SALT);
   return user && hash === user.hash ? user : null;
 }
 
@@ -2554,6 +2585,7 @@ async function submitSignIn() {
 /** Lock button: save anything pending, then cover the till again. */
 async function lockTill() {
   if (ui.appActive) { await flushAllAdjust(); await saveCart(true); }
+  if (ui.scan) closeScanner();
   closeModal();
   closeCartSheet();
   writeSession(null);
@@ -3275,6 +3307,564 @@ function cloudCardHtml() {
   </div>`;
 }
 
+/* ===== 14d. First-time setup ============================================
+   A device with no user accounts shows this instead of the sign-in screen:
+     welcome  → Set up my shop / Try it with demo data / My shop already uses Rails POS
+     new|demo → shop name + owner name + PIN (twice)
+     owner    → device has shop data but no logins (e.g. upgraded): name + PIN only
+     cloud    → shop email + password → join → download the shop and its staff logins
+   ======================================================================== */
+
+function showSetup(step = 'welcome') {
+  ui.setupStep = step;
+  $('#setup').hidden = false;
+  renderSetup();
+  updateInert();
+}
+function hideSetup() {
+  $('#setup').hidden = true;
+  updateInert();
+}
+
+function renderSetup() {
+  const s = ui.setupStep;
+  const head = (title, sub) => `<img src="icon-192.png" alt="" width="64" height="64"><h1 id="setupTitle">${title}</h1><p class="muted">${sub}</p>`;
+  const back = '<button type="button" class="btn ghost block" data-action="setup-back">Back</button>';
+  const err = '<p id="setupErr" class="err-text small" role="alert"></p>';
+  const pinFields = `
+    <div class="grid-2">
+      <label class="field"><span>PIN (4 digits)</span><input id="suPin" class="input pin-input" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password"></label>
+      <label class="field"><span>PIN again</span><input id="suPin2" class="input pin-input" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password"></label>
+    </div>`;
+  let html = '';
+  if (s === 'welcome') {
+    html = `${head('Welcome to Rails POS', 'The till for clothing shops. Works with no internet.')}
+      <div class="setup-choices">
+        <button type="button" class="btn primary block lg" data-action="setup-go" data-step="new">Set up my shop</button>
+        <button type="button" class="btn block lg" data-action="setup-go" data-step="demo">Try it with demo data</button>
+        ${cloudReady() ? '<button type="button" class="btn block lg" data-action="setup-go" data-step="cloud">My shop already uses Rails POS</button>' : ''}
+      </div>
+      <p class="small muted" style="margin:12px 0 0">Everything is saved on this device. You can turn on cloud sync later in Settings.</p>`;
+  } else if (s === 'new' || s === 'demo') {
+    html = `${head(s === 'new' ? 'Set up your shop' : 'Try Rails POS', s === 'new' ? 'You can add the address, VAT number and more in Settings later.' : 'Sample products and sales, so you can try everything. Start fresh from Settings when you are ready.')}
+      <label class="field"><span>Shop name</span><input id="suShop" class="input" maxlength="40" value="${s === 'demo' ? 'Demo Boutique' : ''}" autocomplete="organization"></label>
+      <label class="field"><span>Your name (your username)</span><input id="suName" class="input" maxlength="30" autocomplete="username" autocapitalize="words"></label>
+      ${pinFields}${err}
+      <button id="setupGo" class="btn primary block lg" type="submit">${s === 'new' ? 'Start selling' : 'Start the demo'}</button>${back}`;
+  } else if (s === 'owner') {
+    html = `${head('Create your owner login', 'This device has shop data but nobody can sign in yet. Choose the owner\'s name and PIN.')}
+      <label class="field"><span>Your name (your username)</span><input id="suName" class="input" maxlength="30" autocomplete="username" autocapitalize="words"></label>
+      ${pinFields}${err}
+      <button id="setupGo" class="btn primary block lg" type="submit">Create login</button>`;
+  } else if (s === 'cloud') {
+    html = `${head('Sign in to your shop', 'Use the shop email and password from cloud sync. Everything downloads to this device.')}
+      <label class="field"><span>Shop email</span><input id="suEmail" class="input" type="email" autocomplete="username" autocapitalize="none" value="${esc(Cloud.conf?.email || '')}"></label>
+      <label class="field"><span>Shop password</span><input id="suPass" class="input" type="password" autocomplete="current-password"></label>
+      ${err}
+      <button id="setupGo" class="btn primary block lg" type="submit">Sign in</button>${back}`;
+  } else if (s === 'join') {
+    html = `${head(`Join ${esc(ui.setupShop?.name || 'your shop')}`, 'This device downloads the shop\'s products, sales, settings and staff logins, then stays in sync.')}
+      ${err}
+      <button id="setupGo" class="btn primary block lg" type="submit">Join and download</button>${back}`;
+  }
+  $('#setupForm').innerHTML = html;
+  setTimeout(() => ($('#setupForm input') || $('#setupGo') || $('#setupForm button'))?.focus(), 30);
+}
+
+const setupError = msg => { const e = $('#setupErr'); if (e) e.textContent = msg; };
+
+async function onSetupSubmit() {
+  const s = ui.setupStep;
+  const go = $('#setupGo');
+  if (go?.disabled) return;
+  if (go) go.disabled = true;
+  try {
+    if (s === 'new' || s === 'demo' || s === 'owner') await finishSetup(s);
+    else if (s === 'cloud') await setupCloudSignIn();
+    else if (s === 'join') await setupJoin();
+  } finally {
+    if ($('#setupGo')) $('#setupGo').disabled = false;
+  }
+}
+
+async function finishSetup(mode) {
+  const shop = mode === 'owner' ? null : $('#suShop').value.trim().replace(/\s+/g, ' ');
+  const name = $('#suName').value.trim().replace(/\s+/g, ' ');
+  const pin = $('#suPin').value.trim(), pin2 = $('#suPin2').value.trim();
+  if (mode !== 'owner' && !shop) return setupError('Enter the shop name');
+  if (!name) return setupError('Enter your name. It is your username for signing in');
+  if (!/^\d{4}$/.test(pin)) return setupError('Choose a 4-digit PIN');
+  if (pin !== pin2) return setupError('The two PINs are not the same');
+
+  const user = { id: uid('u-'), name, role: 'owner', perms: [...ALL_PERMS] };
+  await setPin(user, pin);
+  if (mode === 'demo') {
+    loadDemoData();
+    state.settings.storeName = shop;
+  } else if (mode === 'new') {
+    const theme = state.settings.theme;
+    state.settings = { ...DEFAULT_SETTINGS, storeName: shop, theme };
+    state.products = []; state.sales = []; state.cashups = [];
+    state.meta = { ...DEFAULT_META };
+    ui.cart = emptyCart();
+  }
+  if (mode !== 'owner') { await persistEverything(); restoreCart(ui.cart); }
+  await saveAuth({ users: [user] });
+  ui.firstRun = false;
+  writeSession(user.id);
+  setUser(user);
+  hideSetup();
+  renderAll();
+  toast(mode === 'new' ? `Welcome, ${name}! Add your products on the Stock screen.` : mode === 'demo' ? 'Demo ready. Try a sale!' : `Welcome, ${name}`);
+}
+
+async function setupCloudSignIn() {
+  const email = $('#suEmail').value.trim();
+  const password = $('#suPass').value;
+  if (!/^\S+@\S+\.\S+$/.test(email)) return setupError('Enter the shop email address');
+  if (!password) return setupError('Enter the shop password');
+  if (!navigator.onLine) return setupError('You need internet to sign in');
+  try {
+    const r = await cloudSignIn(email, password, false);
+    if (r === 'confirm') return setupError('Confirm the shop email first (check the inbox), then sign in');
+    const shops = await cloudApi('/rest/v1/shops?select=id,name,generation&order=created_at.asc');
+    if (!shops.length) return setupError('No shop is linked to this email yet. Go back, set up your shop, then turn on cloud sync in Settings.');
+    ui.setupShop = shops[0];
+    ui.setupStep = 'join';
+    renderSetup();
+  } catch (e) {
+    setupError(e.message);
+  }
+}
+
+async function setupJoin() {
+  ui.joinShop = ui.setupShop;
+  await joinCloudShop();
+  if (!cloudOn()) return setupError('Could not download the shop. Check the internet and try again.');
+  ui.firstRun = false;
+  if ((await loadAuth()).users.length) { hideSetup(); showSignIn(); }
+  else { ui.setupStep = 'owner'; renderSetup(); } // a cloud shop without logins (older version)
+}
+
+/** On boot / takeover: setup if nobody can sign in yet, otherwise the sign-in screen. */
+async function showEntryScreen(signedIn) {
+  let users = [];
+  try { users = (await loadAuth()).users; } catch (err) { console.error(err); }
+  if (!users.length) showSetup(ui.firstRun ? 'welcome' : 'owner');
+  else if (!signedIn) showSignIn();
+}
+
+/* ===== 14e. Barcodes, camera scanner & product photos ===================
+   Camera scanning: phones/browsers with a built-in BarcodeDetector (Android
+   Chrome) use it; everything else (iPhone, iPad) uses the small reader below.
+
+   The reader: take ~16 horizontal lines across the middle of the camera
+   picture, turn each into light/dark "runs" (widths of bars and spaces),
+   and try to read EAN-13 / UPC-A / EAN-8 (clothing-tag barcodes) or Code 128
+   (printed SKU labels) from them, in both directions. A result only counts
+   when its check digit is right AND two lines agree, so misreads are rare.
+   ======================================================================== */
+
+const Barcode = (() => {
+  // EAN digit widths (space, bar, space, bar) in modules; G = mirror image.
+  const EAN_L = ['3211', '2221', '2122', '1411', '1132', '1231', '1114', '1312', '1213', '3112'].map(s => [...s].map(Number));
+  const EAN_G = EAN_L.map(w => w.slice().reverse());
+  const EAN_FIRST = ['LLLLLL', 'LLGLGG', 'LLGGLG', 'LLGGGL', 'LGLLGG', 'LGGLLG', 'LGGGLL', 'LGLGLG', 'LGLGGL', 'LGGLGL'];
+  // Code 128 symbol widths (bar, space, bar, space, bar, space), values 0–105; 106 = stop.
+  const C128 = ('212222 222122 222221 121223 121322 131222 122213 122312 132212 221213 221312 231212 112232 122132 122231 113222 ' +
+    '123122 123221 223211 221132 221231 213212 223112 312131 311222 321122 321221 312212 322112 322211 212123 212321 232121 ' +
+    '111323 131123 131321 112313 132113 132311 211313 231113 231311 112133 112331 132131 113123 113321 133121 313121 211331 ' +
+    '231131 213113 213311 213131 311123 311321 331121 312113 312311 332111 314111 221411 431111 111224 111422 121124 121421 ' +
+    '141122 141221 112214 112412 122114 122411 142112 142211 241211 221114 413111 241112 134111 111242 121142 121241 114212 ' +
+    '124112 124211 411212 421112 421211 212141 214121 412121 111143 111341 131141 114113 114311 411113 411311 113141 114131 ' +
+    '311141 411131 211412 211214 211232 2331112').split(' ').map(s => [...s].map(Number));
+  const C128_DATA = C128.slice(0, 106);
+
+  /** How far a group of runs is from a width pattern, after scaling to `modules`.
+      Blur and ink spread make bars look wider and gaps narrower by the same
+      amount, so the main measure is bar+gap pairs ("edge to similar edge"),
+      which that cancels out of. Single widths only break ties (e.g. EAN 1 vs 7). */
+  function dist(runs, pattern, modules) {
+    let total = 0;
+    for (const r of runs) total += r;
+    const k = modules / total;
+    let pair = 0, raw = 0;
+    for (let i = 0; i < pattern.length; i++) {
+      raw += Math.abs(runs[i] * k - pattern[i]);
+      if (i + 1 < pattern.length) pair += Math.abs((runs[i] + runs[i + 1]) * k - (pattern[i] + pattern[i + 1]));
+    }
+    return pair <= 1.4 && raw <= 3.2 ? pair + 0.35 * raw : Infinity;
+  }
+  function best(runs, table, modules) {
+    let bi = -1, bd = Infinity, second = Infinity;
+    for (let i = 0; i < table.length; i++) {
+      const d = dist(runs, table[i], modules);
+      if (d < bd) { second = bd; bd = d; bi = i; } else if (d < second) second = d;
+    }
+    return bd < Infinity ? [bi, bd] : [-1, Infinity];
+  }
+  const sumOf = a => a.reduce((x, y) => x + y, 0);
+  function eanCheckOk(digits) {
+    const n = digits.length;
+    let s = 0;
+    for (let i = 0; i < n - 1; i++) s += digits[i] * ((n - 1 - i) % 2 ? 3 : 1);
+    return (10 - (s % 10)) % 10 === digits[n - 1];
+  }
+
+  /** EAN-13 (incl. UPC-A with a leading 0) or EAN-8 starting at run i (a bar). */
+  function decodeEAN(runs, i) {
+    for (const [count, half, modules] of [[59, 6, 95], [43, 4, 67]]) {
+      if (i + count > runs.length) continue;
+      const seg = runs.slice(i, i + count);
+      const m = sumOf(seg) / modules;
+      if (i > 0 && runs[i - 1] < 3 * m) continue; // needs a light margin before it
+      const mid = 3 + half * 4;
+      const guards = [0, 1, 2, mid, mid + 1, mid + 2, mid + 3, mid + 4, count - 3, count - 2, count - 1];
+      if (!guards.every(k => seg[k] > 0.35 * m && seg[k] < 2 * m)) continue;
+      const out = [];
+      let parity = '', ok = true;
+      for (let d = 0; d < half && ok; d++) {
+        const r = seg.slice(3 + d * 4, 7 + d * 4);
+        const [l, dl] = best(r, EAN_L, 7);
+        const [g, dg] = half === 6 ? best(r, EAN_G, 7) : [-1, Infinity];
+        if (l >= 0 && dl <= dg) { out.push(l); parity += 'L'; }
+        else if (g >= 0) { out.push(g); parity += 'G'; }
+        else ok = false;
+      }
+      for (let d = 0; d < half && ok; d++) {
+        const [v] = best(seg.slice(mid + 5 + d * 4, mid + 9 + d * 4), EAN_L, 7);
+        if (v < 0) ok = false; else out.push(v);
+      }
+      if (!ok) continue;
+      let digits = out;
+      if (half === 6) {
+        const first = EAN_FIRST.indexOf(parity);
+        if (first < 0) continue;
+        digits = [first, ...out];
+      } else if (parity !== 'LLLL') continue;
+      if (eanCheckOk(digits)) return digits.join('');
+    }
+    return null;
+  }
+
+  /** Code 128 starting at run i (a bar). */
+  function decode128(runs, i) {
+    if (i + 6 > runs.length) return null;
+    const [start] = best(runs.slice(i, i + 6), C128_DATA, 11);
+    if (start < 103) return null;
+    const m = sumOf(runs.slice(i, i + 6)) / 11;
+    if (i > 0 && runs[i - 1] < 4 * m) return null;
+    const vals = [start];
+    let k = i + 6;
+    for (;;) {
+      if (k + 7 <= runs.length && dist(runs.slice(k, k + 7), C128[106], 13) < Infinity) break; // stop pattern
+      if (k + 6 > runs.length || vals.length > 60) return null;
+      const [v] = best(runs.slice(k, k + 6), C128_DATA, 11);
+      if (v < 0 || v >= 103) return null;
+      vals.push(v);
+      k += 6;
+    }
+    if (vals.length < 3) return null;
+    const check = vals.pop();
+    let s = vals[0];
+    for (let j = 1; j < vals.length; j++) s += vals[j] * j;
+    if (s % 103 !== check) return null;
+    return text128(vals);
+  }
+
+  function text128(vals) {
+    let set = vals[0] === 103 ? 'A' : vals[0] === 104 ? 'B' : 'C';
+    let out = '', shift = false;
+    for (let j = 1; j < vals.length; j++) {
+      const v = vals[j];
+      const cur = shift ? (set === 'A' ? 'B' : 'A') : set;
+      shift = false;
+      if (cur === 'C' && v < 100) { out += String(v).padStart(2, '0'); continue; }
+      if (cur !== 'C' && v < 96) { out += String.fromCharCode(cur === 'A' && v >= 64 ? v - 64 : v + 32); continue; }
+      if (v === 98 && cur !== 'C') shift = true;
+      else if (v === 99) set = 'C';
+      else if (v === 100 && cur !== 'B') set = 'B';
+      else if (v === 101 && cur !== 'A') set = 'A';
+      // 96, 97, 102 (FNC codes) and FNC4 are ignored
+    }
+    return out;
+  }
+
+  /** One scan line (grey values) → light/dark runs.
+      Finds the brightness peaks (gaps) and dips (bars), ignoring wiggles smaller
+      than a share of the local contrast, and puts each edge half-way between a
+      peak and the next dip (to a fraction of a pixel). This keeps thin gaps
+      that blur has made faint, which a plain dark/light cut-off would lose. */
+  function lineRuns(px) {
+    const w = px.length;
+    const R = Math.max(10, Math.round(w / 48));
+    const sm = new Float32Array(w);
+    for (let x = 0; x < w; x++) sm[x] = (px[Math.max(0, x - 1)] + 2 * px[x] + px[Math.min(w - 1, x + 1)]) / 4;
+    // Minimum swing that counts, from the local contrast (no swings at all on plain areas)
+    const need = new Float32Array(w);
+    for (let x = 0; x < w; x++) {
+      let lo = 255, hi = 0;
+      for (let j = Math.max(0, x - R), e = Math.min(w - 1, x + R); j <= e; j++) { const v = sm[j]; if (v < lo) lo = v; if (v > hi) hi = v; }
+      const range = hi - lo;
+      need[x] = range < 24 ? 1e9 : Math.max(8, 0.2 * range);
+    }
+    // Peaks and dips, with hysteresis
+    const ext = [];
+    let mode = 0, ex = 0, ev = sm[0], lo = sm[0], loX = 0, hi = sm[0], hiX = 0;
+    for (let x = 1; x < w; x++) {
+      const v = sm[x], d = need[x];
+      if (mode === 0) {
+        if (v > hi) { hi = v; hiX = x; }
+        if (v < lo) { lo = v; loX = x; }
+        if (hi - v > d) { ext.push({ x: hiX, v: hi, light: true }); mode = -1; ex = x; ev = v; }
+        else if (v - lo > d) { ext.push({ x: loX, v: lo, light: false }); mode = 1; ex = x; ev = v; }
+      } else if (mode === 1) {
+        if (v > ev) { ev = v; ex = x; } else if (ev - v > d) { ext.push({ x: ex, v: ev, light: true }); mode = -1; ev = v; ex = x; }
+      } else if (v < ev) { ev = v; ex = x; } else if (v - ev > d) { ext.push({ x: ex, v: ev, light: false }); mode = 1; ev = v; ex = x; }
+    }
+    if (mode !== 0) ext.push({ x: ex, v: ev, light: mode === 1 });
+    if (ext.length < 2) return { runs: [w], isDark: [0] };
+    // Edges half-way (in brightness) between neighbouring peak and dip
+    const edges = [];
+    for (let k = 0; k + 1 < ext.length; k++) {
+      const a = ext[k], b = ext[k + 1], mid = (a.v + b.v) / 2;
+      let e = (a.x + b.x) / 2;
+      for (let x = a.x + 1; x <= b.x; x++) {
+        if ((sm[x - 1] - mid) * (sm[x] - mid) <= 0 && sm[x] !== sm[x - 1]) { e = x - 1 + (mid - sm[x - 1]) / (sm[x] - sm[x - 1]); break; }
+      }
+      edges.push(e);
+    }
+    const runs = [], isDark = [];
+    let prev = 0;
+    for (let k = 0; k < ext.length; k++) {
+      const end = k < edges.length ? edges[k] : w;
+      runs.push(Math.max(0.01, end - prev));
+      isDark.push(ext[k].light ? 0 : 1);
+      prev = end;
+    }
+    return { runs, isDark };
+  }
+
+  function decodeRuns(runs, isDark) {
+    for (let i = 0; i < runs.length; i++) {
+      if (!isDark[i]) continue;
+      const code = decodeEAN(runs, i) || decode128(runs, i);
+      if (code) return code;
+    }
+    return null;
+  }
+
+  /** All codes read from horizontal lines across a picture (one entry per line that read). */
+  function decodeImageData(img, lines = 16) {
+    const { width: w, height: h, data } = img;
+    const found = [];
+    const px = new Uint8Array(w);
+    for (let n = 0; n < lines; n++) {
+      const y = Math.min(h - 3, Math.max(2, Math.round(h * (0.1 + 0.8 * n / Math.max(1, lines - 1)))));
+      // Average 5 rows: bars are vertical, so this removes camera noise without blurring them.
+      for (let x = 0; x < w; x++) {
+        let s = 0;
+        for (let dy = -2; dy <= 2; dy++) { const o = ((y + dy) * w + x) * 4; s += data[o] * 77 + data[o + 1] * 150 + data[o + 2] * 29; }
+        px[x] = (s / 5) >> 8;
+      }
+      const { runs, isDark } = lineRuns(px);
+      const code = decodeRuns(runs, isDark) || decodeRuns(runs.slice().reverse(), isDark.slice().reverse());
+      if (code) found.push(code);
+    }
+    return found;
+  }
+
+  /* Encoders: bar/space widths starting with a bar (for tests, and later for printing labels). */
+  function encodeEAN13(twelve) {
+    const d = [...String(twelve)].map(Number);
+    let s = 0;
+    d.forEach((x, i) => { s += x * ((12 - i) % 2 ? 3 : 1); });
+    d.push((10 - (s % 10)) % 10);
+    const par = EAN_FIRST[d[0]];
+    const widths = [1, 1, 1];
+    for (let i = 1; i <= 6; i++) widths.push(...(par[i - 1] === 'L' ? EAN_L : EAN_G)[d[i]]);
+    widths.push(1, 1, 1, 1, 1);
+    for (let i = 7; i <= 12; i++) widths.push(...EAN_L[d[i]]);
+    widths.push(1, 1, 1);
+    return { text: d.join(''), widths };
+  }
+  function encode128(text) {
+    const vals = [104, ...[...String(text)].map(c => c.charCodeAt(0) - 32)];
+    let s = vals[0];
+    for (let j = 1; j < vals.length; j++) s += vals[j] * j;
+    vals.push(s % 103, 106);
+    return { text: String(text), widths: vals.flatMap(v => C128[v]) };
+  }
+
+  return { decodeImageData, encodeEAN13, encode128, C128, lineRuns, decodeRuns };
+})();
+
+/** Find a variant by SKU or by its own barcode (UPC-A and EAN-13 forms both match). */
+function findByCode(code) {
+  const s = String(code ?? '').trim().toUpperCase();
+  if (!s) return null;
+  const alt = /^\d{12}$/.test(s) ? '0' + s : /^0\d{12}$/.test(s) ? s.slice(1) : null;
+  for (const product of state.products) for (const variant of product.variants) {
+    if (variant.sku.toUpperCase() === s) return { product, variant };
+    const b = String(variant.barcode || '').toUpperCase();
+    if (b && (b === s || b === alt)) return { product, variant };
+  }
+  return null;
+}
+
+/* ----- Camera scanner ----- */
+
+let barcodeDetector = null; // null = not checked yet, false = not available
+async function getBarcodeDetector() {
+  if (barcodeDetector !== null) return barcodeDetector;
+  barcodeDetector = false;
+  if ('BarcodeDetector' in window) {
+    try {
+      const have = await window.BarcodeDetector.getSupportedFormats();
+      const formats = ['ean_13', 'ean_8', 'upc_a', 'code_128'].filter(f => have.includes(f));
+      if (formats.length) barcodeDetector = new window.BarcodeDetector({ formats });
+    } catch { /* use our own reader */ }
+  }
+  return barcodeDetector;
+}
+
+/** target: 'sell' (add to cart) or the id of an input to fill (e.g. 'vBarcode'). */
+async function openScanner(target) {
+  if (!navigator.mediaDevices?.getUserMedia) return toast('The camera is not available in this browser', true);
+  ui.scan = { target, hits: new Map(), canvas: document.createElement('canvas') };
+  $('#scanHint').textContent = 'Starting the camera…';
+  $('#scanner').hidden = false;
+  updateInert();
+  $('#scanner [data-action="scan-close"]').focus();
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+    });
+    if (!ui.scan) { stream.getTracks().forEach(t => t.stop()); return; } // closed meanwhile
+    ui.scan.stream = stream;
+    const v = $('#scanVideo');
+    v.srcObject = stream;
+    await v.play();
+    ui.scan.detector = await getBarcodeDetector();
+    $('#scanHint').textContent = 'Hold the barcode flat inside the frame, about 10–20 cm away.';
+    scanTick();
+  } catch (e) {
+    $('#scanHint').textContent = e.name === 'NotAllowedError'
+      ? 'Camera permission was refused. Allow the camera for this site in the browser settings, then try again.'
+      : `Could not start the camera (${e.message}).`;
+  }
+}
+
+function closeScanner() {
+  const sc = ui.scan;
+  ui.scan = null;
+  sc?.stream?.getTracks().forEach(t => t.stop());
+  const v = $('#scanVideo');
+  v.pause?.();
+  v.srcObject = null;
+  $('#scanner').hidden = true;
+  updateInert();
+}
+
+async function scanTick() {
+  const sc = ui.scan;
+  if (!sc) return;
+  const v = $('#scanVideo');
+  if (v.readyState >= 2 && v.videoWidth) {
+    let codes = [];
+    if (sc.detector) { try { codes = (await sc.detector.detect(v)).map(b => b.rawValue); } catch { /* fall back */ } }
+    if (!codes.length) {
+      // Middle half of the picture, at most 1280 px wide
+      const scale = Math.min(1, 1280 / v.videoWidth);
+      const c = sc.canvas;
+      c.width = Math.round(v.videoWidth * scale);
+      c.height = Math.round(v.videoHeight * 0.5 * scale);
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(v, 0, v.videoHeight * 0.25, v.videoWidth, v.videoHeight * 0.5, 0, 0, c.width, c.height);
+      codes = Barcode.decodeImageData(ctx.getImageData(0, 0, c.width, c.height));
+    }
+    for (const code of codes) {
+      const n = (sc.hits.get(code) || 0) + 1;
+      sc.hits.set(code, n);
+      if (n >= (sc.detector ? 1 : 2)) { onScanned(code, sc.target); return; }
+    }
+  }
+  if (ui.scan === sc) setTimeout(scanTick, 60);
+}
+
+function onScanned(code, target) {
+  closeScanner();
+  navigator.vibrate?.(60);
+  if (target === 'sell') {
+    const f = findByCode(code);
+    if (f) {
+      if (addToCart(f.variant.id, 1)) toast(`Added ${f.product.name} ${f.variant.size}/${f.variant.colour}`);
+    } else {
+      $('#sellSearch').value = code;
+      renderSell();
+      toast(`No product has barcode ${code}. Add it under Stock → tap the size → Barcode.`, true);
+    }
+    return;
+  }
+  const input = document.getElementById(target);
+  if (input) {
+    input.value = code;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    toast(`Barcode read: ${code}`);
+  }
+}
+
+/* ----- Product photos (small: 160 × 160 JPEG, about 8 KB) ----- */
+
+const PHOTO_PX = 160;
+
+/** Only our own small data-URL pictures are shown (data can arrive from other devices). */
+const photoSrc = p => (typeof p?.photo === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(p.photo) ? p.photo : null);
+const thumbHtml = (p, cls = '') => { const s = photoSrc(p); return s ? `<img class="thumb ${cls}" src="${s}" alt="" loading="lazy">` : ''; };
+
+/** Any picture file → small square JPEG data URL (centre-cropped). */
+async function resizePhoto(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error('That file is not a picture'));
+      i.src = url;
+    });
+    const side = Math.min(img.naturalWidth, img.naturalHeight);
+    const c = document.createElement('canvas');
+    c.width = c.height = PHOTO_PX;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, PHOTO_PX, PHOTO_PX);
+    ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, PHOTO_PX, PHOTO_PX);
+    return c.toDataURL('image/jpeg', 0.72);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** Photo picked in the product form: shrink it and show the preview. */
+async function onPhotoPicked(input) {
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  try {
+    ui.formPhoto = await resizePhoto(file);
+    paintPhotoPreview();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+function paintPhotoPreview() {
+  const box = $('#fPhotoPrev');
+  if (!box) return;
+  box.innerHTML = ui.formPhoto ? thumbHtml({ photo: ui.formPhoto }, 'lg') : '<span class="thumb lg empty-thumb" aria-hidden="true"><svg class="ico-sm"><use href="#i-camera"/></svg></span>';
+  const rm = $('[data-action="photo-remove"]');
+  if (rm) rm.hidden = !ui.formPhoto;
+}
+
 /* ===== 15. One tab at a time ============================================
    Each tab keeps the data in memory, so two open tabs could overwrite each
    other's work. A Web Lock makes sure only one tab is "active"; any other
@@ -3314,6 +3904,7 @@ async function pauseThisTab() {
   ui.appActive = false;
   await flushAllAdjust();
   await saveCart(true);
+  if (ui.scan) closeScanner();
   closeModal();
   closeCartSheet();
   showBlocker('Rails POS was opened in another tab or window, so this one is paused.');
@@ -3328,7 +3919,7 @@ async function takeOver() {
   let signedIn = !!ui.user;
   if (!signedIn) { try { signedIn = await resumeSession(); } catch (err) { console.error(err); } }
   await startApp();
-  if (!signedIn) showSignIn(); // each tab must sign in for itself
+  await showEntryScreen(signedIn); // each tab must sign in for itself
 }
 
 /* ===== 16. Service worker =============================================== */
@@ -3469,6 +4060,11 @@ const actions = {
   'cloud-create': el => createCloudShop(el.dataset.mode),
   'cloud-join': () => joinCloudShop(),
   'go-settings': () => showView('settings'),
+  scan: el => openScanner(el.dataset.target),
+  'scan-close': () => closeScanner(),
+  'photo-remove': () => { ui.formPhoto = null; paintPhotoPreview(); },
+  'setup-go': el => { ui.setupStep = el.dataset.step; renderSetup(); },
+  'setup-back': () => { ui.setupStep = 'welcome'; renderSetup(); },
 };
 
 /* Actions that need a permission. Buttons are hidden too, but this is the real check. */
@@ -3501,6 +4097,7 @@ function bindEvents() {
   });
 
   $('#signinForm').addEventListener('submit', e => { e.preventDefault(); submitSignIn(); });
+  $('#setupForm').addEventListener('submit', e => { e.preventDefault(); onSetupSubmit(); });
   // PIN boxes accept digits only
   document.addEventListener('input', e => {
     if (e.target.classList?.contains('pin-input')) e.target.value = e.target.value.replace(/\D/g, '').slice(0, 4);
@@ -3518,6 +4115,7 @@ function bindEvents() {
     if (t.dataset.setting && allowed('settings')) onSettingChange(t);
     if (t.id === 'restoreFile' && t.files[0] && allowed('settings')) { t.files[0].text().then(restoreFromText); t.value = ''; }
     if (t.id === 'uRole' || (t.dataset.perm && t.closest('#modal'))) onUserFormChange(t);
+    if (t.id === 'fPhoto') onPhotoPicked(t);
     if ((t.id === 'rFrom' || t.id === 'rTo') && t.value) {
       ui.customFrom = $('#rFrom').value; ui.customTo = $('#rTo').value;
       renderReports();
@@ -3530,17 +4128,22 @@ function bindEvents() {
   });
 
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && $('#blocker').hidden) { if (!$('#modal').hidden) closeModal(); else closeCartSheet(); }
+    if (e.key === 'Escape' && $('#blocker').hidden) {
+      if (!$('#scanner').hidden) closeScanner();
+      else if (!$('#modal').hidden) closeModal();
+      else closeCartSheet();
+    }
     if (e.key === 'Enter' && !$('#modal').hidden && e.target.tagName === 'INPUT') {
       // Enter in a modal form presses its primary button
       const primary = $('#modal .modal-foot .btn.primary');
       if (primary && !primary.disabled) { e.preventDefault(); primary.click(); }
     }
     // Keyboard access for the "Restore from file" label-button
-    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-file-trigger]')) { e.preventDefault(); $('#restoreFile').click(); }
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-file-trigger]')) { e.preventDefault(); e.target.querySelector('input[type="file"]')?.click(); }
     // Keep Tab inside the modal / sheet (backup for browsers without `inert`)
     if (e.key === 'Tab') {
-      const box = !$('#blocker').hidden ? $('#blocker') : !$('#signin').hidden ? $('#signin') : !$('#modal').hidden ? $('#modal')
+      const box = !$('#blocker').hidden ? $('#blocker') : !$('#scanner').hidden ? $('#scanner') : !$('#setup').hidden ? $('#setup')
+        : !$('#signin').hidden ? $('#signin') : !$('#modal').hidden ? $('#modal')
         : ($('#cartPanel').classList.contains('open') && !isWide()) ? $('#cartPanel') : null;
       if (!box) return;
       const items = $$(FOCUSABLE, box).filter(x => x.offsetParent !== null);
@@ -3600,11 +4203,11 @@ async function boot() {
   let signedIn = false;
   try { signedIn = await resumeSession(); } catch (err) { console.error(err); }
   await startApp();
-  if (!signedIn) showSignIn();
+  await showEntryScreen(signedIn);
 }
 
 // Handle for tests / debugging in the console.
 window.__pos = { state, ui, DB, actions, buildReport, computeShift, receiptText, creditNoteText, zText, cartTotals, flushAllAdjust, checkLogin,
-  Cloud, CLOUD, syncNow, applyRemote };
+  Cloud, CLOUD, syncNow, applyRemote, Barcode, findByCode, resizePhoto };
 
 boot();

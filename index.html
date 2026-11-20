@@ -23,6 +23,8 @@
     <symbol id="i-reports" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
     <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></symbol>
     <symbol id="i-admin" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.3-6 6.5-6s5.9 2.4 6.5 6"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18.5 14.5c1.7.8 2.8 2.9 3 5.5"/></symbol>
+    <symbol id="i-scan" viewBox="0 0 24 24"><path d="M3 7V4h3M18 4h3v3M21 17v3h-3M6 20H3v-3"/><path d="M7 8v8M10 8v8M13 8v8M16.5 8v8"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4Z"/><circle cx="12" cy="13" r="3.5"/></symbol>
     <symbol id="i-print" viewBox="0 0 24 24"><path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6Z"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
   </svg>
@@ -58,6 +60,7 @@
       <div class="sell-products">
         <div class="search-row">
           <input id="sellSearch" type="search" placeholder="Search name or scan SKU…" autocomplete="off" enterkeyhint="go" aria-label="Search products or scan SKU">
+          <button class="btn scan-btn" data-action="scan" data-target="sell" aria-label="Scan a barcode with the camera"><svg class="ico-sm" aria-hidden="true"><use href="#i-scan"/></svg><span>Scan</span></button>
         </div>
         <div id="catChips" class="chips" role="group" aria-label="Categories"></div>
         <div id="productGrid" class="product-grid"></div>
@@ -169,6 +172,20 @@
       <p id="siError" class="err-text small" role="alert"></p>
       <button id="siGo" class="btn primary block lg" type="submit">Sign in</button>
     </form>
+  </div>
+
+  <!-- First-time setup on a new device: create the shop + owner, try the demo, or join a synced shop -->
+  <div id="setup" class="signin setup" role="dialog" aria-modal="true" aria-labelledby="setupTitle" hidden>
+    <form id="setupForm" class="signin-box setup-box" novalidate></form>
+  </div>
+
+  <!-- Camera barcode scanner (sits above dialogs, so it can fill a field in an open form) -->
+  <div id="scanner" class="scanner" role="dialog" aria-modal="true" aria-label="Scan a barcode" hidden>
+    <div class="scanner-box">
+      <div class="scan-view"><video id="scanVideo" playsinline muted></video><div class="scan-frame"><span class="scan-laser"></span></div></div>
+      <p id="scanHint" class="small">Hold the barcode flat inside the frame, about 10–20 cm away.</p>
+      <button class="btn block" data-action="scan-close">Cancel</button>
+    </div>
   </div>
 
   <!-- Shown when the app is open in another tab (only one tab may write data) -->
