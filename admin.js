@@ -5,9 +5,8 @@
    paid status and paid-until date, and renew subscriptions.
 
    Security (enforced by the database, not just this page):
-   • Only logins listed in public.vendor_admins are admins.
-   • Every admin function requires two-step verification (authenticator app
-     code → "aal2" session). A stolen password alone can't do anything.
+   • Only logins listed in public.vendor_admins are admins (email + password;
+     no authenticator app, at the owner's request — use a long, unique password).
    • Every change is written to an audit log.
    This page also keeps the login only for this browser tab (sessionStorage),
    signs out after 15 minutes without activity, and escapes all shop text.
@@ -32,7 +31,6 @@ const fmtWhen = s => (s ? new Date(s).toLocaleString('en-ZA', { day: 'numeric', 
 
 let session = null;
 try { session = JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null'); } catch { session = null; }
-let factorId = null;
 let shops = [];
 let audit = [];
 let query = '';
@@ -56,7 +54,7 @@ async function api(path, { method = 'GET', body, auth = true } = {}) {
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (!res.ok) {
     const m = String((data && (data.msg || data.message || data.error_description || data.error)) || `Error ${res.status}`);
-    const e = new Error(/invalid login/i.test(m) ? 'Wrong email or password' : /invalid totp|invalid.*code/i.test(m) ? 'That code is not right — try the newest code' : m);
+    const e = new Error(/invalid login/i.test(m) ? 'Wrong email or password' : m);
     e.status = res.status;
     throw e;
   }
@@ -84,7 +82,7 @@ async function signOut(message = '') {
   if (session?.access) await api('/auth/v1/logout', { method: 'POST' }).catch(() => {});
   session = null;
   saveSession();
-  shops = []; audit = []; factorId = null;
+  shops = []; audit = [];
   showLogin(message);
 }
 
@@ -115,43 +113,6 @@ function showLogin(message = '') {
       <button class="btn primary block lg" type="submit">Sign in</button>
     </form>`;
   $('#aEmail').focus();
-}
-
-function showCode() {
-  setHeader();
-  $('#root').innerHTML = `
-    <form id="codeForm" class="card admin-box" novalidate>
-      <h1>Two-step verification</h1>
-      <p class="small muted">Open your authenticator app and type the 6-digit code for “Rails POS admin”.</p>
-      <label class="field"><span>Code</span><input id="aCode" class="input code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6"></label>
-      <p id="err" class="admin-err" role="alert"></p>
-      <button class="btn primary block lg" type="submit">Verify</button>
-    </form>`;
-  $('#aCode').focus();
-}
-
-async function showEnroll() {
-  setHeader();
-  $('#root').innerHTML = '<div class="card admin-box"><p>Setting up two-step verification…</p></div>';
-  // Remove unfinished set-ups from earlier attempts, then start a new one.
-  const user = await api('/auth/v1/user');
-  for (const f of (user.factors || []).filter(x => x.status !== 'verified')) await api(`/auth/v1/factors/${encodeURIComponent(f.id)}`, { method: 'DELETE' }).catch(() => {});
-  const f = await api('/auth/v1/factors', { method: 'POST', body: { factor_type: 'totp', friendly_name: `Rails POS admin ${Date.now().toString(36)}` } });
-  factorId = f.id;
-  const qr = String(f.totp?.qr_code || '');
-  $('#root').innerHTML = `
-    <form id="codeForm" class="card admin-box" novalidate>
-      <h1>Turn on two-step verification</h1>
-      <p class="small">1. Install <strong>Google Authenticator</strong> or <strong>Microsoft Authenticator</strong> on your phone.<br>
-        2. In the app tap <strong>+</strong> → <strong>Scan a QR code</strong>, and scan this:</p>
-      ${qr.startsWith('data:image/svg+xml') ? `<img class="admin-qr" src="${esc(qr)}" alt="QR code for your authenticator app">` : ''}
-      <p class="small muted">Can't scan? Type this key into the app instead:</p>
-      <p class="admin-secret">${esc(f.totp?.secret || '')}</p>
-      <label class="field"><span>3. Type the 6-digit code the app shows</span><input id="aCode" class="input code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6"></label>
-      <p id="err" class="admin-err" role="alert"></p>
-      <button class="btn primary block lg" type="submit">Verify and finish</button>
-    </form>`;
-  $('#aCode').focus();
 }
 
 function statusOf(s) {
@@ -217,22 +178,12 @@ async function loadData() {
 
 /* ----- Flow ----- */
 
-/** After a password sign-in (or on page load with a saved session): check admin + two-step state. */
+/** After a password sign-in (or on page load with a saved session): admins go to the shop list. */
 async function continueSignIn() {
   const who = await rpc('vendor_whoami');
   if (!who?.admin) return signOut('This login is not a Rails POS admin.');
-  if (who.aal === 'aal2') { startIdleTimer(); return loadData(); }
-  const user = await api('/auth/v1/user');
-  const verified = (user.factors || []).find(f => f.factor_type === 'totp' && f.status === 'verified');
-  if (verified) { factorId = verified.id; showCode(); } else await showEnroll();
-}
-
-async function verifyCode(code) {
-  if (!/^\d{6}$/.test(code)) return setErr('Type the 6-digit code');
-  const ch = await api(`/auth/v1/factors/${encodeURIComponent(factorId)}/challenge`, { method: 'POST', body: {} });
-  const d = await api(`/auth/v1/factors/${encodeURIComponent(factorId)}/verify`, { method: 'POST', body: { challenge_id: ch.id, code } });
-  setSession(d);
-  await continueSignIn();
+  startIdleTimer();
+  return loadData();
 }
 
 function shopName(id) { return shops.find(s => s.shop_id === id)?.shop_name || 'this shop'; }
@@ -271,7 +222,6 @@ async function act(el) {
 
 function handleError(e) {
   if (/Signed out|JWT|expired/i.test(e.message) || e.status === 401) return signOut('Please sign in again.');
-  if (/Two-step/i.test(e.message)) return continueSignIn().catch(handleError);
   toast(e.message, true);
 }
 
@@ -296,7 +246,6 @@ document.addEventListener('submit', async e => {
       setSession(d);
       await continueSignIn();
     }
-    if (e.target.id === 'codeForm') await verifyCode($('#aCode').value.trim());
   } catch (err) {
     if ($('#err')) setErr(err.message); else handleError(err);
   } finally {
@@ -314,7 +263,6 @@ document.addEventListener('input', e => {
     showDashboard();
     const s = $('#search'); s.focus(); s.setSelectionRange(pos, pos);
   }
-  if (e.target.id === 'aCode') e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
 });
 ['click', 'keydown', 'touchstart'].forEach(ev => document.addEventListener(ev, () => { if (session && shops.length) startIdleTimer(); }, { passive: true }));
 

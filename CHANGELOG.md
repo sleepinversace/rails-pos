@@ -17,6 +17,10 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v20 — 2026-11-20 · Admin sign-in with password only
+- 🔒 🔧 The supplier admin page no longer uses an authenticator app (owner's choice): sign in with the admin **email and password** only. Only logins listed in `vendor_admins` can use it; every change is still logged; the page still forgets the login when the tab closes and signs out after 15 minutes idle. Use a long (12+ characters), unique password.
+- 🗄️ SQL: `vendor_check()` no longer requires two-step verification. Re-run `cloud/supabase-setup.sql`.
+
 ## v19 — 2026-11-20 · Supplier admin page and WhatsApp renewals
 - ✨ **Supplier admin page** (`admin.html`, for you only): every shop with its login email, trial or paid status, paid-until date, number of tills and last activity. Buttons: **+1 / +3 / +12 months**, **set a date**, **no end date**. Recent changes are listed.
 - 🔒 Only logins added to `vendor_admins` (by you, in Supabase) can use it, and the database also requires **two-step verification** (authenticator app code). Every change is written to an audit log. The page forgets the login when the tab closes and signs out after 15 minutes idle. Strict content-security policy. Never cached offline.

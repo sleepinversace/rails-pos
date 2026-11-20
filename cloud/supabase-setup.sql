@@ -133,8 +133,8 @@ revoke execute on function public.claim_device(uuid), public.reset_shop(uuid) fr
 --   • Only logins listed in vendor_admins are admins. You add them yourself:
 --       insert into public.vendor_admins (user_id)
 --       select id from auth.users where email = 'your-admin@email';
---   • Every admin function also requires two-step verification (TOTP code,
---     JWT "aal2"), so a stolen password alone is not enough.
+--   • Sign-in is email + password only (no authenticator app), so use a long
+--     password (12+ characters) that isn't used anywhere else.
 --   • The admin tables can't be read or written through the API at all; the
 --     functions below are the only way in, and every change is logged.
 -- =========================================================================
@@ -158,15 +158,12 @@ alter table public.vendor_admins enable row level security; -- no policies: invi
 alter table public.vendor_audit  enable row level security;
 revoke all on public.vendor_admins, public.vendor_audit from anon, authenticated;
 
--- Stops unless the caller is a listed admin who has passed two-step verification.
+-- Stops unless the caller is a listed admin.
 create or replace function public.vendor_check() returns void
 language plpgsql security definer set search_path = public as $$
 begin
   if auth.uid() is null or not exists (select 1 from public.vendor_admins where user_id = auth.uid()) then
     raise exception 'Not authorised';
-  end if;
-  if coalesce(auth.jwt() ->> 'aal', '') <> 'aal2' then
-    raise exception 'Two-step verification required';
   end if;
 end $$;
 

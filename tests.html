@@ -850,7 +850,6 @@ function fakeCloud() {
       const fn = p.slice('/rest/v1/rpc/'.length);
       if (fn === 'vendor_whoami') return json({ admin: db.admins.has(userId), aal: aal2 ? 'aal2' : 'aal1' });
       if (!db.admins.has(userId)) return json({ message: 'Not authorised' }, 400);
-      if (!aal2) return json({ message: 'Two-step verification required' }, 400);
       const owner = s => Object.keys(db.users).find(e => 'user-' + e === s.owner);
       if (fn === 'vendor_list_shops') return json(db.shops.map(s => ({ shop_id: s.id, shop_name: s.name, email: owner(s), plan: s.plan || 'trial', active_until: s.active_until, created_at: new Date().toISOString(), last_seen: null, tills: s.next_device - 1, records: 0 })));
       if (fn === 'vendor_audit_log') return json(db.audit.slice().reverse());
@@ -1035,7 +1034,7 @@ test('Cloud sync: two tills share sales, stock and settings; a wiped device gets
   P.CLOUD.url = ''; w.__cloudFetch = null;
 });
 
-test('Supplier admin page: shop logins refused; admin must pass two-step verification; renewals logged; shop names escaped', async () => {
+test('Supplier admin page: shop logins refused; admin signs in with password; renewals logged; shop names escaped', async () => {
   const cloud = fakeCloud();
   cloud.users['owner@example.test'] = 'shop-pass-1';
   cloud.users['boss@example.test'] = 'admin-pass-1';
@@ -1057,13 +1056,10 @@ test('Supplier admin page: shop logins refused; admin must pass two-step verific
   ok($('#err').textContent.includes('not a Rails POS admin') && !w.__admin.session, 'shop login refused and signed out');
   await login('boss@example.test', 'wrong');
   ok($('#err').textContent.includes('Wrong email or password'), 'wrong password refused');
-  // The admin must set up two-step verification first
+  // The admin signs in with email + password only (no authenticator app)
   await login('boss@example.test', 'admin-pass-1');
-  ok($('img.admin-qr') && $('.admin-secret').textContent === 'TESTSECRET', 'QR code and key shown for the authenticator app');
-  ok(!$('#shopList'), 'no shop data before the code');
-  $('#aCode').value = '000000'; $('#codeForm').requestSubmit(); await tick(300);
-  ok($('#err').textContent.includes('not right'), 'wrong code refused');
-  $('#aCode').value = '123456'; $('#codeForm').requestSubmit(); await tick(400);
+  await tick(200);
+  ok(!$('img.admin-qr') && !$('#codeForm'), 'no authenticator step');
   ok($('#shopList') && $('#shopList').textContent.includes('owner@example.test'), 'dashboard lists the shop with its login email');
   ok(!$('#shopList img') && $('#shopList').innerHTML.includes('&lt;img'), 'shop name shown as text, not run as HTML');
   // Renew: +1 month from the current end date, and it is logged
@@ -1077,9 +1073,6 @@ test('Supplier admin page: shop logins refused; admin must pass two-step verific
   // Signing out forgets the login
   click('[data-act="logout"]'); await tick(300);
   ok(!w.__admin.session && !sessionStorage.getItem('rails-pos-admin-session') && $('#loginForm'), 'signed out');
-  // Next sign-in asks for the code (already set up), not a new QR code
-  await login('boss@example.test', 'admin-pass-1');
-  ok($('#codeForm') && !$('img.admin-qr'), 'asks for the 6-digit code');
   await blank(B);
 });
 
