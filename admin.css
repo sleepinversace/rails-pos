@@ -1,0 +1,28 @@
+/* Rails POS supplier admin — extra styles on top of app.css */
+.admin-body { padding-left: 0 !important; }
+.admin-header { margin-left: 0 !important; }
+.admin-main { max-width: 1100px; margin: 0 auto; padding: 18px 16px 40px; }
+.admin-box { max-width: 400px; margin: 40px auto; }
+.admin-box h1 { font-size: 22px; margin: 0 0 6px; }
+.admin-box .field { display: block; }
+.admin-box .input { width: 100%; }
+.admin-err { color: var(--danger); font-weight: 700; min-height: 1.4em; margin: 6px 0 10px; }
+.admin-qr { display: block; width: 200px; height: 200px; margin: 10px auto; background: #fff; border-radius: 10px; padding: 8px; }
+.admin-secret { font-family: Consolas, monospace; word-break: break-all; text-align: center; background: var(--surface-2); padding: 8px; border-radius: 8px; }
+.code-input { font-size: 24px; letter-spacing: .4em; text-align: center; }
+.admin-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.admin-kpis .kpi .value { font-size: 22px; }
+.admin-tools { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+.admin-tools input { flex: 1 1 240px; }
+.shop-card { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; align-items: start; }
+.shop-card h3 { margin: 0 0 2px; font-size: 16px; }
+.shop-meta { font-size: 13px; color: var(--muted); }
+.shop-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.shop-actions input[type="date"] { width: auto; min-height: 34px; padding: 4px 8px; }
+.st { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 99px; margin-left: 6px; }
+.st-paid, .st-noend { background: var(--ok-soft); color: var(--ok); }
+.st-trial { background: var(--accent-soft); color: var(--accent-text); }
+.st-ending, .st-grace { background: var(--warn-soft); color: var(--warn); }
+.st-expired { background: var(--danger-soft); color: var(--danger); }
+.audit td { font-size: 13px; }
+@media (max-width: 640px) { .shop-card { grid-template-columns: 1fr; } .shop-actions { justify-content: flex-start; } }

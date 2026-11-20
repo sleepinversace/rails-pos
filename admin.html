@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en-ZA">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Strict security policy: only this site's own scripts/styles, and only the shop database. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https://dwayjgzfewuiaayixlmb.supabase.co; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Rails POS · Supplier admin</title>
+  <link rel="icon" href="icon-192.png" type="image/png">
+  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body class="admin-body">
+  <header class="app-header admin-header">
+    <div class="brand"><img src="icon-192.png" alt="" width="28" height="28"><span>Rails POS · Supplier admin</span></div>
+    <div class="header-right"><span id="adminWho" class="small"></span><button id="logoutBtn" class="btn ghost sm" data-act="logout" hidden>Sign out</button></div>
+  </header>
+  <main id="root" class="admin-main" aria-live="polite"></main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="admin.js"></script>
+</body>
+</html>

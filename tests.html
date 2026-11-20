@@ -804,7 +804,7 @@ test('Admin: add a cashier who can only sell and see sales; edit, protect the la
 
 /* ---------- a fake Supabase (auth + REST) for the sync tests ---------- */
 function fakeCloud() {
-  const db = { users: {}, shops: [], records: new Map(), seq: 0, offline: false };
+  const db = { users: {}, shops: [], records: new Map(), seq: 0, offline: false, admins: new Set(), factors: {}, audit: [] };
   const json = (data, status = 200) => new Response(data == null ? '' : JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
   const session = email => ({ access_token: 'tok-' + email, refresh_token: 'ref-' + email, expires_in: 3600, user: { id: 'user-' + email, email } });
   db.fetch = async (url, opts = {}) => {
@@ -812,7 +812,8 @@ function fakeCloud() {
     const u = new URL(url), p = u.pathname, m = opts.method || 'GET';
     const body = opts.body ? JSON.parse(opts.body) : null;
     const token = String(opts.headers?.Authorization || '').replace('Bearer ', '');
-    const userId = token.startsWith('tok-') ? 'user-' + token.slice(4) : null;
+    const aal2 = token.startsWith('tok2-');
+    const userId = token.startsWith('tok-') ? 'user-' + token.slice(4) : aal2 ? 'user-' + token.slice(5) : null;
     const param = k => (u.searchParams.get(k) || '').replace(/^(eq|gt)\./, '');
     if (p === '/auth/v1/signup') {
       if (db.users[body.email]) return json({ msg: 'User already registered' }, 422);
@@ -824,6 +825,47 @@ function fakeCloud() {
     }
     if (p === '/auth/v1/logout') return json(null, 204);
     if (!userId) return json({ message: 'JWT required' }, 401);
+    // Two-step verification (TOTP): code 123456 is "right"
+    const email = userId.slice(5);
+    if (p === '/auth/v1/user') return json({ id: userId, email, factors: Object.values(db.factors).filter(f => f.user === userId) });
+    if (p === '/auth/v1/factors' && m === 'POST') {
+      const id = 'f-' + Object.keys(db.factors).length;
+      db.factors[id] = { id, user: userId, factor_type: 'totp', status: 'unverified' };
+      return json({ id, type: 'totp', totp: { qr_code: 'data:image/svg+xml;utf-8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>', secret: 'TESTSECRET' } });
+    }
+    let fm = p.match(/^\/auth\/v1\/factors\/([^/]+)(\/challenge|\/verify)?$/);
+    if (fm) {
+      const f = db.factors[decodeURIComponent(fm[1])];
+      if (!f || f.user !== userId) return json({ msg: 'Factor not found' }, 404);
+      if (m === 'DELETE') { delete db.factors[f.id]; return json(null, 204); }
+      if (fm[2] === '/challenge') return json({ id: 'ch-' + f.id });
+      if (fm[2] === '/verify') {
+        if (body.code !== '123456') return json({ msg: 'Invalid TOTP code entered' }, 422);
+        f.status = 'verified';
+        return json({ access_token: 'tok2-' + email, refresh_token: 'ref2-' + email, expires_in: 3600, user: { id: userId, email } });
+      }
+    }
+    // Supplier admin functions (the real checks live in supabase-setup.sql)
+    if (p.startsWith('/rest/v1/rpc/vendor_')) {
+      const fn = p.slice('/rest/v1/rpc/'.length);
+      if (fn === 'vendor_whoami') return json({ admin: db.admins.has(userId), aal: aal2 ? 'aal2' : 'aal1' });
+      if (!db.admins.has(userId)) return json({ message: 'Not authorised' }, 400);
+      if (!aal2) return json({ message: 'Two-step verification required' }, 400);
+      const owner = s => Object.keys(db.users).find(e => 'user-' + e === s.owner);
+      if (fn === 'vendor_list_shops') return json(db.shops.map(s => ({ shop_id: s.id, shop_name: s.name, email: owner(s), plan: s.plan || 'trial', active_until: s.active_until, created_at: new Date().toISOString(), last_seen: null, tills: s.next_device - 1, records: 0 })));
+      if (fn === 'vendor_audit_log') return json(db.audit.slice().reverse());
+      const shop = db.shops.find(s => s.id === body.p_shop);
+      if (!shop) return json({ message: 'Shop not found' }, 400);
+      const old = shop.active_until;
+      if (fn === 'vendor_add_months') {
+        const base = new Date(Math.max(Date.now(), old ? new Date(old + 'T12:00:00').getTime() : 0));
+        base.setMonth(base.getMonth() + body.p_months);
+        shop.active_until = base.toISOString().slice(0, 10);
+      } else if (fn === 'vendor_set_until') shop.active_until = body.p_until;
+      shop.plan = 'paid';
+      db.audit.push({ at: new Date().toISOString(), shop_name: shop.name, action: fn === 'vendor_add_months' ? `+${body.p_months} month` : body.p_action, old_until: old, new_until: shop.active_until });
+      return json(shop.active_until);
+    }
     const mine = db.shops.filter(s => s.owner === userId); // row-level security
     if (p === '/rest/v1/shops') {
       if (m === 'POST') {
@@ -991,6 +1033,54 @@ test('Cloud sync: two tills share sales, stock and settings; a wiped device gets
   click('[data-action="cloud-disconnect"]'); await confirmYes();
   ok(!P.Cloud.conf.shopId && P.Cloud.conf.deviceCode === 'A', 'disconnected, till letter kept');
   P.CLOUD.url = ''; w.__cloudFetch = null;
+});
+
+test('Supplier admin page: shop logins refused; admin must pass two-step verification; renewals logged; shop names escaped', async () => {
+  const cloud = fakeCloud();
+  cloud.users['owner@example.test'] = 'shop-pass-1';
+  cloud.users['boss@example.test'] = 'admin-pass-1';
+  cloud.admins.add('user-boss@example.test');
+  cloud.shops.push({ id: 'shop-x', owner: 'user-owner@example.test', name: '<img src=x onerror=alert(1)> Bridal', generation: 1, next_device: 3, active_until: '2030-01-15', plan: 'trial' });
+  const B = document.getElementById('app2');
+  await blank(B);
+  sessionStorage.removeItem('rails-pos-admin-session');
+  B.src = 'admin.html?test&t=' + Date.now();
+  await new Promise(r => { B.onload = r; });
+  B.contentWindow.__cloudFetch = cloud.fetch;
+  use(B);
+  const login = async (email, pass) => {
+    $('#aEmail').value = email; $('#aPass').value = pass;
+    $('#loginForm').requestSubmit(); await tick(300);
+  };
+  // A shop owner's login is refused
+  await login('owner@example.test', 'shop-pass-1');
+  ok($('#err').textContent.includes('not a Rails POS admin') && !w.__admin.session, 'shop login refused and signed out');
+  await login('boss@example.test', 'wrong');
+  ok($('#err').textContent.includes('Wrong email or password'), 'wrong password refused');
+  // The admin must set up two-step verification first
+  await login('boss@example.test', 'admin-pass-1');
+  ok($('img.admin-qr') && $('.admin-secret').textContent === 'TESTSECRET', 'QR code and key shown for the authenticator app');
+  ok(!$('#shopList'), 'no shop data before the code');
+  $('#aCode').value = '000000'; $('#codeForm').requestSubmit(); await tick(300);
+  ok($('#err').textContent.includes('not right'), 'wrong code refused');
+  $('#aCode').value = '123456'; $('#codeForm').requestSubmit(); await tick(400);
+  ok($('#shopList') && $('#shopList').textContent.includes('owner@example.test'), 'dashboard lists the shop with its login email');
+  ok(!$('#shopList img') && $('#shopList').innerHTML.includes('&lt;img'), 'shop name shown as text, not run as HTML');
+  // Renew: +1 month from the current end date, and it is logged
+  const origConfirm = w.confirm; w.confirm = () => true;
+  click('[data-act="add"][data-id="shop-x"][data-m="1"]'); await tick(400);
+  eq([cloud.shops[0].active_until, cloud.shops[0].plan], ['2030-02-15', 'paid'], '+1 month');
+  ok($('.audit').textContent.includes('+1 month'), 'change logged');
+  click('[data-act="noend"][data-id="shop-x"]'); await tick(400);
+  eq(cloud.shops[0].active_until, null, 'no end date');
+  w.confirm = origConfirm;
+  // Signing out forgets the login
+  click('[data-act="logout"]'); await tick(300);
+  ok(!w.__admin.session && !sessionStorage.getItem('rails-pos-admin-session') && $('#loginForm'), 'signed out');
+  // Next sign-in asks for the code (already set up), not a new QR code
+  await login('boss@example.test', 'admin-pass-1');
+  ok($('#codeForm') && !$('img.admin-qr'), 'asks for the 6-digit code');
+  await blank(B);
 });
 
 test('Upgrade: data saved by version 1 is migrated', async () => {

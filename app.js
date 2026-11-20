@@ -2384,7 +2384,8 @@ async function renderSettings() {
       ${(() => { const l = licence(); return `<p style="margin:0"><strong>${esc(l.text)}</strong></p>
         <p class="small muted" style="margin:6px 0 0">${cloudOn()
           ? `Shop: ${esc(Cloud.conf.shopName || '')}${Cloud.conf.licenceCheckedAt ? ` · last checked ${fmtDT(Cloud.conf.licenceCheckedAt)}` : ''}. Renewals are done by ${esc(SUPPLIER.name)}; the date updates on the next sync.`
-          : `Without a shop account this device has a ${TRIAL_DAYS}-day free trial. Create your shop account under Cloud sync to subscribe (new shops get 30 days free).`}</p>`; })()}
+          : `Without a shop account this device has a ${TRIAL_DAYS}-day free trial. Create your shop account under Cloud sync to subscribe (new shops get 30 days free).`}</p>
+        ${SUPPLIER.whatsapp ? `<a class="btn sm" style="margin-top:10px" href="https://wa.me/${esc(SUPPLIER.whatsapp)}?text=${encodeURIComponent(`Hi, I'd like to subscribe / renew Rails POS for ${state.settings.storeName}`)}" target="_blank" rel="noopener">Subscribe or renew on WhatsApp</a>` : ''}`; })()}
     </div>
     <div class="section-title">Account</div>
     <div class="card">
@@ -3531,7 +3532,7 @@ function cloudCardHtml() {
 
 const TRIAL_DAYS = 14;
 const GRACE_DAYS = 7;
-const SUPPLIER = { name: 'Rails POS', whatsapp: '' }; // e.g. '27821234567' to show a WhatsApp "Renew" button
+const SUPPLIER = { name: 'Rails POS', whatsapp: '27733142884' }; // supplier's WhatsApp Business (international format) for "Renew"
 
 function licence() {
   const today = startOfDay();
