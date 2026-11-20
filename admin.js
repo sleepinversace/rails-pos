@@ -177,7 +177,6 @@ function shopCard(s) {
     </div>
     <div class="shop-actions">
       <button class="btn sm primary" data-act="pay-open" data-id="${id}">Record payment</button>
-      <button class="btn sm" data-act="add" data-id="${id}" data-m="1">+1 month</button>
       <input type="date" data-date="${id}" aria-label="Paid until date for ${esc(s.shop_name)}" value="${esc(s.active_until || '')}">
       <button class="btn sm" data-act="set" data-id="${id}">Set date</button>
       <button class="btn sm" data-act="noend" data-id="${id}">No end date</button>
@@ -186,23 +185,32 @@ function shopCard(s) {
         : `<button class="btn sm danger" data-act="deactivate" data-id="${id}">Deactivate</button>`}
     </div>
     ${openPay === s.shop_id ? payForm(s) : ''}
-    ${hist ? `<div class="pay-history">${hist.length ? `<table class="list-table"><tr><th>Paid on</th><th>Amount</th><th>Months</th><th>Method</th><th>Note</th></tr>
-      ${hist.map(p => `<tr><td>${esc(fmtDay(p.paid_on))}</td><td>${esc(randStr(p.amount_cents))}</td><td>${esc(p.months)}</td><td>${esc(p.method || '')}</td><td>${esc(p.note || '')}</td></tr>`).join('')}</table>`
+    ${hist ? `<div class="pay-history">${hist.length ? `<table class="list-table"><tr><th>Paid on</th><th>Paid until</th><th>Amount</th><th>Method</th><th>Note</th></tr>
+      ${hist.map(p => `<tr><td>${esc(fmtDay(p.paid_on))}</td><td>${esc(p.paid_until ? fmtDay(p.paid_until) : p.months ? `+${p.months} month${p.months > 1 ? 's' : ''}` : '')}</td><td>${esc(randStr(p.amount_cents))}</td><td>${esc(p.method || '')}</td><td>${esc(p.note || '')}</td></tr>`).join('')}</table>`
       : '<p class="small muted">No payments recorded yet.</p>'}</div>` : ''}
   </div>`;
 }
 
 /** Inline form: record a subscription payment, which may be backdated. */
+/** Suggested paid-until: one month after the later of today and the current end date. */
+function suggestUntil(s) {
+  const today = isoDay(new Date());
+  const from = s.active_until && s.active_until > today ? s.active_until : today;
+  const d = new Date(from + 'T12:00:00');
+  d.setMonth(d.getMonth() + 1);
+  return isoDay(d);
+}
+
 function payForm(s) {
   const id = esc(s.shop_id);
   const today = isoDay(new Date());
   return `<form class="pay-form" data-pay-form="${id}" novalidate>
     <label class="field"><span>Paid on (can be in the past)</span><input type="date" name="paid_on" class="input" value="${today}" max="${today}"></label>
-    <label class="field"><span>Months paid for</span><select name="months">${[1, 2, 3, 6, 12].map(m => `<option value="${m}">${m} month${m > 1 ? 's' : ''}</option>`).join('')}</select></label>
+    <label class="field"><span>Paid until (you choose)</span><input type="date" name="paid_until" class="input" value="${suggestUntil(s)}" min="${today}"></label>
     <label class="field"><span>Amount (R)</span><input name="amount" class="input" inputmode="decimal" placeholder="e.g. 149.00"></label>
     <label class="field"><span>Method</span><select name="method"><option>EFT</option><option>Cash</option><option>Card</option><option>Other</option></select></label>
     <label class="field pay-note"><span>Note (optional)</span><input name="note" class="input" maxlength="200" placeholder="e.g. invoice number"></label>
-    <p class="small muted pay-hint">The paid-until date runs from the payment date, or from the current end date if that is later.</p>
+    <p class="small muted pay-hint">The shop's subscription will run until the “Paid until” date (it can sell up to and including that day).</p>
     <div class="row gap-s"><button class="btn primary" type="submit">Save payment</button><button class="btn" type="button" data-act="pay-close">Cancel</button></div>
   </form>`;
 }
@@ -211,15 +219,17 @@ async function savePayment(form) {
   const id = form.dataset.payForm;
   const f = new FormData(form);
   const paidOn = String(f.get('paid_on') || '');
-  const months = Number(f.get('months'));
+  const until = String(f.get('paid_until') || '');
   const amountTxt = String(f.get('amount') || '').replace(/[R\s]/gi, '').replace(',', '.');
   const amount = Math.round(Number(amountTxt) * 100);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(paidOn)) return toast('Choose the date it was paid', true);
   if (paidOn > isoDay(new Date())) return toast('The payment date can\'t be in the future', true);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) return toast('Choose the paid-until date', true);
+  if (until < paidOn) return toast('Paid until must be on or after the payment date', true);
   if (!amountTxt || !Number.isFinite(amount) || amount < 0) return toast('Enter the amount paid', true);
-  if (!confirm(`Record ${randStr(amount)} paid on ${fmtDay(paidOn)} for ${months} month${months > 1 ? 's' : ''} for ${shopName(id)}?`)) return;
-  const until = await rpc('vendor_record_payment', {
-    p_shop: id, p_paid_on: paidOn, p_months: months, p_amount_cents: amount,
+  if (!confirm(`Record ${randStr(amount)} paid on ${fmtDay(paidOn)}, paid until ${fmtDay(until)}, for ${shopName(id)}?`)) return;
+  await rpc('vendor_record_payment_until', {
+    p_shop: id, p_paid_on: paidOn, p_until: until, p_amount_cents: amount,
     p_method: String(f.get('method') || ''), p_note: String(f.get('note') || '').trim(),
   });
   openPay = null;
@@ -251,13 +261,6 @@ async function act(el) {
   try {
     if (a === 'logout') return signOut('Signed out.');
     if (a === 'reload') { await loadData(); return toast('Up to date'); }
-    if (a === 'add') {
-      const m = Number(el.dataset.m);
-      if (!confirm(`Add ${m} month${m > 1 ? 's' : ''} to ${shopName(id)}?`)) return;
-      const until = await rpc('vendor_add_months', { p_shop: id, p_months: m });
-      await loadData();
-      return toast(`${shopName(id)} is paid until ${fmtDay(until)}`);
-    }
     if (a === 'set') {
       const v = document.querySelector(`[data-date="${CSS.escape(id)}"]`)?.value;
       if (!/^\d{4}-\d{2}-\d{2}$/.test(v || '')) return toast('Choose a date first', true);

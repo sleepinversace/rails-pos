@@ -17,6 +17,13 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v22 — 2026-11-20 · Choose the paid-until date when recording a payment
+- 🔧 Admin page, **Record payment**: you now choose the **Paid until** date yourself (one month after the current end date is suggested), together with the paid-on date (can be backdated), amount, method and note. The paid-until date can't be before the payment date or more than 5 years ahead.
+- 🔧 Removed the **+1 month** button. "Set date" and "No end date" remain for changes without a payment.
+- 🔧 Payment history shows **Paid on** and **Paid until** for each payment.
+- 🔧 The admin page asks browsers for fresh files after each update (`?v=` on its script and styles).
+- 🗄️ SQL: `vendor_payments.paid_until`, new `vendor_record_payment_until` function, `vendor_shop_payments` returns the paid-until date. Re-run `cloud/supabase-setup.sql`.
+
 ## v21 — 2026-11-20 · Record (backdated) payments; deactivate / reactivate shops
 - ✨ Admin page: **Record payment**, with paid-on date (can be in the past, not the future), months (1, 2, 3, 6, 12), amount, method (EFT / cash / card / other) and note. The paid-until date runs from the payment date, or from the current end date if that is later.
 - ✨ **Payment history** per shop, **total paid**, last payment date, and **"Paid this month"** across all shops.

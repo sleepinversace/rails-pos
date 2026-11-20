@@ -866,6 +866,14 @@ function fakeCloud() {
         db.audit.push({ at: new Date().toISOString(), shop_name: shop.name, action: body.p_active ? 'Reactivated' : 'Deactivated', old_until: old, new_until: old });
         return json(body.p_active);
       }
+      if (fn === 'vendor_record_payment_until') {
+        if (body.p_paid_on > new Date().toISOString().slice(0, 10)) return json({ message: 'The payment date can\'t be in the future' }, 400);
+        if (body.p_until < body.p_paid_on) return json({ message: 'Paid until must be on or after the payment date' }, 400);
+        shop.active_until = body.p_until; shop.plan = 'paid';
+        db.payments.push({ shop_id: shop.id, paid_on: body.p_paid_on, paid_until: body.p_until, amount_cents: body.p_amount_cents, months: null, method: body.p_method, note: body.p_note });
+        db.audit.push({ at: new Date().toISOString(), shop_name: shop.name, action: `Payment on ${body.p_paid_on}`, old_until: old, new_until: shop.active_until });
+        return json(shop.active_until);
+      }
       if (fn === 'vendor_record_payment') {
         const base = new Date(Math.max(new Date(body.p_paid_on + 'T12:00:00').getTime(), old ? new Date(old + 'T12:00:00').getTime() : 0));
         base.setMonth(base.getMonth() + body.p_months);
@@ -1086,28 +1094,32 @@ test('Supplier admin page: shop logins refused; admin signs in with password; re
   ok(!$('img.admin-qr') && !$('#codeForm'), 'no authenticator step');
   ok($('#shopList') && $('#shopList').textContent.includes('owner@example.test'), 'dashboard lists the shop with its login email');
   ok(!$('#shopList img') && $('#shopList').innerHTML.includes('&lt;img'), 'shop name shown as text, not run as HTML');
-  // Renew: +1 month from the current end date, and it is logged
+  ok(!$('[data-act="add"]'), 'no "+1 month" button any more');
   const origConfirm = w.confirm; w.confirm = () => true;
-  click('[data-act="add"][data-id="shop-x"][data-m="1"]'); await tick(400);
-  eq([cloud.shops[0].active_until, cloud.shops[0].plan], ['2030-02-15', 'paid'], '+1 month');
-  ok($('.audit').textContent.includes('+1 month'), 'change logged');
   click('[data-act="noend"][data-id="shop-x"]'); await tick(400);
   eq(cloud.shops[0].active_until, null, 'no end date');
+  ok($('.audit').textContent.includes('no end date'), 'change logged');
 
-  // Record a BACKDATED payment: the paid-until date runs from the payment date
-  cloud.shops[0].active_until = '2026-09-01';
-  click('[data-act="reload"]'); await tick(300);
+  // Record a BACKDATED payment with a paid-until date chosen by the supplier
   click('[data-act="pay-open"][data-id="shop-x"]'); await tick(150);
   const form = $('[data-pay-form="shop-x"]');
+  ok(form.querySelector('[name="paid_until"]').value, 'a paid-until date is suggested');
   form.querySelector('[name="paid_on"]').value = '2026-10-05';
-  form.querySelector('[name="months"]').value = '3';
+  form.querySelector('[name="paid_until"]').value = '2027-02-28';
   form.querySelector('[name="amount"]').value = '447';
   form.querySelector('[name="note"]').value = 'Inv 0001';
   form.requestSubmit(); await tick(500);
-  eq([cloud.shops[0].active_until, cloud.payments[0].amount_cents, cloud.payments[0].paid_on], ['2027-01-05', 44700, '2026-10-05'], 'backdated payment: 3 months from 5 Oct');
+  eq([cloud.shops[0].active_until, cloud.payments[0].amount_cents, cloud.payments[0].paid_on, cloud.shops[0].plan], ['2027-02-28', 44700, '2026-10-05', 'paid'], 'backdated payment, paid until the chosen date');
   ok($('#shopList').textContent.includes('R447.00'), 'payment total shown');
   click('[data-act="history"][data-id="shop-x"]'); await tick(300);
-  ok($('.pay-history').textContent.includes('Inv 0001'), 'payment history listed');
+  ok($('.pay-history').textContent.includes('Inv 0001') && $('.pay-history').textContent.includes('28 Feb 2027'), 'payment history lists paid-on, paid-until and note');
+  click('[data-act="pay-open"][data-id="shop-x"]'); await tick(150);
+  $('[data-pay-form="shop-x"] [name="paid_on"]').value = '2026-11-01';
+  $('[data-pay-form="shop-x"] [name="paid_until"]').value = '2026-10-01';
+  $('[data-pay-form="shop-x"] [name="amount"]').value = '149';
+  $('[data-pay-form="shop-x"]').requestSubmit(); await tick(300);
+  eq(cloud.payments.length, 1, 'paid-until before the payment date is refused');
+  click('[data-act="pay-close"]'); await tick(100);
   const future = new Date(Date.now() + 5 * 864e5).toISOString().slice(0, 10);
   click('[data-act="pay-open"][data-id="shop-x"]'); await tick(150);
   $('[data-pay-form="shop-x"] [name="paid_on"]').value = future;

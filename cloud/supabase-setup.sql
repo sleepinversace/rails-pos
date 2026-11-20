@@ -158,6 +158,9 @@ create table if not exists public.vendor_payments (
 );
 alter table public.vendor_payments enable row level security;
 revoke all on public.vendor_payments from anon, authenticated;
+-- v22: the supplier picks the paid-until date for each payment
+alter table public.vendor_payments add column if not exists paid_until date;
+alter table public.vendor_payments alter column months drop not null;
 
 create table if not exists public.vendor_admins (
   user_id  uuid primary key references auth.users(id) on delete cascade,
@@ -240,12 +243,36 @@ begin
   return new_date;
 end $$;
 
+-- Record a subscription payment with the paid-until date chosen by the supplier.
+-- The payment date may be in the past (backdated) but not the future.
+create or replace function public.vendor_record_payment_until(p_shop uuid, p_paid_on date, p_until date,
+  p_amount_cents int, p_method text default 'EFT', p_note text default '')
+returns date
+language plpgsql security definer set search_path = public as $$
+declare old date;
+begin
+  perform public.vendor_check();
+  if p_paid_on is null or p_paid_on > current_date then raise exception 'The payment date can''t be in the future'; end if;
+  if p_until is null or p_until < p_paid_on then raise exception 'Paid until must be on or after the payment date'; end if;
+  if p_until > current_date + interval '5 years' then raise exception 'Paid until can''t be more than 5 years ahead'; end if;
+  if p_amount_cents is null or p_amount_cents < 0 then raise exception 'Enter the amount paid'; end if;
+  select active_until into old from public.shops where id = p_shop for update;
+  if not found then raise exception 'Shop not found'; end if;
+  update public.shops set active_until = p_until, plan = 'paid' where id = p_shop;
+  insert into public.vendor_payments (shop_id, paid_on, paid_until, amount_cents, months, method, note, admin_id)
+    values (p_shop, p_paid_on, p_until, p_amount_cents, null, left(coalesce(p_method, ''), 20), left(coalesce(p_note, ''), 200), auth.uid());
+  insert into public.vendor_audit (admin_id, shop_id, action, old_until, new_until)
+    values (auth.uid(), p_shop, left('Payment R' || to_char(p_amount_cents / 100.0, 'FM999999990.00') || ' on ' || p_paid_on, 60), old, p_until);
+  return p_until;
+end $$;
+
+drop function if exists public.vendor_shop_payments(uuid); -- its columns changed in v22
 create or replace function public.vendor_shop_payments(p_shop uuid)
-returns table (paid_on date, amount_cents int, months int, method text, note text, created_at timestamptz)
+returns table (paid_on date, paid_until date, amount_cents int, months int, method text, note text, created_at timestamptz)
 language plpgsql security definer set search_path = public as $$
 begin
   perform public.vendor_check();
-  return query select p.paid_on, p.amount_cents, p.months, p.method, p.note, p.created_at
+  return query select p.paid_on, p.paid_until, p.amount_cents, p.months, p.method, p.note, p.created_at
     from public.vendor_payments p where p.shop_id = p_shop order by p.paid_on desc, p.id desc;
 end $$;
 
@@ -313,8 +340,10 @@ end $$;
 revoke execute on function public.vendor_check(), public.vendor_whoami(), public.vendor_list_shops(),
   public.vendor_set_until(uuid, date, text), public.vendor_add_months(uuid, int), public.vendor_audit_log(int),
   public.vendor_record_payment(uuid, date, int, int, text, text), public.vendor_shop_payments(uuid),
+  public.vendor_record_payment_until(uuid, date, date, int, text, text),
   public.vendor_set_active(uuid, boolean, text) from public, anon;
 grant execute on function public.vendor_whoami(), public.vendor_list_shops(),
   public.vendor_set_until(uuid, date, text), public.vendor_add_months(uuid, int), public.vendor_audit_log(int),
   public.vendor_record_payment(uuid, date, int, int, text, text), public.vendor_shop_payments(uuid),
+  public.vendor_record_payment_until(uuid, date, date, int, text, text),
   public.vendor_set_active(uuid, boolean, text) to authenticated;
