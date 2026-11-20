@@ -202,6 +202,15 @@ test('Cash sale: totals, VAT, change, stock down, movement, tax invoice', async 
   eq(m.map(x => [x.change, x.after, x.ref]), [[-2, 3, '#00001']], 'sale movement');
   ok(receiptText().includes('TAX INVOICE'), 'tax invoice header');
   ok($('#modal .receipt').innerHTML.includes('&lt;b&gt;'), 'receipt escapes HTML');
+  // 80 mm layout: Qty / Description / Price / Total columns, 42 characters, big total
+  const lines = receiptText().split('\n');
+  ok(lines.some(l => /^Qty Description\s+Price\s+Total$/.test(l)) && lines.some((l, i) => /^2x Test <b>Tee<\/b>\s+R230\.00\s+R460\.00$/.test(l) && lines[i + 1].trim() === '(M/Red)'), 'item columns (long names wrap under the description)');
+  ok(lines.every(l => l.length <= 42), 'fits 80 mm (42 characters)');
+  ok($('#modal .receipt .big')?.textContent.startsWith('TOTAL (ZAR)') || [...d.querySelectorAll('#modal .receipt .big')].some(b => b.textContent.startsWith('TOTAL (ZAR)')), 'total printed large');
+  ok(receiptText().includes('Employee:') || !lastSale().cashier, 'employee line');
+  // WhatsApp / email copy: plain text, 32 characters wide, no layout marks
+  const plain = w.resolveDoc(`sale:${s.id}`).text;
+  ok(plain.split('\n').every(l => l.length <= 32) && !plain.includes('\u0002') && plain.includes('TOTAL (ZAR)'), 'WhatsApp text 32 wide');
   closeModal();
 });
 
@@ -277,7 +286,7 @@ test('Reports: periods, chart, green money and A4 printouts', async () => {
   w.print = origPrint;
   ok(printed && d.body.classList.contains('printing-a4') && $('#printA4').textContent.includes('Stock on hand'), 'A4 print prepared');
   ok($('#pageSize').textContent.includes('A4'), 'A4 page size');
-  w.setPrintMode('slip');
+  w.setPrintMode('none');
   ok(!d.body.classList.contains('printing-a4') && !$('#pageSize').textContent, 'back to slip printing');
 });
 
@@ -350,7 +359,7 @@ test('Changing the VAT rate changes the next receipt', async () => {
   await addItem(product('Test <b>Tee</b>'), 'S', 'Red');
   await pay('card');
   eq([lastSale().vat, lastSale().vatRate], [2091, 10], 'VAT at 10%');
-  ok(receiptText().includes('VAT @ 10% (incl.)'), 'receipt line');
+  ok(receiptText().includes('VAT @ 10%'), 'receipt line');
   closeModal();
   await nav('settings'); await tick(200); type('[data-setting="vatRate"]', '15'); await tick(300);
 });
@@ -487,7 +496,22 @@ test('Barcode labels: right number of labels and sheets; the printed barcode sca
   const got = P.Barcode.decodeImageData(await svgToImageData(label.querySelector('svg'), 900, 120));
   ok(got.length >= 2 && got.every(c => c === sku), `label barcode reads back as ${sku}: ${JSON.stringify(got.slice(0, 2))}`);
   eq(P.findByCode(sku)?.product.id, tee.id, 'and finds the product');
-  w.setPrintMode('slip');
+  // Label printer (roll): one label per page, page = label size; the choice is remembered
+  const pick = async v => { const sel = $('#lbSheet'); sel.value = v; sel.dispatchEvent(new w.Event('change', { bubbles: true })); await tick(); };
+  click(`[data-action="labels"][data-id="${tee.id}"]`); await tick();
+  await pick('roll_50x30');
+  click('[data-action="lb-fill"][data-mode="one"]'); await tick();
+  ok(!$('#lbStart') && !$('#lbCount').textContent.includes('sheet'), 'roll: no sheets or start position');
+  w.print = () => { printed = true; };
+  click('[data-action="lb-print"]'); await tick(200);
+  w.print = orig;
+  eq(d.querySelectorAll('#printA4 .lbl-sheet.roll').length, n, 'one page per label');
+  ok($('#pageSize').textContent.includes('50mm 30mm'), 'page is the label size');
+  click(`[data-action="labels"][data-id="${tee.id}"]`); await tick();
+  eq($('#lbSheet').value, 'roll_50x30', 'label printer remembered on this device');
+  await pick('a4_24');
+  closeModal();
+  w.setPrintMode('none');
 });
 
 test('Licence: free trial on a device without a shop account; after it ends selling pauses but data stays usable', async () => {
@@ -771,7 +795,7 @@ test('Admin: add a cashier who can only sell and see sales; edit, protect the la
   eq(P.cartTotals().discount, 0, 'discount ignored for cashier');
   await pay('card');
   eq([lastSale().cashier, lastSale().discount], ['Thandi', 0], 'sale by Thandi, no discount');
-  ok(receiptText().includes('Served by Thandi'), 'receipt names the cashier');
+  ok(receiptText().includes('Employee: Thandi'), 'receipt names the cashier');
   ok(!$('[data-action="open-return"]'), 'no Return button for a cashier');
   closeModal(); await tick();
 

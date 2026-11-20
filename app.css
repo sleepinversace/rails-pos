@@ -789,12 +789,19 @@ input:disabled { opacity: .5; }
    Receipts: only the till slip (#printArea).
    A4 reports: body.printing-a4 shows only #printA4 (page size set from app.js). */
 .print-a4 { display: none; }
+/* Till slip: width and font size come from app.js (--slip-w, --slip-font) so that
+   42 characters fill 80 mm paper (32 on 58 mm). The logo sits centred on top. */
+.print-area { width: var(--slip-w, 72mm); margin: 0 auto; padding: 2mm 0 0; color: #000; background: #fff; }
+.print-area.measuring { display: block !important; position: fixed; left: -10000px; top: 0; }
+.print-area pre.slip { font: 700 var(--slip-font, 2.85mm)/1.25 "Courier New", Courier, monospace; white-space: pre; margin: 0; color: #000; }
+.print-area pre.slip .big { font-size: 1.5em; line-height: 1.15; }
+.print-area .slip-logo { display: block; max-width: 62%; max-height: 30mm; margin: 0 auto 2mm; filter: grayscale(1) contrast(1.15); }
+.receipt .big { font-size: 1.5em; font-weight: 800; line-height: 1.15; }
+.doc-paper .receipt.w42 { font-size: 11px; overflow-x: auto; }
 @media print {
   body { background: #fff; padding: 0 !important; }
   body > * { display: none !important; }
-  body:not(.printing-a4) > .print-area { display: block !important; color: #000; margin: 0; }
-  .print-area pre { font: 12px/1.3 "Courier New", monospace; white-space: pre; margin: 0; }
-  .print-area .slip-logo { display: block; max-width: 48mm; max-height: 22mm; margin: 0 0 2mm 14mm; }
+  body:not(.printing-a4) > .print-area { display: block !important; color: #000; margin: 0 auto; }
   body.printing-a4 > .print-a4 { display: block !important; }
 }
 .print-a4 {

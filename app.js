@@ -237,6 +237,11 @@ const DEFAULT_SETTINGS = {
   storeWebsite: '',
   storeExtra: '',           // extra receipt lines, e.g. company reg. no. or bank details
   logo: null,               // small logo picture (data URL) for receipts, statements and the header
+  storeTagline: '',         // e.g. "Bridal & Evening Wear", printed under the name / logo
+  receiptPaper: '80',       // receipt printer paper: '80' (42 characters) or '58' mm (32 characters)
+  receiptShowName: true,    // print the shop name under the logo (off when the logo already shows it)
+  receiptSignature: false,  // "Signature ____" line on receipts and lay-by slips
+  autoPrint: false,         // print new receipts / slips straight away
   laybyMonths: 3,           // default lay-by term
   vatRegistered: true,      // false = no VAT on receipts or in reports
   vatNumber: '',
@@ -516,7 +521,7 @@ function saleItem(product, variant, qty) {
 function storeSnapshot() {
   const s = state.settings;
   return {
-    name: s.storeName, address: s.storeAddress, phone: s.storePhone, email: s.storeEmail, website: s.storeWebsite,
+    name: s.storeName, tagline: s.storeTagline, address: s.storeAddress, phone: s.storePhone, email: s.storeEmail, website: s.storeWebsite,
     extra: s.storeExtra, vatRegistered: !!s.vatRegistered, vatNumber: s.vatNumber,
   };
 }
@@ -822,7 +827,7 @@ async function processReturn(asExchange) {
     toast(`Credit ${money(ret.amount)} added — now add the exchange items`);
   } else {
     renderAll();
-    showDoc(`ret:${sale.id}:${ret.id}`);
+    showDoc(`ret:${sale.id}:${ret.id}`, { fresh: true });
   }
 }
 
@@ -838,7 +843,7 @@ async function cancelCredit() {
   ui.cart.credit = null;
   saveCart(true);
   renderAll();
-  if (sale && ret) showDoc(`ret:${sale.id}:${ret.id}`);
+  if (sale && ret) showDoc(`ret:${sale.id}:${ret.id}`, { fresh: true });
   return true;
 }
 
@@ -1185,13 +1190,32 @@ async function saveCashup() {
   await persist([opPut('cashups', z), opKv('meta', state.meta)]);
   closeModal();
   renderAll();
-  showDoc(`z:${z.id}`);
+  showDoc(`z:${z.id}`, { fresh: true });
 }
 
 /* ===== 11. Documents (receipts, credit notes, Z-reports) ================ */
 
 const PAY_LABEL = { cash: 'Cash', card: 'Card', eft: 'EFT', credit: 'Exchange credit', layby: 'Lay-by', storecredit: 'Store credit' };
-const W = 32; // characters per line (fits 58mm printers & WhatsApp monospace)
+/* Slips are built as lines of text, W characters wide:
+   • 32 for WhatsApp, email and copy (fits a phone screen in monospace) and 58 mm paper,
+   • 42 for 80 mm receipt printers (Settings → Receipts & printers).
+   A line starting with BIG prints larger and bold (the total, the customer);
+   it holds BIG_W characters so it still fits the paper. Plain text drops the mark. */
+let W = 32;
+let PRINTING = false; // true while building the printed / on-screen slip (logo shown separately)
+const BIG = '\u0002';
+const BIG_SCALE = 1.5;
+const bigW = () => Math.floor(W / BIG_SCALE);
+const wide = () => W >= 40;
+const paperChars = () => (String(state.settings.receiptPaper) === '58' ? 32 : 42);
+const plainText = t => String(t).split(BIG).join('');
+
+/** Run fn with a different line width (and printing flag). */
+function withWidth(width, printing, fn) {
+  const [w, p] = [W, PRINTING];
+  W = width; PRINTING = printing;
+  try { return fn(); } finally { W = w; PRINTING = p; }
+}
 
 function lr(left, right) {
   left = String(left); right = String(right);
@@ -1200,69 +1224,91 @@ function lr(left, right) {
   return left + '\n' + ' '.repeat(Math.max(0, W - right.length)) + right;
 }
 const center = s => { s = String(s).slice(0, W); return ' '.repeat(Math.floor((W - s.length) / 2)) + s; };
-const wrap = s => String(s).match(new RegExp(`.{1,${W}}(\\s|$)|.{1,${W}}`, 'g'))?.map(x => x.trimEnd()) || [''];
-const LINE = '-'.repeat(W);
+const wrapTo = (s, w) => String(s).match(new RegExp(`.{1,${w}}(\\s|$)|.{1,${w}}`, 'g'))?.map(x => x.trimEnd()) || [''];
+const wrap = s => wrapTo(s, W);
+const LINE = '-';
+/** Large lines: same helpers at the narrower BIG width, each line marked BIG. */
+const asBig = (fn, ...a) => withWidth(bigW(), PRINTING, () => fn(...a)).split('\n').map(l => BIG + l).join('\n');
+const lrBig = (l, r) => asBig(lr, l, r);
+const centerBig = s => wrapTo(s, bigW()).map(x => asBig(center, x)).join('\n');
 
 /** Store header block; uses the details saved on the document (old receipts never change). */
 function headerLines(store, title) {
   const st = store || storeSnapshot();
   const out = [];
-  wrap(st.name).forEach(l => out.push(center(l)));
+  // On paper the logo often already shows the shop name: the owner can leave the name off.
+  const nameOff = PRINTING && state.settings.logo && state.settings.receiptShowName === false;
+  if (!nameOff) out.push(centerBig(st.name));
+  if (st.tagline) wrap(st.tagline).forEach(l => out.push(center(l)));
   String(st.address || '').split('\n').filter(Boolean).forEach(a => wrap(a).forEach(l => out.push(center(l))));
-  if (st.phone) out.push(center(`Tel ${st.phone}`));
+  if (st.phone) out.push(center(`Contact No: ${st.phone}`));
   if (st.email) wrap(st.email).forEach(l => out.push(center(l)));
   if (st.website) wrap(st.website).forEach(l => out.push(center(l)));
   String(st.extra || '').split('\n').filter(Boolean).forEach(a => wrap(a).forEach(l => out.push(center(l))));
   if (st.vatRegistered && st.vatNumber) out.push(center(`VAT No. ${st.vatNumber}`));
   out.push('');
-  out.push(center(title));
+  out.push(centerBig(title));
   return out;
 }
 
-/** An item line block: name (size/colour), its description, qty × price. */
+/* Item columns on 80 mm paper:  Qty Description | Price | Total.
+   On narrow paper / WhatsApp: name on its own line, then "qty x price   total". */
+const PRICE_W = 11;
+const descW = () => W - PRICE_W * 2;
+const cols = (desc, price, total) => desc.padEnd(descW()) + String(price).padStart(PRICE_W) + String(total).padStart(PRICE_W);
+const itemHeader = () => (wide() ? [LINE, cols('Qty Description', 'Price', 'Total'), LINE] : [LINE]);
+
+/** An item line block: qty, name (size/colour), its description, price and line total. */
 function itemLines(it, right = money(it.unitPrice * it.qty)) {
-  const out = wrap(`${it.name} (${it.size}/${it.colour})`);
-  if (it.description) {
-    const w = W - 2; // indented under the name
-    (String(it.description).match(new RegExp(`.{1,${w}}(\\s|$)|.{1,${w}}`, 'g')) || []).forEach(l => out.push('  ' + l.trim()));
+  const vt = [it.size, it.colour].filter(x => x && x !== '-').join('/');
+  const name = vt ? `${it.name} (${vt})` : it.name;
+  const out = [];
+  if (wide()) {
+    const first = wrapTo(`${it.qty}x ${name}`, descW() - 1);
+    out.push(cols(first[0], money(it.unitPrice), right));
+    first.slice(1).forEach(l => out.push('   ' + l));
+  } else {
+    out.push(...wrap(name));
   }
-  out.push(lr(`  ${it.qty} x ${money(it.unitPrice)}`, right));
+  if (it.description) wrapTo(it.description, W - 3).forEach(l => out.push('   ' + l.trim()));
+  if (!wide()) out.push(lr(`  ${it.qty} x ${money(it.unitPrice)}`, right));
   return out;
 }
 const footerLines = () => String(state.settings.receiptFooter || '').split('\n').flatMap(f => wrap(f).map(center));
+const signatureLines = () => (state.settings.receiptSignature ? ['', '', 'Signature ' + '_'.repeat(Math.max(8, W - 10))] : []);
 
-/** Tax invoice (VAT vendor) or plain receipt. */
+/** Tax invoice (VAT vendor) or plain receipt — laid out like a till slip. */
 function receiptText(sale) {
   const st = sale.store || storeSnapshot();
   const registered = st.vatRegistered && sale.vatRate > 0;
   const out = headerLines(st, registered ? 'TAX INVOICE' : 'RECEIPT');
-  out.push(center(`No. ${saleNo(sale)}`), center(fmtDT(sale.date)));
-  if (sale.cashier) out.push(center('Served by ' + sale.cashier));
-  if (sale.customer) {
-    out.push(LINE, 'Customer: ' + sale.customer.name);
-    String(sale.customer.address || '').split('\n').filter(Boolean).forEach(a => wrap(a).forEach(l => out.push(l)));
-    if (sale.customer.vatNumber) out.push('Customer VAT No. ' + sale.customer.vatNumber);
-  }
-  out.push(LINE);
+  out.push('');
+  out.push(lr(`${registered ? 'Tax Inv' : 'Receipt'}: ${saleNo(sale)}`, fmtDT(sale.date)));
+  if (sale.cashier) out.push(`Employee: ${sale.cashier}`);
+  out.push(...itemHeader());
   for (const it of sale.items) out.push(...itemLines(it));
   out.push(LINE);
   if (sale.discount) {
     out.push(lr('Subtotal', money(sale.subtotal)));
     out.push(lr(sale.discountType === '%' ? `Discount (${sale.discountValue}%)` : 'Discount', '-' + money(sale.discount)));
+    out.push(LINE);
   }
-  out.push(lr('TOTAL', money(sale.total)));
+  out.push(lrBig('TOTAL (ZAR)', money(sale.total)));
   if (registered) {
-    out.push(lr(`Total excl. VAT`, money(sale.total - sale.vat)));
-    out.push(lr(`VAT @ ${sale.vatRate}% (incl.)`, money(sale.vat)));
+    out.push(LINE);
+    out.push(lr('Total excluding VAT', money(sale.total - sale.vat)));
+    out.push(lr(`VAT @ ${sale.vatRate}%`, money(sale.vat)));
+    out.push(lr('Total including VAT', money(sale.total)));
   }
+  out.push(LINE);
   if (sale.creditUsed) out.push(lr(`Credit ${sale.creditRef || ''}`.trim(), '-' + money(sale.creditUsed)));
   if (sale.payment === 'layby') {
     // Lay-by collected: list every payment that was made
-    out.push(LINE, `Paid by lay-by ${sale.laybyRef || ''}`.trim());
+    out.push(`Paid by lay-by ${sale.laybyRef || ''}`.trim());
     (sale.laybyPayments || []).forEach(p => out.push(lr(`  ${fmtDate(p.date)} ${PAY_LABEL[p.method === 'credit' ? 'storecredit' : p.method] || p.method}`, money(p.amount))));
     out.push(lr('Total paid', money(sum(sale.laybyPayments || [], p => p.amount))));
   } else if (sale.paid || !sale.creditUsed) {
-    out.push(lr(`Paid: ${PAY_LABEL[sale.payment] || sale.payment}`, money(sale.payment === 'cash' ? sale.tendered : sale.paid)));
+    out.push(lr(PAY_LABEL[sale.payment] || sale.payment, money(sale.payment === 'cash' ? sale.tendered : sale.paid)));
     if (sale.payment === 'cash') out.push(lr('Change', money(sale.change)));
   }
   if (sale.creditChange) out.push(lr('Credit paid out (cash)', money(sale.creditChange)));
@@ -1270,9 +1316,19 @@ function receiptText(sale) {
     out.push(LINE);
     sale.returns.forEach(r => out.push(lr(`Returned ${r.number ? retNo(r) : ''} ${fmtDate(r.date)}`, '-' + money(r.amount))));
   }
+  if (sale.customer) {
+    out.push('', ...wrapTo('Customer: ' + sale.customer.name, bigW()).map(l => BIG + l));
+    String(sale.customer.address || '').split('\n').filter(Boolean).forEach(a => wrap(a).forEach(l => out.push(l)));
+    if (sale.customer.vatNumber) out.push('Customer VAT No. ' + sale.customer.vatNumber);
+  }
+  if (sale.laybyRef) out.push(lrBig('', `LAY-BY#: ${sale.laybyRef}`));
+  out.push(...signatureLines());
   out.push(LINE, ...footerLines());
-  return out.join('\n');
+  return finish(out);
 }
+
+/** Lines → text; a lone LINE becomes a full-width dashed rule. */
+const finish = out => out.join('\n').split('\n').map(l => (l === LINE ? '-'.repeat(W) : l)).join('\n');
 
 /** Credit note (VAT vendor) or refund slip for one return. */
 function creditNoteText(sale, ret) {
@@ -1290,8 +1346,9 @@ function creditNoteText(sale, ret) {
   out.push(LINE, lr('TOTAL CREDIT', money(ret.amount)));
   if (registered) out.push(lr(`VAT @ ${sale.vatRate}% (incl.)`, money(ret.vat)));
   out.push(lr(ret.method === 'credit' ? 'Given as exchange credit' : `Refunded: ${PAY_LABEL[ret.method]}`, ret.method === 'credit' ? '' : money(ret.amount)));
+  out.push(...signatureLines());
   out.push(LINE, ...footerLines());
-  return out.join('\n');
+  return finish(out);
 }
 
 function zText(z) {
@@ -1321,11 +1378,22 @@ function zText(z) {
   out.push(lr('Counted cash', money(z.counted)));
   out.push(lr(z.diff === 0 ? 'Balanced' : z.diff > 0 ? 'OVER' : 'SHORT', money(Math.abs(z.diff))));
   out.push(lr('Float left for next shift', money(z.nextFloat)));
-  return out.join('\n');
+  return finish(out);
 }
 
-/** A "doc ref" names any printable document: sale:<id>, ret:<saleId>:<retId>, z:<id>. */
-function resolveDoc(ref) {
+/** A "doc ref" names any printable document: sale:<id>, ret:<saleId>:<retId>, z:<id>, lb:…, lbpay:…, stmt:….
+    paper = true lays it out for the receipt printer's width (also used on screen);
+    otherwise 32 characters of plain text for WhatsApp, email and copy. */
+function resolveDoc(ref, paper = false) {
+  const doc = withWidth(paper ? paperChars() : 32, paper, () => buildDoc(ref));
+  if (doc && !paper) doc.text = plainText(doc.text);
+  return doc;
+}
+
+/** The slip text as HTML: BIG lines in a larger bold font (text stays copyable). */
+const slipHtml = text => text.split('\n').map(l => (l.startsWith(BIG) ? `<span class="big">${esc(l.slice(1))}</span>` : esc(l))).join('\n');
+
+function buildDoc(ref) {
   const [kind, a, b] = String(ref).split(':');
   if (kind === 'sale') { const s = state.sales.find(x => x.id === a); const c = s && state.customers.find(x => x.id === s.customerId);
     return s && { kind, sale: s, text: receiptText(s), title: `${s.vatRate ? 'Tax invoice' : 'Receipt'} #${saleNo(s)}`, customerId: s.customerId, phone: c?.phone, email: c?.email }; }
@@ -1335,7 +1403,24 @@ function resolveDoc(ref) {
   }
   if (kind === 'z') { const z = state.cashups.find(x => x.id === a); return z && { kind, z, text: zText(z), title: `Z-report #${zNo(z)}` }; }
   if (kind === 'lb' || kind === 'lbpay' || kind === 'stmt') return resolveCustomerDoc(kind, a, b);
+  if (kind === 'test') return { kind, text: receiptText(testSale()), title: 'Test receipt' };
   return null;
+}
+
+/** A made-up sale (never saved) to check the printer and the receipt layout. */
+function testSale() {
+  const rate = effectiveRate();
+  const items = [
+    { name: 'Evening gown', size: '34', colour: 'Gold', qty: 1, unitPrice: 1499900, description: 'Test item — sequinned bodice, full skirt' },
+    { name: 'Alteration', size: '-', colour: '-', qty: 1, unitPrice: 0 },
+  ];
+  const subtotal = sum(items, i => i.qty * i.unitPrice);
+  const total = subtotal - 99900;
+  return {
+    number: 0, date: new Date().toISOString(), store: storeSnapshot(), items, subtotal, discount: 99900, discountType: 'R', total,
+    vatRate: rate, vat: vatFromInclusive(total, rate), payment: 'cash', paid: total, tendered: total, change: 0, returns: [],
+    cashier: ui.user?.name || '', customer: { name: 'Test Customer' },
+  };
 }
 
 /** Shop logo as an <img> (only our own small data-URL pictures). */
@@ -1372,13 +1457,31 @@ async function copyText(text, msg = 'Copied') {
   toast(msg);
 }
 
-function printDoc(ref) {
-  const doc = resolveDoc(ref);
+/* Printing a slip on a receipt printer (USB / network, installed in Windows):
+   the slip is drawn at the paper's printable width (72 mm on 80 mm paper,
+   48 mm on 58 mm) and the page is made exactly as long as the slip, so the
+   printer doesn't feed blank paper. The font size is worked out so that W
+   characters fill the width (Courier New is 0.6 em per character).
+   Tip for a PC till: start Edge / Chrome with --kiosk-printing to print
+   straight to the default printer without the print window.
+   PLUG-IN: Bluetooth / ESC-POS printer — send plainText(doc.text) instead. */
+const PAPER = { 80: { page: 80, print: 72 }, 58: { page: 58, print: 48 } };
+
+async function printDoc(ref) {
+  const doc = resolveDoc(ref, true);
   if (!doc) return;
-  // PLUG-IN: Bluetooth / ESC-POS printer — send doc.text to the printer here
-  // (Web Bluetooth or a vendor SDK) instead of the browser print dialog.
-  $('#printArea').innerHTML = `${logoHtml('slip-logo')}<pre>${esc(doc.text)}</pre>`;
-  setPrintMode('slip');
+  const paper = PAPER[String(state.settings.receiptPaper) === '58' ? 58 : 80];
+  const chars = paperChars();
+  const area = $('#printArea');
+  area.style.setProperty('--slip-w', `${paper.print}mm`);
+  area.style.setProperty('--slip-font', `${(paper.print / chars / 0.6).toFixed(3)}mm`);
+  area.innerHTML = `${logoHtml('slip-logo')}<pre class="slip">${slipHtml(doc.text)}</pre>`;
+  // Measure the slip so the page is exactly as long as it (plus a little for the cutter).
+  area.classList.add('measuring');
+  await area.querySelector('img')?.decode?.().catch(() => {});
+  const mm = area.getBoundingClientRect().height * 25.4 / 96;
+  area.classList.remove('measuring');
+  setPrintMode('slip', `@page { size: ${paper.page}mm ${Math.ceil(mm + 12)}mm; margin: 0; }`);
   window.print();
 }
 
@@ -1396,9 +1499,11 @@ function emailDoc(ref) {
   if (url) location.href = url;
 }
 
-function showDoc(ref, { justSold = false } = {}) {
-  const doc = resolveDoc(ref);
+function showDoc(ref, { justSold = false, fresh = justSold } = {}) {
+  const doc = resolveDoc(ref, true); // shown as it prints
   if (!doc) return;
+  // "Print automatically" (Settings → Receipts & printers): new slips go straight to the printer.
+  if (fresh && state.settings.autoPrint && !TEST_MODE) setTimeout(() => printDoc(ref), 150);
   const s = doc.sale;
   const canReturn = doc.kind === 'sale' && s.status !== 'returned' && can('returns');
   openModal({
@@ -1406,7 +1511,7 @@ function showDoc(ref, { justSold = false } = {}) {
     body: `
       ${justSold && s.payment === 'cash' ? `<div class="banner info"><p>Change due: <strong class="money">${money(s.change)}</strong></p></div>` : ''}
       ${justSold && s.creditChange ? `<div class="banner info"><p>Pay out unused credit in cash: <strong class="money">${money(s.creditChange)}</strong></p></div>` : ''}
-      <div class="doc-paper">${logoHtml()}<pre class="receipt" tabindex="0" aria-label="${esc(doc.title)}">${esc(doc.text)}</pre></div>
+      <div class="doc-paper">${logoHtml()}<pre class="receipt w${paperChars()}" tabindex="0" aria-label="${esc(doc.title)}">${slipHtml(doc.text)}</pre></div>
       ${doc.kind === 'ret' ? `<p class="small"><button class="link" data-action="open-doc" data-doc="sale:${esc(s.id)}">View original invoice #${saleNo(s)}</button></p>` : ''}
       ${doc.kind === 'sale' && s.returns.length ? `<p class="small">${s.returns.map(r => `<button class="link" data-action="open-doc" data-doc="ret:${esc(s.id)}:${esc(r.id)}">Credit note ${retNo(r)}</button>`).join(' · ')}</p>` : ''}
       ${doc.kind !== 'z' ? `<div class="grid-2" style="margin-top:12px">
@@ -2321,7 +2426,7 @@ function setPrintMode(mode, pageCss = '@page { size: A4 portrait; margin: 12mm 1
   document.body.classList.toggle('printing-a4', mode === 'a4');
   let st = $('#pageSize');
   if (!st) { st = document.createElement('style'); st.id = 'pageSize'; document.head.append(st); }
-  st.textContent = mode === 'a4' ? pageCss : '';
+  st.textContent = mode === 'a4' || mode === 'slip' ? pageCss : '';
 }
 
 /* ----- Settings ----- */
@@ -2335,6 +2440,7 @@ async function renderSettings() {
     <div class="section-title" style="margin-top:0">Store (printed on receipts)</div>
     <div class="card">
       <label class="field"><span>Store name</span><input class="input" data-setting="storeName" value="${esc(st.storeName)}"></label>
+      <label class="field"><span>Slogan under the name (optional)</span><input class="input" data-setting="storeTagline" value="${esc(st.storeTagline || '')}" placeholder="e.g. Bridal &amp; Evening Wear"></label>
       <label class="field"><span>Address</span><textarea class="plain" data-setting="storeAddress" rows="2">${esc(st.storeAddress)}</textarea></label>
       <div class="grid-2">
         <label class="field"><span>Phone</span><input class="input" type="tel" data-setting="storePhone" value="${esc(st.storePhone)}"></label>
@@ -2349,6 +2455,23 @@ async function renderSettings() {
           <label class="btn sm" tabindex="0" role="button" data-file-trigger>${st.logo ? 'Change logo' : 'Add logo'}<input type="file" id="logoFile" accept="image/*" hidden></label>
           ${st.logo ? '<button type="button" class="btn sm ghost" data-action="logo-remove">Remove</button>' : ''}
         </div>
+      </div>
+    </div>
+    <div class="section-title">Receipts &amp; printers</div>
+    <div class="card">
+      <label class="field"><span>Receipt printer paper</span>
+        <select data-setting="receiptPaper">
+          ${[['80', '80 mm (standard till printer)'], ['58', '58 mm (small / portable printer)']].map(([v, l]) => `<option value="${v}" ${String(st.receiptPaper) === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select></label>
+      <label class="check"><input type="checkbox" data-setting="receiptShowName" ${st.receiptShowName !== false ? 'checked' : ''}>
+        <span>Print the shop name under the logo<br><span class="small muted">Untick if your logo already shows the name.</span></span></label>
+      <label class="check" style="margin-top:8px"><input type="checkbox" data-setting="receiptSignature" ${st.receiptSignature ? 'checked' : ''}>
+        <span>Signature line on receipts and lay-by slips</span></label>
+      <label class="check" style="margin-top:8px"><input type="checkbox" data-setting="autoPrint" ${st.autoPrint ? 'checked' : ''}>
+        <span>Print automatically after each sale, lay-by and payment<br><span class="small muted">On a PC till, see the user guide to skip the print window.</span></span></label>
+      <div class="row gap-s wrap" style="margin-top:10px">
+        <button class="btn sm" data-action="test-print">Print a test receipt</button>
+        ${can('stock') ? '<button class="btn sm" data-action="labels">Print barcode labels</button>' : ''}
       </div>
     </div>
     <div class="section-title">Lay-bys</div>
@@ -4163,7 +4286,20 @@ const LABEL_SHEETS = {
   a4_21: { name: '21 per sheet · 63.5 × 38.1 mm (3 × 7)', cols: 3, rows: 7, w: 63.5, h: 38.1, top: 15.15, left: 7.2, gapX: 2.5, gapY: 0 },
   a4_40: { name: '40 per sheet · 52.5 × 29.7 mm (4 × 10)', cols: 4, rows: 10, w: 52.5, h: 29.7, top: 0, left: 0, gapX: 0, gapY: 0 },
   plain: { name: 'Plain A4 paper, cut out (3 × 8)', cols: 3, rows: 8, w: 66, h: 34, top: 12, left: 6, gapX: 0, gapY: 0, cut: true },
+  // Label printers (thermal rolls, e.g. Zebra, Xprinter, TSC): one label per printed page.
+  roll_50x30: { name: 'Label printer · 50 × 30 mm', roll: true, w: 50, h: 30 },
+  roll_40x30: { name: 'Label printer · 40 × 30 mm', roll: true, w: 40, h: 30 },
+  roll_58x40: { name: 'Label printer · 58 × 40 mm', roll: true, w: 58, h: 40 },
+  roll_50x25: { name: 'Label printer · 50 × 25 mm', roll: true, w: 50, h: 25 },
+  roll_custom: { name: 'Label printer · my own size…', roll: true, custom: true },
 };
+
+/** The chosen label size (custom roll size comes from this device's settings). */
+function labelSheet(key) {
+  const s = LABEL_SHEETS[key] || LABEL_SHEETS.a4_24;
+  if (!s.custom) return s;
+  return { ...s, w: state.meta.labelW || 50, h: state.meta.labelH || 30 };
+}
 
 /** Code 128 barcode as an SVG that stretches to fit its box (empty if the text can't be encoded). */
 function barcodeSvg(text) {
@@ -4178,7 +4314,8 @@ function barcodeSvg(text) {
 function openLabels(productId = null) {
   const p = productId ? findProduct(productId) : null;
   if (productId && !p) return;
-  ui.labels = { productId: p?.id || null, sheet: ui.labelSheet || 'a4_24', start: 1, price: true, shop: true, qty: {} };
+  const sheet = LABEL_SHEETS[state.meta.labelSheet] ? state.meta.labelSheet : 'a4_24'; // remembered per device (its printer)
+  ui.labels = { productId: p?.id || null, sheet, start: 1, price: true, shop: true, qty: {} };
   (p ? [p] : state.products).forEach(x => x.variants.forEach(v => { ui.labels.qty[v.id] = p ? Math.max(0, v.stock) : 0; }));
   openModal({ title: p ? `Labels · ${p.name}` : 'Print barcode labels', body: '<div id="labelsBody"></div>', foot: '<div id="labelsFoot" class="foot-row"></div>' });
   renderLabels();
@@ -4187,11 +4324,15 @@ function openLabels(productId = null) {
 function renderLabels() {
   const L = ui.labels;
   const products = L.productId ? [findProduct(L.productId)].filter(Boolean) : state.products;
+  const s = labelSheet(L.sheet);
   $('#labelsBody').innerHTML = `
-    <label class="field"><span>Label sheet</span><select id="lbSheet">${Object.entries(LABEL_SHEETS).map(([k, s]) =>
-      `<option value="${k}" ${k === L.sheet ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
+    <label class="field"><span>Labels</span><select id="lbSheet">${Object.entries(LABEL_SHEETS).map(([k, x]) =>
+      `<option value="${k}" ${k === L.sheet ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+    ${s.custom ? `<div class="grid-2">
+      <label class="field"><span>Label width (mm)</span><input id="lbW" class="input" inputmode="decimal" value="${s.w}"></label>
+      <label class="field"><span>Label height (mm)</span><input id="lbH" class="input" inputmode="decimal" value="${s.h}"></label></div>` : ''}
     <div class="grid-2">
-      <label class="field"><span>Start at label no.</span><input id="lbStart" class="input" inputmode="numeric" value="${L.start}"></label>
+      ${s.roll ? '' : `<label class="field"><span>Start at label no.</span><input id="lbStart" class="input" inputmode="numeric" value="${L.start}"></label>`}
       <div class="field"><span>Show on the label</span>
         <label class="check"><input type="checkbox" id="lbPrice" ${L.price ? 'checked' : ''}><span>Price</span></label>
         <label class="check" style="margin-top:6px"><input type="checkbox" id="lbShop" ${L.shop ? 'checked' : ''}><span>Shop name</span></label></div>
@@ -4205,7 +4346,9 @@ function renderLabels() {
       ${p.variants.map(v => `<label class="lb-row"><span class="grow">${esc(v.size)} / ${esc(v.colour)} <span class="muted small">${esc(v.sku)} · ${v.stock} in stock</span></span>
         <input class="input sm lb-qty" inputmode="numeric" data-lbq="${esc(v.id)}" value="${L.qty[v.id] || 0}" aria-label="Labels for ${esc(p.name)} ${esc(v.size)} ${esc(v.colour)}"></label>`).join('')}</div>`).join('')
       : '<div class="empty">No products yet.</div>'}</div>
-    <p class="small muted" style="margin-bottom:0">In the print window choose <strong>A4</strong>, scale <strong>100% / Actual size</strong> and margins <strong>None</strong> so the labels line up with the sheet.</p>`;
+    <p class="small muted" style="margin-bottom:0">${s.roll
+      ? `In the print window choose your <strong>label printer</strong>, scale <strong>100%</strong> and margins <strong>None</strong>. Set the same label size (${s.w} × ${s.h} mm) in the printer's own settings (Printing preferences) once.`
+      : 'In the print window choose <strong>A4</strong>, scale <strong>100% / Actual size</strong> and margins <strong>None</strong> so the labels line up with the sheet.'}</p>`;
   $('#labelsFoot').innerHTML = `<span class="grow small" id="lbCount"></span>
     <button class="btn" data-action="close-modal">Cancel</button>
     <button class="btn primary" data-action="lb-print">Print labels</button>`;
@@ -4215,10 +4358,10 @@ function renderLabels() {
 function paintLabelCount() {
   const L = ui.labels;
   if (!L || !$('#lbCount')) return;
-  const s = LABEL_SHEETS[L.sheet];
+  const s = labelSheet(L.sheet);
   const total = sum(Object.values(L.qty), n => n);
-  const sheets = total ? Math.ceil((total + L.start - 1) / (s.cols * s.rows)) : 0;
-  $('#lbCount').textContent = `${total} label${total === 1 ? '' : 's'} · ${sheets} sheet${sheets === 1 ? '' : 's'}`;
+  const sheets = s.roll ? 0 : total ? Math.ceil((total + L.start - 1) / (s.cols * s.rows)) : 0;
+  $('#lbCount').textContent = `${total} label${total === 1 ? '' : 's'}${s.roll ? '' : ` · ${sheets} sheet${sheets === 1 ? '' : 's'}`}`;
   $('[data-action="lb-print"]').disabled = !total;
 }
 
@@ -4226,7 +4369,18 @@ function onLabelsChange(t) {
   const L = ui.labels;
   if (!L) return;
   if (t.dataset.lbq !== undefined) L.qty[t.dataset.lbq] = Math.max(0, Math.min(999, parseInt(t.value, 10) || 0));
-  if (t.id === 'lbSheet') { L.sheet = t.value; ui.labelSheet = t.value; }
+  if (t.id === 'lbSheet') {
+    L.sheet = t.value; L.start = 1;
+    state.meta.labelSheet = t.value;
+    DB.write([opKv('meta', state.meta)]);
+    return renderLabels();
+  }
+  if (t.id === 'lbW' || t.id === 'lbH') {
+    const v = Number(String(t.value).replace(',', '.'));
+    if (!(v >= 15 && v <= 150)) return toast('Label size must be 15 to 150 mm', true);
+    state.meta[t.id === 'lbW' ? 'labelW' : 'labelH'] = v;
+    DB.write([opKv('meta', state.meta)]);
+  }
   if (t.id === 'lbStart') { const per = LABEL_SHEETS[L.sheet].cols * LABEL_SHEETS[L.sheet].rows; L.start = Math.max(1, Math.min(per, parseInt(t.value, 10) || 1)); }
   if (t.id === 'lbPrice') L.price = t.checked;
   if (t.id === 'lbShop') L.shop = t.checked;
@@ -4243,28 +4397,35 @@ function fillLabels(mode) {
 function printLabels() {
   const L = ui.labels;
   if (!L) return;
-  const s = LABEL_SHEETS[L.sheet];
-  const per = s.cols * s.rows;
+  const s = labelSheet(L.sheet);
   const items = [];
   for (const p of state.products) for (const v of p.variants) for (let i = 0; i < (L.qty[v.id] || 0); i++) items.push({ p, v });
   if (!items.length) return toast('Choose how many labels to print', true);
-  const cells = [...Array(L.start - 1).fill(null), ...items];
-  const pages = [];
-  for (let i = 0; i < cells.length; i += per) pages.push(cells.slice(i, i + per));
   const small = s.h < 32 ? ' small' : '';
-  $('#printA4').innerHTML = pages.map(page => `<div class="lbl-sheet">${page.map((it, i) => {
-    if (!it) return '';
-    const left = s.left + (i % s.cols) * (s.w + s.gapX);
-    const top = s.top + Math.floor(i / s.cols) * (s.h + s.gapY);
-    return `<div class="lbl${s.cut ? ' cut' : ''}${small}" style="left:${left}mm;top:${top}mm;width:${s.w}mm;height:${s.h}mm">
+  const label = (it, style) => `<div class="lbl${s.cut ? ' cut' : ''}${small}" style="${style}">
       ${L.shop ? `<div class="lbl-shop">${esc(state.settings.storeName)}</div>` : ''}
       <div class="lbl-name">${esc(it.p.name)}</div>
       <div class="lbl-var">${esc(it.v.size)} / ${esc(it.v.colour)}${L.price ? `<span class="lbl-price">${money(priceOf(it.p, it.v))}</span>` : ''}</div>
       ${barcodeSvg(it.v.sku)}
       <div class="lbl-sku">${esc(it.v.sku)}</div>
     </div>`;
-  }).join('')}</div>`).join('');
-  setPrintMode('a4', '@page { size: A4 portrait; margin: 0; }');
+  if (s.roll) {
+    // Label printer: every label is its own page, exactly the label's size.
+    $('#printA4').innerHTML = items.map(it => `<div class="lbl-sheet roll" style="width:${s.w}mm;height:${s.h}mm">${label(it, `left:0;top:0;width:${s.w}mm;height:${s.h}mm`)}</div>`).join('');
+    setPrintMode('a4', `@page { size: ${s.w}mm ${s.h}mm; margin: 0; }`);
+  } else {
+    const per = s.cols * s.rows;
+    const cells = [...Array(L.start - 1).fill(null), ...items];
+    const pages = [];
+    for (let i = 0; i < cells.length; i += per) pages.push(cells.slice(i, i + per));
+    $('#printA4').innerHTML = pages.map(page => `<div class="lbl-sheet">${page.map((it, i) => {
+      if (!it) return '';
+      const left = s.left + (i % s.cols) * (s.w + s.gapX);
+      const top = s.top + Math.floor(i / s.cols) * (s.h + s.gapY);
+      return label(it, `left:${left}mm;top:${top}mm;width:${s.w}mm;height:${s.h}mm`);
+    }).join('')}</div>`).join('');
+    setPrintMode('a4', '@page { size: A4 portrait; margin: 0; }');
+  }
   closeModal();
   toast(`${items.length} label${items.length === 1 ? '' : 's'} ready to print`);
   setTimeout(() => window.print(), 50);
@@ -4583,7 +4744,7 @@ async function saveLayby() {
   closeCartSheet();
   renderAll();
   toast(existing ? `Added to ${lbNo(lb)}` : `Lay-by ${lbNo(lb)} created for ${c.name}`);
-  showDoc(pay ? `lbpay:${lb.id}:${pay.id}` : `lb:${lb.id}`);
+  showDoc(pay ? `lbpay:${lb.id}:${pay.id}` : `lb:${lb.id}`, { fresh: true });
 }
 
 /* ----- Payments, collecting, cancelling ----- */
@@ -4624,7 +4785,7 @@ async function saveLaybyPayment() {
   closeModal();
   renderAll();
   toast(lbBalance(l) <= 0 ? `Paid in full! Tap “Collect & invoice” when ${l.customer.name} takes the items.` : `Payment of ${money(amount)} taken`);
-  showDoc(`lbpay:${l.id}:${pay.id}`);
+  showDoc(`lbpay:${l.id}:${pay.id}`, { fresh: true });
 }
 
 async function collectLayby(id) {
@@ -4649,7 +4810,7 @@ async function collectLayby(id) {
   state.sales.push(sale);
   await persist([opPut('sales', sale), opPut('laybys', l), opKv('meta', state.meta)]);
   renderAll();
-  showDoc(`sale:${sale.id}`);
+  showDoc(`sale:${sale.id}`, { fresh: true });
 }
 
 function openLaybyCancel(id) {
@@ -4707,7 +4868,7 @@ async function saveLaybyCancel() {
   closeModal();
   renderAll();
   toast(mode === 'refund' ? `Refund ${money(back)} (${PAY_LABEL[ui.lbc.method]})` : mode === 'credit' ? `${money(back)} added as store credit` : 'Lay-by cancelled');
-  showDoc(`lb:${l.id}`);
+  showDoc(`lb:${l.id}`, { fresh: true });
 }
 
 /** Reports: lay-by money taken in the period, and what is still owed. */
@@ -4738,24 +4899,24 @@ function laybyText(l, pay = null) {
   const st = l.store || storeSnapshot();
   const title = l.status === 'cancelled' ? 'LAY-BY CANCELLED' : pay ? 'LAY-BY PAYMENT RECEIPT' : 'LAY-BY';
   const out = headerLines(st, title);
-  out.push(center(`No. ${lbNo(l)}`), center(fmtDT(pay ? pay.date : l.date)));
-  out.push(LINE, 'Client: ' + l.customer.name);
-  if (l.customer.phone) out.push('Tel ' + l.customer.phone);
-  out.push(lr('Started', fmtDate(l.date)), lr('Pay by', fmtDate(fromDateInput(l.dueDate).toISOString())));
-  out.push(LINE);
+  out.push('');
+  out.push(lr(`Lay-by: ${lbNo(l)}`, fmtDT(pay ? pay.date : l.date)));
+  const by = pay ? pay.cashier : l.cashier;
+  if (by) out.push(`Employee: ${by}`);
+  out.push(lr(`Started ${fmtDate(l.date)}`, `Pay by ${fmtDate(fromDateInput(l.dueDate).toISOString())}`));
+  out.push(...itemHeader());
   for (const it of l.items) out.push(...itemLines(it));
   out.push(LINE);
-  if (l.discount) out.push(lr('Subtotal', money(l.subtotal)), lr('Discount', '-' + money(l.discount)));
-  out.push(lr('TOTAL', money(l.total)));
+  if (l.discount) out.push(lr('Subtotal', money(l.subtotal)), lr('Discount', '-' + money(l.discount)), LINE);
+  out.push(lrBig('TOTAL (ZAR)', money(l.total)));
   out.push(LINE, 'Payments made');
   if (!l.payments.length) out.push('  none yet');
   l.payments.forEach(p => out.push(lr(`  ${fmtDate(p.date)} ${payLabel(p.method)}${pay && p.id === pay.id ? ' *' : ''}`, money(p.amount))));
   out.push(lr('Total paid', money(lbPaid(l))));
   if (l.status === 'open') {
-    out.push(lr('BALANCE DUE', money(Math.max(0, lbBalance(l)))));
+    out.push(lrBig('BALANCE DUE', money(Math.max(0, lbBalance(l)))));
     if (lbOverdue(l)) out.push(center('*** OVERDUE ***'));
     if (pay) out.push('', lr('Paid today (*)', money(pay.amount)));
-    out.push(LINE, ...wrap('Items stay in the shop until the lay-by is paid in full.').map(center));
   }
   if (l.status === 'completed') out.push(LINE, center(`Collected ${fmtDate(l.completedAt)}`));
   if (l.status === 'cancelled' && l.cancel) {
@@ -4765,8 +4926,13 @@ function laybyText(l, pay = null) {
     if (cx.method === 'credit') out.push(lr('Store credit', money(cx.refund)));
     else if (cx.method !== 'kept' && cx.refund) out.push(lr(`Refunded (${PAY_LABEL[cx.method]})`, money(cx.refund)));
   }
+  out.push('', ...wrapTo('Customer: ' + l.customer.name, bigW()).map(x => BIG + x));
+  if (l.customer.phone) out.push('Tel ' + l.customer.phone);
+  out.push(lrBig('', `LAY-BY#: ${lbNo(l)}`));
+  out.push(...signatureLines());
+  if (l.status === 'open') out.push(LINE, ...wrap('Items stay in the shop until the lay-by is paid in full.').map(center));
   out.push(LINE, ...footerLines());
-  return out.join('\n');
+  return finish(out);
 }
 
 function statementText(c) {
@@ -4790,7 +4956,7 @@ function statementText(c) {
   out.push(LINE, lr('TOTAL OWED', money(Math.max(0, owed))));
   if (c.credit) out.push(lr('Store credit', money(c.credit)));
   out.push(LINE, ...footerLines());
-  return out.join('\n');
+  return finish(out);
 }
 
 function resolveCustomerDoc(kind, a, b) {
@@ -5113,6 +5279,7 @@ const actions = {
   labels: el => openLabels(el.dataset.id || null),
   'lb-fill': el => fillLabels(el.dataset.mode),
   'lb-print': () => printLabels(),
+  'test-print': () => printDoc('test'),
 };
 
 /* Actions that need a permission. Buttons are hidden too, but this is the real check. */
@@ -5232,7 +5399,7 @@ function bindEvents() {
   window.addEventListener('pagehide', flush);
 
   window.matchMedia('(min-width: 860px)').addEventListener('change', () => { closeCartSheet(); updateInert(); });
-  window.addEventListener('afterprint', () => setPrintMode('slip'));
+  window.addEventListener('afterprint', () => setPrintMode('none'));
 
   channel?.addEventListener('message', e => { if (e.data?.type === 'takeover') pauseThisTab(); });
 }

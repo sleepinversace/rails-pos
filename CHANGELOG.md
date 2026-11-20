@@ -17,6 +17,14 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v23 — 2026-11-21 · Till-slip receipts, receipt printers and label printers
+- 🔧 **New receipt layout** (like a normal till slip): logo **centred** at the top, shop name, slogan, "Contact No:", invoice number with date and time, employee, **Qty · Description · Price · Total** columns, discount, **TOTAL (ZAR) in large print**, total excluding VAT / VAT / total including VAT, payments, **customer name and lay-by number in large print**, optional signature line, footer. Lay-by slips and payment receipts use the same layout.
+- ✨ **Settings → Receipts & printers:** paper **80 mm** (42 characters) or **58 mm**; print the shop name under the logo or not; signature line; **print automatically** after each sale, lay-by and payment; **Print a test receipt**.
+- ✨ **Slogan** under the shop name (Settings → Store).
+- ✨ Receipts print at exactly the paper's width and length (no blank paper fed), for USB / network receipt printers installed in Windows. With the Edge shortcut in the user guide (`--kiosk-printing`) they print without the print window.
+- ✨ **Label printer sizes** for barcode labels: 50 × 30, 40 × 30, 58 × 40, 50 × 25 mm or your own size; one label per sticker. The chosen size is remembered per device.
+- 🔧 WhatsApp, email and Copy still send a narrow (32-character) version that fits a phone.
+
 ## v22 — 2026-11-20 · Choose the paid-until date when recording a payment
 - 🔧 Admin page, **Record payment**: you now choose the **Paid until** date yourself (one month after the current end date is suggested), together with the paid-on date (can be backdated), amount, method and note. The paid-until date can't be before the payment date or more than 5 years ahead.
 - 🔧 Removed the **+1 month** button. "Set date" and "No end date" remain for changes without a payment.

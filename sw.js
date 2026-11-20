@@ -13,7 +13,7 @@
    the outbox when the connection comes back.
    ========================================================================= */
 
-const CACHE_VERSION = 'rails-pos-v22';
+const CACHE_VERSION = 'rails-pos-v23';
 const APP_SHELL = [
   './',
   './index.html',
