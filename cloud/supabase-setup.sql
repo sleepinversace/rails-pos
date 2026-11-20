@@ -22,9 +22,14 @@ create table if not exists public.shops (
   name         text not null default 'My shop',
   generation   int  not null default 1,   -- bumped by "Start fresh" / "Restore": devices re-download
   next_device  int  not null default 1,   -- next till letter: 1 = A, 2 = B …
-  active_until date,                      -- PLUG-IN: subscription / licence check
+  active_until date,                      -- subscription paid until (null = no end date)
   created_at   timestamptz not null default now()
 );
+
+-- Licences: a new shop gets a 30-day free trial. Only YOU (in the Supabase
+-- dashboard / SQL editor) can change active_until — shops cannot.
+alter table public.shops alter column active_until set default (current_date + 30);
+create unique index if not exists shops_one_per_owner on public.shops (owner); -- one shop per login
 
 create sequence if not exists public.records_seq;
 
@@ -67,8 +72,29 @@ create policy "own records" on public.records for all to authenticated
   with check (exists (select 1 from public.shops s where s.id = shop_id and s.owner = auth.uid()));
 
 grant usage on sequence public.records_seq to authenticated;
-grant select, insert, update, delete on public.shops, public.records to authenticated;
 revoke all on public.shops, public.records from anon;
+grant select, insert, update, delete on public.records to authenticated;
+-- Shops may only set their name when creating, and change only name / generation / till counter.
+-- They can never set or change active_until, and can't delete the shop (no "free new trial").
+revoke all on public.shops from authenticated;
+grant select on public.shops to authenticated;
+grant insert (name) on public.shops to authenticated;
+grant update (name, generation, next_device) on public.shops to authenticated;
+
+-- =========================================================================
+-- MANAGING SUBSCRIPTIONS (run these yourself in the SQL editor)
+--
+--   See every shop, its login email and when it is paid until:
+--     select s.name, u.email, s.active_until, s.created_at
+--     from public.shops s join auth.users u on u.id = s.owner order by s.created_at;
+--
+--   A shop paid for another month (from today, or from its current end date):
+--     update public.shops set active_until = greatest(coalesce(active_until, current_date), current_date) + interval '1 month'
+--     where owner = (select id from auth.users where email = 'shop@example.com');
+--
+--   No end date (e.g. your own shop):
+--     update public.shops set active_until = null where owner = (select id from auth.users where email = '...');
+-- =========================================================================
 
 -- A device joining the shop gets the next till letter for its receipt numbers.
 create or replace function public.claim_device(p_shop uuid) returns int

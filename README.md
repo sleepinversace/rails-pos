@@ -47,6 +47,13 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - **Scan** button on the Sell screen uses the phone/tablet camera. Android/Chrome use the device's built-in reader; iPhone/iPad use the app's own reader (EAN-13, UPC-A, EAN-8 tag barcodes and Code 128 SKU labels, read with a check digit and two agreeing lines).
   - Each size/colour can store the **barcode printed on its tag** (Stock → tap the size → Barcode → Scan). USB/Bluetooth scanners work too (they type the code + Enter).
   - Optional **product photo**, shrunk to a 160 × 160 picture (about 3–10 KB) and shown small on the till, cart, picker and stock list.
+- **Barcode labels**
+  - Stock → **Labels** (all products) or a product's **Labels** button. Choose how many of each size (or "Quantity = stock" / "1 of each"), the sheet (24, 21 or 40 per A4 sheet, or plain paper to cut out) and where to start on a half-used sheet.
+  - Each label shows the shop name, product, size/colour, price, a Code 128 barcode of the SKU and the SKU. It scans with the camera or a USB scanner. Print at **100% / Actual size** with **no margins**.
+- **Subscription (licence)**
+  - A device without a shop account has a **14-day free trial**. A new cloud shop gets **30 days free**, then follows its paid-until date (`shops.active_until`, set by the supplier in Supabase; shops can't change it). No date means no end.
+  - Reminder in the last 7 days. After the date there are 7 days' grace, then **selling pauses**: Charge is disabled, but reports, backups and settings still work. The date is checked on every sync and remembered offline.
+  - Managing subscriptions: see the SQL snippets at the end of `cloud/supabase-setup.sql`.
 - **Sign-in**
   - The till is covered by a sign-in screen: username (not case-sensitive) and a 4-digit PIN.
   - You stay signed in when the page reloads or updates; closing the app or tapping the lock button in the header asks again.
@@ -98,7 +105,7 @@ Then open http://localhost:8000. Offline mode only works over `http://localhost`
 
 With the server running, open **http://localhost:8000/tests.html** and click **Run all tests**, or open `tests.html?auto` to run them straight away.
 
-The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 31 tests should pass (one runs two "devices" against a fake Supabase to test syncing; one reads drawn barcodes that are blurred, noisy and upside down). They cover:
+The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 33 tests should pass (one runs two "devices" against a fake Supabase to test syncing; one reads drawn barcodes that are blurred, noisy and upside down). They cover:
 - sign-in, lock and changing the PIN
 - admin: adding, editing and deleting users, and what a cashier can't do
 - selling and stock

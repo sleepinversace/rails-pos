@@ -456,6 +456,59 @@ test('Product photo: shrunk to a small square and shown on the till', async () =
   p2.photo = keep; w.renderSell();
 });
 
+/** Render an inline SVG to pixels (to check a printed barcode really scans). */
+async function svgToImageData(svg, W, H) {
+  const s = svg.cloneNode(true);
+  s.setAttribute('xmlns', 'http://www.w3.org/2000/svg'); s.setAttribute('width', W); s.setAttribute('height', H);
+  const img = new Image();
+  await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(s)); });
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); g.drawImage(img, 0, 0, W, H);
+  return g.getImageData(0, 0, W, H);
+}
+
+test('Barcode labels: right number of labels and sheets; the printed barcode scans back to the SKU', async () => {
+  await nav('stock');
+  const tee = product('Test <b>Tee</b>');
+  click(`[data-action="labels"][data-id="${tee.id}"]`); await tick();
+  click('[data-action="lb-fill"][data-mode="one"]'); await tick();
+  const n = tee.variants.length;
+  type('#lbStart', '23'); await tick();
+  ok($('#lbCount').textContent.startsWith(`${n} labels`) && $('#lbCount').textContent.includes('2 sheets'), 'count: ' + $('#lbCount').textContent);
+  const orig = w.print; let printed = false; w.print = () => { printed = true; };
+  click('[data-action="lb-print"]'); await tick(200);
+  w.print = orig;
+  ok(printed, 'print window opened');
+  eq([d.querySelectorAll('#printA4 .lbl').length, d.querySelectorAll('#printA4 .lbl-sheet').length], [n, 2], 'labels and sheets (starting at label 23)');
+  ok($('#pageSize').textContent.includes('margin: 0'), 'edge-to-edge A4 page for label sheets');
+  ok($('#printA4').innerHTML.includes('Test &lt;b&gt;Tee&lt;/b&gt;'), 'names escaped');
+  const label = $('#printA4 .lbl');
+  const sku = label.querySelector('.lbl-sku').textContent;
+  const got = P.Barcode.decodeImageData(await svgToImageData(label.querySelector('svg'), 900, 120));
+  ok(got.length >= 2 && got.every(c => c === sku), `label barcode reads back as ${sku}: ${JSON.stringify(got.slice(0, 2))}`);
+  eq(P.findByCode(sku)?.product.id, tee.id, 'and finds the product');
+  w.setPrintMode('slip');
+});
+
+test('Licence: free trial on a device without a shop account; after it ends selling pauses but data stays usable', async () => {
+  const meta = P.state.meta, keep = meta.installedAt;
+  eq(P.licence().state, 'trial', 'new device is on the free trial');
+  meta.installedAt = new Date(Date.now() - 10 * 864e5).toISOString(); w.renderAll();
+  ok(P.licence().left <= 7 && $('#banners').textContent.includes('days left'), 'reminder in the last week');
+  meta.installedAt = new Date(Date.now() - 20 * 864e5).toISOString(); w.renderAll();
+  eq([P.licence().state, P.sellingAllowed()], ['trial-over', false], 'trial over');
+  ok($('#banners').textContent.includes('Selling is paused'), 'banner explains');
+  await addItem(product('Test <b>Tee</b>'), 'S', 'Blue');
+  ok($('#chargeBtn').disabled && $('#chargeBtn').textContent.includes('paused'), 'Charge disabled');
+  const n = P.state.sales.length;
+  await w.checkout();
+  eq(P.state.sales.length, n, 'no sale possible');
+  await nav('reports');
+  eq(P.ui.view, 'reports', 'reports still open');
+  meta.installedAt = keep; await P.actions['clear-cart'](); w.renderAll();
+  ok(P.sellingAllowed(), 'selling back on');
+});
+
 test('Cart (with discount) survives a reload', async () => {
   await addItem(product('Test <b>Tee</b>'), 'S', 'Red');
   click('[data-action="open-cart"]'); await tick();
@@ -646,7 +699,11 @@ function fakeCloud() {
     if (!userId) return json({ message: 'JWT required' }, 401);
     const mine = db.shops.filter(s => s.owner === userId); // row-level security
     if (p === '/rest/v1/shops') {
-      if (m === 'POST') { const s = { id: 'shop-' + (db.shops.length + 1), owner: userId, name: body.name, generation: 1, next_device: 1 }; db.shops.push(s); return json([s], 201); }
+      if (m === 'POST') {
+        const trial = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10); // like the database default
+        const s = { id: 'shop-' + (db.shops.length + 1), owner: userId, name: body.name, generation: 1, next_device: 1, active_until: trial };
+        db.shops.push(s); return json([s], 201);
+      }
       return json(mine.filter(s => !param('id') || s.id === param('id')));
     }
     const shop = mine.find(s => s.id === (body?.p_shop || param('shop_id') || body?.[0]?.shop_id));
@@ -726,6 +783,20 @@ test('Cloud sync: two tills share sales, stock and settings; a wiped device gets
   eq(recs.filter(r => r.kind === 'movements' && r.data.variantId === v0.id).reduce((a, r) => a + r.data.change, 0), v0.stock, 'cloud movements add up to the stock');
   const stock0 = v0.stock;
   ok($('#netStatus').textContent === 'Synced', 'header says Synced');
+
+  // Subscription follows the shop's paid-until date in the cloud
+  eq(P.licence().state, 'active', 'new shop: 30-day trial counts as active');
+  const day = n => { const x = new Date(); x.setDate(x.getDate() + n); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+  const shop = cloud.shops[0];
+  shop.active_until = day(3); await synced();
+  eq(P.licence().state, 'ending', '3 days left: reminder');
+  shop.active_until = day(-3); await synced();
+  eq([P.licence().state, P.sellingAllowed()], ['grace', true], 'ended 3 days ago: grace, still selling');
+  shop.active_until = day(-10); await synced();
+  eq([P.licence().state, P.sellingAllowed()], ['expired', false], 'ended 10 days ago: selling paused');
+  ok($('#banners').textContent.includes('Selling is paused'), 'paused banner');
+  shop.active_until = null; await synced();
+  eq([P.licence().state, P.sellingAllowed()], ['active', true], 'no end date: active');
 
   // Till B: a brand-new device joins and downloads the shop
   await openDeviceB(cloud);

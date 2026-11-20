@@ -246,6 +246,7 @@ const DEFAULT_META = {
   lastCashupAt: null,       // the current shift started here
   float: 0,                 // cash left in the drawer at the last cash-up
   demo: false,
+  installedAt: null,        // when this device was set up (starts the free trial without a cloud account)
 };
 
 /*
@@ -305,6 +306,10 @@ async function loadState() {
   ui.firstRun = false;
   state.settings = { ...DEFAULT_SETTINGS, ...settings };
   state.meta = { ...DEFAULT_META, ...meta };
+  if (!state.meta.installedAt) { // devices set up before licences existed: trial starts now
+    state.meta.installedAt = new Date().toISOString();
+    await DB.write([opKv('meta', state.meta)]);
+  }
   state.products = products.sort((a, b) => (a.created || 0) - (b.created || 0) || a.name.localeCompare(b.name));
   state.sales = sales.map(normalizeSale).sort(byDate);
   state.cashups = cashups.sort((a, b) => (a.to || '').localeCompare(b.to || ''));
@@ -552,6 +557,7 @@ function cartTotals() {
 /* ===== 7. Checkout ====================================================== */
 
 async function checkout() {
+  if (!sellingAllowed()) return toast('Selling is paused until the subscription is renewed', true);
   const t = cartTotals();
   if (!t.lines.length) return toast(ui.cart.credit ? 'Add the exchange items first' : 'Cart is empty', true);
   for (const l of t.lines) {
@@ -1400,7 +1406,7 @@ function backupOverdue() {
 }
 
 function renderBanners() {
-  let html = '';
+  let html = ui.user ? licenceBanner() : '';
   if (ui.updateReady) {
     html += `<div class="banner info"><p><strong>A new version is ready.</strong> Reload to start using it — your data is kept.</p>
       <button class="btn sm primary" data-action="apply-update">Reload now</button></div>`;
@@ -1620,9 +1626,10 @@ function renderTotals(t = cartTotals()) {
   $('#quickCash').innerHTML = t.due ? `<button class="btn sm" data-action="cash" data-v="">Exact</button>` +
     [...opts].slice(0, 3).map(v => `<button class="btn sm" data-action="cash" data-v="${v}">${money(v).replace('.00', '')}</button>`).join('') : '';
 
-  const blocked = !t.lines.length || (t.cash && (!Number.isFinite(t.tendered) || t.change < 0));
+  const paused = !sellingAllowed();
+  const blocked = paused || !t.lines.length || (t.cash && (!Number.isFinite(t.tendered) || t.change < 0));
   $('#chargeBtn').disabled = blocked;
-  $('#chargeBtn').textContent = !t.lines.length ? 'Charge'
+  $('#chargeBtn').textContent = paused ? 'Selling paused (subscription)' : !t.lines.length ? 'Charge'
     : t.due === 0 ? 'Complete exchange'
     : `Charge ${money(t.due)} · ${PAY_LABEL[ui.cart.payment]}`;
   $('#cartBarCount').textContent = t.count ? `${t.count} item${t.count === 1 ? '' : 's'}${t.credit ? ' · exchange' : ''}` : (t.credit ? 'Exchange credit' : 'Cart empty');
@@ -1654,6 +1661,7 @@ function renderStock() {
           <button class="btn sm" data-action="history" data-id="${esc(p.id)}">History</button>
           <button class="btn sm" data-action="edit-product" data-id="${esc(p.id)}">Edit</button>
           <button class="btn sm" data-action="add-variant" data-id="${esc(p.id)}">+ Variant</button>
+          <button class="btn sm" data-action="labels" data-id="${esc(p.id)}">Labels</button>
         </div>
       </div>
       ${variants.map(v => `
@@ -2170,11 +2178,11 @@ function printA4(kind) {
 }
 
 /** Receipts print on the till slip; A4 reports need an A4 page size. */
-function setPrintMode(mode) {
+function setPrintMode(mode, pageCss = '@page { size: A4 portrait; margin: 12mm 12mm 14mm; }') {
   document.body.classList.toggle('printing-a4', mode === 'a4');
   let st = $('#pageSize');
   if (!st) { st = document.createElement('style'); st.id = 'pageSize'; document.head.append(st); }
-  st.textContent = mode === 'a4' ? '@page { size: A4 portrait; margin: 12mm 12mm 14mm; }' : '';
+  st.textContent = mode === 'a4' ? pageCss : '';
 }
 
 /* ----- Settings ----- */
@@ -2214,7 +2222,14 @@ async function renderSettings() {
     </div>
     </div>
     <div>
-    <div class="section-title" style="margin-top:0">Account</div>
+    <div class="section-title" style="margin-top:0">Subscription</div>
+    <div class="card licence-card ${sellingAllowed() ? '' : 'stopped'}">
+      ${(() => { const l = licence(); return `<p style="margin:0"><strong>${esc(l.text)}</strong></p>
+        <p class="small muted" style="margin:6px 0 0">${cloudOn()
+          ? `Shop: ${esc(Cloud.conf.shopName || '')}${Cloud.conf.licenceCheckedAt ? ` · last checked ${fmtDT(Cloud.conf.licenceCheckedAt)}` : ''}. Renewals are done by ${esc(SUPPLIER.name)}; the date updates on the next sync.`
+          : `Without a shop account this device has a ${TRIAL_DAYS}-day free trial. Create your shop account under Cloud sync to subscribe (new shops get 30 days free).`}</p>`; })()}
+    </div>
+    <div class="section-title">Account</div>
     <div class="card">
       <p style="margin-top:0">Signed in as <strong>${esc(ui.user?.name || '—')}</strong>${ui.user?.role === 'owner' ? ' (owner)' : ''}. Your username is not case-sensitive.</p>
       <div class="row gap-s wrap">
@@ -3018,9 +3033,13 @@ async function syncNow() {
   Cloud.busy = true;
   setCloudStatus('syncing');
   try {
-    const [shop] = await cloudApi(`/rest/v1/shops?select=id,name,generation&id=eq.${encodeURIComponent(Cloud.conf.shopId)}`);
+    const [shop] = await cloudApi(`/rest/v1/shops?select=id,name,generation,active_until&id=eq.${encodeURIComponent(Cloud.conf.shopId)}`);
     if (!shop) throw new Error('This shop was not found in the cloud. Sign in with the shop\'s email.');
     Cloud.conf.shopName = shop.name;
+    // Subscription: remember the paid-until date (works offline until the next check)
+    const until = shop.active_until ?? null;
+    if (until !== Cloud.conf.activeUntil) { Cloud.conf.activeUntil = until; Cloud.licenceChanged = true; }
+    Cloud.conf.licenceCheckedAt = new Date().toISOString();
     await flushAllAdjust();
     if (shop.generation !== Cloud.conf.generation) {
       // Another device started fresh or restored a backup: take its data.
@@ -3038,6 +3057,7 @@ async function syncNow() {
     Cloud.conf.lastSyncAt = new Date().toISOString();
     await saveCloudConf();
     setCloudStatus('ok');
+    if (Cloud.licenceChanged) { Cloud.licenceChanged = false; renderAfterSync(); }
   } catch (e) {
     console.warn('Sync failed:', e);
     setCloudStatus(e.offline ? 'offline' : e.signedOut ? 'signedout' : 'error', e.message);
@@ -3102,7 +3122,7 @@ async function cloudAuthFromForm(create) {
       return;
     }
     if (cloudOn()) { toast('Signed in'); setCloudStatus('ok'); renderSettings(); syncNow(); return; }
-    const shops = await cloudApi('/rest/v1/shops?select=id,name,generation&order=created_at.asc');
+    const shops = await cloudApi('/rest/v1/shops?select=id,name,generation,active_until&order=created_at.asc');
     if (shops.length) openJoinShop(shops[0]); else openCreateShop();
   } catch (e) {
     toast(e.message, true);
@@ -3139,7 +3159,7 @@ async function createCloudShop(mode) {
     }
     const [shop] = await cloudApi('/rest/v1/shops', { method: 'POST', body: { name: state.settings.storeName }, headers: { Prefer: 'return=representation' } });
     const n = await cloudApi('/rest/v1/rpc/claim_device', { method: 'POST', body: { p_shop: shop.id } });
-    Object.assign(Cloud.conf, { shopId: shop.id, shopName: shop.name, generation: shop.generation, deviceCode: deviceLetter(n), lastSeq: 0 });
+    Object.assign(Cloud.conf, { shopId: shop.id, shopName: shop.name, generation: shop.generation, activeUntil: shop.active_until ?? null, deviceCode: deviceLetter(n), lastSeq: 0 });
     state.meta.demo = false;
     await DB.write([opKv('meta', state.meta)]);
     await saveCloudConf();
@@ -3173,7 +3193,7 @@ async function joinCloudShop() {
   try {
     toast('Downloading your shop…');
     const n = await cloudApi('/rest/v1/rpc/claim_device', { method: 'POST', body: { p_shop: shop.id } });
-    Object.assign(Cloud.conf, { shopId: shop.id, shopName: shop.name, generation: shop.generation, deviceCode: deviceLetter(n), lastSeq: 0 });
+    Object.assign(Cloud.conf, { shopId: shop.id, shopName: shop.name, generation: shop.generation, activeUntil: shop.active_until ?? null, deviceCode: deviceLetter(n), lastSeq: 0 });
     // A new till: its own number series, and its own cash drawer starts now.
     state.meta = { ...state.meta, nextReceiptNo: 1, nextCreditNo: 1, nextZNo: 1, lastCashupAt: new Date().toISOString(), float: 0, demo: false };
     await DB.write([opKv('meta', state.meta)]);
@@ -3307,6 +3327,72 @@ function cloudCardHtml() {
   </div>`;
 }
 
+/* ===== 14c-2. Licence / subscription ====================================
+   • A device that isn't connected to a shop account has a 14-day free trial
+     from the day it was set up (meta.installedAt).
+   • A connected device follows its shop's active_until date in the cloud
+     (a new shop gets 30 days; null = no end date). Only the supplier can
+     change that date (the database blocks shops from editing it).
+   • Ending soon (≤ 7 days) → reminder banner. Past the date → 7 days' grace
+     with a warning, then selling is paused: Charge is disabled, everything
+     else (reports, backups, settings, renewing) keeps working.
+   The date is checked on every sync and remembered, so it works offline.
+   PLUG-IN: online payments — link the "Renew" button to a payment page
+   (e.g. PayFast / Yoco link) that updates active_until via a webhook.
+   ======================================================================== */
+
+const TRIAL_DAYS = 14;
+const GRACE_DAYS = 7;
+const SUPPLIER = { name: 'Rails POS', whatsapp: '' }; // e.g. '27821234567' to show a WhatsApp "Renew" button
+
+function licence() {
+  const today = startOfDay();
+  const daysTo = d => Math.round((startOfDay(d) - today) / DAY_MS);
+  if (cloudOn()) {
+    const until = Cloud.conf.activeUntil;
+    if (until == null) return { state: 'active', text: 'Active, no end date' };
+    const end = fromDateInput(until);
+    if (!end) return { state: 'active', text: 'Active' };
+    const left = daysTo(end); // 0 = last paid day is today
+    const endTxt = fmtLong(end);
+    if (left > 7) return { state: 'active', end, left, text: `Active until ${endTxt}` };
+    if (left >= 0) return { state: 'ending', end, left, text: `Ends ${left === 0 ? 'today' : `in ${left} day${left === 1 ? '' : 's'}`} (${endTxt})` };
+    const grace = GRACE_DAYS + left; // days of grace left
+    if (grace > 0) return { state: 'grace', end, left: grace, text: `Ended ${endTxt}. Selling pauses in ${grace} day${grace === 1 ? '' : 's'}` };
+    return { state: 'expired', end, text: `Ended ${endTxt}` };
+  }
+  const start = state.meta.installedAt ? new Date(state.meta.installedAt) : new Date();
+  const end = addDays(startOfDay(start), TRIAL_DAYS);
+  const left = daysTo(end);
+  if (left > 0) return { state: 'trial', end, left, text: `Free trial: ${left} day${left === 1 ? '' : 's'} left` };
+  return { state: 'trial-over', end, text: 'Free trial ended' };
+}
+const sellingAllowed = () => !['expired', 'trial-over'].includes(licence().state);
+
+/** Banner shown on every screen when the subscription needs attention. */
+function licenceBanner() {
+  const l = licence();
+  const renew = SUPPLIER.whatsapp
+    ? `<a class="btn sm primary" href="https://wa.me/${esc(SUPPLIER.whatsapp)}?text=${encodeURIComponent(`Hi, I'd like to renew Rails POS for ${state.settings.storeName}`)}" target="_blank" rel="noopener">Renew on WhatsApp</a>` : '';
+  const connect = !cloudOn() && cloudReady() && can('settings') ? '<button class="btn sm primary" data-action="go-settings">Connect shop account</button>' : '';
+  const check = cloudOn() ? '<button class="btn sm" data-action="cloud-sync">Check again</button>' : '';
+  if (l.state === 'expired' || l.state === 'trial-over') {
+    return `<div class="banner licence-stop"><p><strong>Selling is paused.</strong> ${l.state === 'trial-over'
+      ? 'The free trial on this device has ended. Connect your shop account (Settings → Cloud sync) to carry on.'
+      : `Your Rails POS subscription ended on ${fmtLong(l.end)}. Contact ${esc(SUPPLIER.name)} to renew.`} Your data is safe: reports, backups and settings still work.</p>${connect}${renew}${check}</div>`;
+  }
+  if (l.state === 'grace') {
+    return `<div class="banner licence-warn"><p><strong>Subscription ended.</strong> ${esc(l.text)}. Contact ${esc(SUPPLIER.name)} to renew.</p>${renew}${check}</div>`;
+  }
+  if (l.state === 'ending') {
+    return `<div class="banner"><p><strong>Subscription ${l.left === 0 ? 'ends today' : `ends in ${l.left} day${l.left === 1 ? '' : 's'}`}.</strong> Renew to keep selling without interruption.</p>${renew}</div>`;
+  }
+  if (l.state === 'trial' && !state.meta.demo && l.left <= 7) {
+    return `<div class="banner"><p><strong>${esc(l.text)}.</strong> Create your shop account to keep selling after the trial.</p>${connect}</div>`;
+  }
+  return '';
+}
+
 /* ===== 14d. First-time setup ============================================
    A device with no user accounts shows this instead of the sign-in screen:
      welcome  → Set up my shop / Try it with demo data / My shop already uses Rails POS
@@ -3408,7 +3494,11 @@ async function finishSetup(mode) {
     state.meta = { ...DEFAULT_META };
     ui.cart = emptyCart();
   }
-  if (mode !== 'owner') { await persistEverything(); restoreCart(ui.cart); }
+  if (mode !== 'owner') {
+    state.meta.installedAt = new Date().toISOString();
+    await persistEverything();
+    restoreCart(ui.cart);
+  }
   await saveAuth({ users: [user] });
   ui.firstRun = false;
   writeSession(user.id);
@@ -3427,7 +3517,7 @@ async function setupCloudSignIn() {
   try {
     const r = await cloudSignIn(email, password, false);
     if (r === 'confirm') return setupError('Confirm the shop email first (check the inbox), then sign in');
-    const shops = await cloudApi('/rest/v1/shops?select=id,name,generation&order=created_at.asc');
+    const shops = await cloudApi('/rest/v1/shops?select=id,name,generation,active_until&order=created_at.asc');
     if (!shops.length) return setupError('No shop is linked to this email yet. Go back, set up your shop, then turn on cloud sync in Settings.');
     ui.setupShop = shops[0];
     ui.setupStep = 'join';
@@ -3865,6 +3955,123 @@ function paintPhotoPreview() {
   if (rm) rm.hidden = !ui.formPhoto;
 }
 
+/* ----- Barcode labels (A4 sticker sheets or plain paper) -----
+   Each label: shop name, product, size/colour, price, a Code 128 barcode of
+   the SKU (which the camera scanner and USB scanners read) and the SKU text.
+   Sizes in mm. "Start at label no." lets a half-used sheet be used up. */
+
+const LABEL_SHEETS = {
+  a4_24: { name: '24 per sheet · 70 × 37 mm (3 × 8)', cols: 3, rows: 8, w: 70, h: 37, top: 0.5, left: 0, gapX: 0, gapY: 0 },
+  a4_21: { name: '21 per sheet · 63.5 × 38.1 mm (3 × 7)', cols: 3, rows: 7, w: 63.5, h: 38.1, top: 15.15, left: 7.2, gapX: 2.5, gapY: 0 },
+  a4_40: { name: '40 per sheet · 52.5 × 29.7 mm (4 × 10)', cols: 4, rows: 10, w: 52.5, h: 29.7, top: 0, left: 0, gapX: 0, gapY: 0 },
+  plain: { name: 'Plain A4 paper, cut out (3 × 8)', cols: 3, rows: 8, w: 66, h: 34, top: 12, left: 6, gapX: 0, gapY: 0, cut: true },
+};
+
+/** Code 128 barcode as an SVG that stretches to fit its box (empty if the text can't be encoded). */
+function barcodeSvg(text) {
+  if (!/^[\x20-\x7e]{1,40}$/.test(text)) return '';
+  const { widths } = Barcode.encode128(text);
+  const total = widths.reduce((a, b) => a + b, 0) + 20; // + quiet zones
+  let x = 10, rects = '';
+  widths.forEach((w, i) => { if (i % 2 === 0) rects += `<rect x="${x}" y="0" width="${w}" height="40"/>`; x += w; });
+  return `<svg class="lbl-bc" viewBox="0 0 ${total} 40" preserveAspectRatio="none" shape-rendering="crispEdges" aria-hidden="true">${rects}</svg>`;
+}
+
+function openLabels(productId = null) {
+  const p = productId ? findProduct(productId) : null;
+  if (productId && !p) return;
+  ui.labels = { productId: p?.id || null, sheet: ui.labelSheet || 'a4_24', start: 1, price: true, shop: true, qty: {} };
+  (p ? [p] : state.products).forEach(x => x.variants.forEach(v => { ui.labels.qty[v.id] = p ? Math.max(0, v.stock) : 0; }));
+  openModal({ title: p ? `Labels · ${p.name}` : 'Print barcode labels', body: '<div id="labelsBody"></div>', foot: '<div id="labelsFoot" class="foot-row"></div>' });
+  renderLabels();
+}
+
+function renderLabels() {
+  const L = ui.labels;
+  const products = L.productId ? [findProduct(L.productId)].filter(Boolean) : state.products;
+  $('#labelsBody').innerHTML = `
+    <label class="field"><span>Label sheet</span><select id="lbSheet">${Object.entries(LABEL_SHEETS).map(([k, s]) =>
+      `<option value="${k}" ${k === L.sheet ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
+    <div class="grid-2">
+      <label class="field"><span>Start at label no.</span><input id="lbStart" class="input" inputmode="numeric" value="${L.start}"></label>
+      <div class="field"><span>Show on the label</span>
+        <label class="check"><input type="checkbox" id="lbPrice" ${L.price ? 'checked' : ''}><span>Price</span></label>
+        <label class="check" style="margin-top:6px"><input type="checkbox" id="lbShop" ${L.shop ? 'checked' : ''}><span>Shop name</span></label></div>
+    </div>
+    <div class="row gap-s wrap" style="margin-bottom:10px">
+      <button class="btn sm" data-action="lb-fill" data-mode="stock">Quantity = stock</button>
+      <button class="btn sm" data-action="lb-fill" data-mode="one">1 of each</button>
+      <button class="btn sm" data-action="lb-fill" data-mode="none">Clear</button>
+    </div>
+    <div class="lb-list">${products.length ? products.map(p => `<div class="lb-prod"><div class="lb-pname">${thumbHtml(p, 'sm')}<strong>${esc(p.name)}</strong></div>
+      ${p.variants.map(v => `<label class="lb-row"><span class="grow">${esc(v.size)} / ${esc(v.colour)} <span class="muted small">${esc(v.sku)} · ${v.stock} in stock</span></span>
+        <input class="input sm lb-qty" inputmode="numeric" data-lbq="${esc(v.id)}" value="${L.qty[v.id] || 0}" aria-label="Labels for ${esc(p.name)} ${esc(v.size)} ${esc(v.colour)}"></label>`).join('')}</div>`).join('')
+      : '<div class="empty">No products yet.</div>'}</div>
+    <p class="small muted" style="margin-bottom:0">In the print window choose <strong>A4</strong>, scale <strong>100% / Actual size</strong> and margins <strong>None</strong> so the labels line up with the sheet.</p>`;
+  $('#labelsFoot').innerHTML = `<span class="grow small" id="lbCount"></span>
+    <button class="btn" data-action="close-modal">Cancel</button>
+    <button class="btn primary" data-action="lb-print">Print labels</button>`;
+  paintLabelCount();
+}
+
+function paintLabelCount() {
+  const L = ui.labels;
+  if (!L || !$('#lbCount')) return;
+  const s = LABEL_SHEETS[L.sheet];
+  const total = sum(Object.values(L.qty), n => n);
+  const sheets = total ? Math.ceil((total + L.start - 1) / (s.cols * s.rows)) : 0;
+  $('#lbCount').textContent = `${total} label${total === 1 ? '' : 's'} · ${sheets} sheet${sheets === 1 ? '' : 's'}`;
+  $('[data-action="lb-print"]').disabled = !total;
+}
+
+function onLabelsChange(t) {
+  const L = ui.labels;
+  if (!L) return;
+  if (t.dataset.lbq !== undefined) L.qty[t.dataset.lbq] = Math.max(0, Math.min(999, parseInt(t.value, 10) || 0));
+  if (t.id === 'lbSheet') { L.sheet = t.value; ui.labelSheet = t.value; }
+  if (t.id === 'lbStart') { const per = LABEL_SHEETS[L.sheet].cols * LABEL_SHEETS[L.sheet].rows; L.start = Math.max(1, Math.min(per, parseInt(t.value, 10) || 1)); }
+  if (t.id === 'lbPrice') L.price = t.checked;
+  if (t.id === 'lbShop') L.shop = t.checked;
+  paintLabelCount();
+}
+
+function fillLabels(mode) {
+  const L = ui.labels;
+  const products = L.productId ? [findProduct(L.productId)].filter(Boolean) : state.products;
+  products.forEach(p => p.variants.forEach(v => { L.qty[v.id] = mode === 'stock' ? Math.max(0, v.stock) : mode === 'one' ? 1 : 0; }));
+  renderLabels();
+}
+
+function printLabels() {
+  const L = ui.labels;
+  if (!L) return;
+  const s = LABEL_SHEETS[L.sheet];
+  const per = s.cols * s.rows;
+  const items = [];
+  for (const p of state.products) for (const v of p.variants) for (let i = 0; i < (L.qty[v.id] || 0); i++) items.push({ p, v });
+  if (!items.length) return toast('Choose how many labels to print', true);
+  const cells = [...Array(L.start - 1).fill(null), ...items];
+  const pages = [];
+  for (let i = 0; i < cells.length; i += per) pages.push(cells.slice(i, i + per));
+  const small = s.h < 32 ? ' small' : '';
+  $('#printA4').innerHTML = pages.map(page => `<div class="lbl-sheet">${page.map((it, i) => {
+    if (!it) return '';
+    const left = s.left + (i % s.cols) * (s.w + s.gapX);
+    const top = s.top + Math.floor(i / s.cols) * (s.h + s.gapY);
+    return `<div class="lbl${s.cut ? ' cut' : ''}${small}" style="left:${left}mm;top:${top}mm;width:${s.w}mm;height:${s.h}mm">
+      ${L.shop ? `<div class="lbl-shop">${esc(state.settings.storeName)}</div>` : ''}
+      <div class="lbl-name">${esc(it.p.name)}</div>
+      <div class="lbl-var">${esc(it.v.size)} / ${esc(it.v.colour)}${L.price ? `<span class="lbl-price">${money(priceOf(it.p, it.v))}</span>` : ''}</div>
+      ${barcodeSvg(it.v.sku)}
+      <div class="lbl-sku">${esc(it.v.sku)}</div>
+    </div>`;
+  }).join('')}</div>`).join('');
+  setPrintMode('a4', '@page { size: A4 portrait; margin: 0; }');
+  closeModal();
+  toast(`${items.length} label${items.length === 1 ? '' : 's'} ready to print`);
+  setTimeout(() => window.print(), 50);
+}
+
 /* ===== 15. One tab at a time ============================================
    Each tab keeps the data in memory, so two open tabs could overwrite each
    other's work. A Web Lock makes sure only one tab is "active"; any other
@@ -4065,6 +4272,9 @@ const actions = {
   'photo-remove': () => { ui.formPhoto = null; paintPhotoPreview(); },
   'setup-go': el => { ui.setupStep = el.dataset.step; renderSetup(); },
   'setup-back': () => { ui.setupStep = 'welcome'; renderSetup(); },
+  labels: el => openLabels(el.dataset.id || null),
+  'lb-fill': el => fillLabels(el.dataset.mode),
+  'lb-print': () => printLabels(),
 };
 
 /* Actions that need a permission. Buttons are hidden too, but this is the real check. */
@@ -4079,6 +4289,7 @@ const ACTION_PERMS = {
   'user-add': 'admin', 'user-edit': 'admin', 'user-save': 'admin', 'user-delete': 'admin',
   'cloud-signin': 'settings', 'cloud-signup': 'settings', 'cloud-disconnect': 'settings', 'cloud-create': 'settings', 'cloud-join': 'settings',
   'go-settings': 'settings',
+  labels: 'stock', 'lb-fill': 'stock', 'lb-print': 'stock',
 };
 function allowed(perm) {
   if (!perm || can(perm)) return true;
@@ -4116,6 +4327,7 @@ function bindEvents() {
     if (t.id === 'restoreFile' && t.files[0] && allowed('settings')) { t.files[0].text().then(restoreFromText); t.value = ''; }
     if (t.id === 'uRole' || (t.dataset.perm && t.closest('#modal'))) onUserFormChange(t);
     if (t.id === 'fPhoto') onPhotoPicked(t);
+    if (t.closest?.('#labelsBody')) onLabelsChange(t);
     if ((t.id === 'rFrom' || t.id === 'rTo') && t.value) {
       ui.customFrom = $('#rFrom').value; ui.customTo = $('#rTo').value;
       renderReports();
@@ -4125,6 +4337,7 @@ function bindEvents() {
   document.addEventListener('input', e => {
     if (e.target.id === 'fSizes' || e.target.id === 'fColours') renderVariantGrid();
     if (e.target.id === 'cuCounted') paintCashupDiff();
+    if (e.target.dataset?.lbq !== undefined) onLabelsChange(e.target); // label counts update as you type
   });
 
   document.addEventListener('keydown', e => {
@@ -4208,6 +4421,6 @@ async function boot() {
 
 // Handle for tests / debugging in the console.
 window.__pos = { state, ui, DB, actions, buildReport, computeShift, receiptText, creditNoteText, zText, cartTotals, flushAllAdjust, checkLogin,
-  Cloud, CLOUD, syncNow, applyRemote, Barcode, findByCode, resizePhoto };
+  Cloud, CLOUD, syncNow, applyRemote, Barcode, findByCode, resizePhoto, licence, sellingAllowed };
 
 boot();
