@@ -21,7 +21,9 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - Use +/- or type a quantity, filter for low stock, and receive a supplier delivery in one go.
   - Every stock change is kept in a history: sold, returned, adjusted, counted, received.
 - **Reports and cash-up**
-  - Reports for today, 7 days and 30 days, with refunds counted on the day they happen.
+  - Reports for today, yesterday, 7 days, 30 days, this month or any dates you choose, with refunds counted on the day they happen.
+  - Money in green (refunds and losses in red), comparison with the previous period, takings per hour or per day, profit margin, payment split, categories, top sellers, cashiers and a VAT summary.
+  - A4 printouts (or PDF from the print screen): sales summary, sales list for the bookkeeper, stock on hand with cost and selling value, and cash-ups.
   - Cash-up at the end of a shift: expected cash vs counted cash, over/short, the float for the next shift, and a printable Z-report.
 - **Receipts**
   - Every receipt, credit note and Z-report can be sent on WhatsApp, copied or printed.
@@ -84,7 +86,7 @@ Then open http://localhost:8000. Offline mode only works over `http://localhost`
 
 With the server running, open **http://localhost:8000/tests.html** and click **Run all tests**, or open `tests.html?auto` to run them straight away.
 
-The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 26 tests should pass. They cover:
+The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 27 tests should pass. They cover:
 - sign-in, lock and changing the PIN
 - admin: adding, editing and deleting users, and what a cashier can't do
 - selling and stock

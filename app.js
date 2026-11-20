@@ -239,7 +239,8 @@ const ui = {
   view: 'sell',
   category: 'All',
   lowOnly: false,
-  reportDays: 1,
+  reportRange: 'today', // see RANGES
+  customFrom: '', customTo: '',
   cart: emptyCart(),
   picker: null,
   ret: null,
@@ -851,12 +852,43 @@ function allReturns(fromDate = null, toDate = null) {
   return out;
 }
 
-/** Report numbers for the last N days (1 = today). Refunds are counted on the day they happen. */
-function buildReport(days) {
-  const from = startOfDay();
-  from.setDate(from.getDate() - (days - 1));
-  const sales = state.sales.filter(s => new Date(s.date) >= from);
-  const rets = allReturns(from);
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const DAY_MS = 864e5;
+const fmtShort = d => d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' });
+const fmtLong = d => d.toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+const toDateInput = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const fromDateInput = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ''); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; };
+
+/* Report periods. `to` is exclusive (midnight after the last day). */
+const RANGES = [['today', 'Today'], ['yesterday', 'Yesterday'], ['7', '7 days'], ['30', '30 days'], ['month', 'This month'], ['custom', 'Custom']];
+
+function reportRange(key = ui.reportRange) {
+  const today = startOfDay();
+  const tomorrow = addDays(today, 1);
+  let from = today, to = tomorrow;
+  if (key === 'yesterday') { from = addDays(today, -1); to = today; }
+  if (key === '7') from = addDays(today, -6);
+  if (key === '30') from = addDays(today, -29);
+  if (key === 'month') from = new Date(today.getFullYear(), today.getMonth(), 1);
+  if (key === 'custom') {
+    from = startOfDay(fromDateInput(ui.customFrom) || addDays(today, -6));
+    to = addDays(startOfDay(fromDateInput(ui.customTo) || today), 1);
+    if (to <= from) to = addDays(from, 1);
+  }
+  const days = Math.round((to - from) / DAY_MS);
+  const last = addDays(to, -1);
+  const label = days === 1 ? fmtLong(from) : `${fmtShort(from)} – ${fmtLong(last)}`;
+  return { key, from, to, days, label };
+}
+
+/** Report numbers for a period ({from, to}) or the last N days (1 = today).
+    Refunds are counted on the day they happen. */
+function buildReport(range) {
+  if (typeof range === 'number') { const from = addDays(startOfDay(), -(range - 1)); range = { from, to: addDays(startOfDay(), 1), days: range }; }
+  const { from, to } = range;
+  const inRange = iso => { const d = new Date(iso); return d >= from && d < to; };
+  const sales = state.sales.filter(s => inRange(s.date));
+  const rets = allReturns().filter(x => inRange(x.ret.date));
 
   const gross = sum(sales, s => s.total);
   const refunds = sum(rets, x => x.ret.amount);
@@ -881,15 +913,82 @@ function buildReport(days) {
   sales.forEach(s => s.items.forEach(it => add(it.productId, it.name, it.qty, it.unitPrice * it.qty)));
   rets.forEach(({ sale, ret }) => ret.items.forEach(ri => { const it = sale.items[ri.idx]; add(it.productId, it.name, -ri.qty, -ri.amount); }));
 
+  // By category (line amounts before the sale discount; refunds subtracted)
+  const cats = new Map();
+  const addCat = (pid, qty, amount) => {
+    const name = findProduct(pid)?.category || 'Other';
+    const row = cats.get(name) || { name, qty: 0, amount: 0 };
+    row.qty += qty; row.amount += amount; cats.set(name, row);
+  };
+  sales.forEach(s => s.items.forEach(it => addCat(it.productId, it.qty, it.unitPrice * it.qty)));
+  rets.forEach(({ sale, ret }) => ret.items.forEach(ri => addCat(sale.items[ri.idx].productId, -ri.qty, -ri.amount)));
+
+  // By cashier
+  const people = new Map();
+  sales.forEach(s => {
+    const name = s.cashier || 'Not recorded';
+    const row = people.get(name) || { name, count: 0, amount: 0 };
+    row.count++; row.amount += s.total; people.set(name, row);
+  });
+
+  // Takings over time: per hour for a single day, per day otherwise
+  const days = Math.round((to - from) / DAY_MS);
+  let series;
+  if (days <= 1) {
+    const hours = Array.from({ length: 24 }, (_, h) => ({ key: h, label: `${pad(h)}:00`, short: String(h), amount: 0, count: 0 }));
+    sales.forEach(s => { const h = new Date(s.date).getHours(); hours[h].amount += s.total; hours[h].count++; });
+    rets.forEach(({ ret }) => { hours[new Date(ret.date).getHours()].amount -= ret.amount; });
+    const used = hours.filter(h => h.count || h.amount);
+    const first = Math.min(8, ...used.map(h => h.key)), last = Math.max(17, ...used.map(h => h.key));
+    series = { unit: 'hour', points: hours.slice(first, last + 1) };
+  } else {
+    const pts = [];
+    for (let d = new Date(from), i = 0; d < to && i < 400; d = addDays(d, 1), i++) {
+      pts.push({ key: toDateInput(d), label: fmtLong(d), short: days <= 7 ? d.toLocaleDateString('en-ZA', { weekday: 'short' }) : String(d.getDate()), amount: 0, count: 0 });
+    }
+    const idx = iso => pts.findIndex(p => p.key === toDateInput(new Date(iso)));
+    sales.forEach(s => { const i = idx(s.date); if (i >= 0) { pts[i].amount += s.total; pts[i].count++; } });
+    rets.forEach(({ ret }) => { const i = idx(ret.date); if (i >= 0) pts[i].amount -= ret.amount; });
+    series = { unit: 'day', points: pts };
+  }
+
+  const exVat = revenue - vat;
+  const profit = exVat - cost;
   return {
-    from, sales, rets, gross, refunds, revenue,
+    from, to, days, sales, rets, gross, refunds, revenue,
     count: sales.length,
     avg: sales.length ? Math.round(gross / sales.length) : 0,
-    vat, exVat: revenue - vat, cost, profit: revenue - vat - cost,
+    vat, exVat, cost, profit,
+    margin: exVat > 0 ? Math.round(profit / exVat * 1000) / 10 : 0,
+    discounts: sum(sales, s => s.discount || 0),
     items: sum(sales, s => sum(s.items, it => it.qty)),
     byPayment,
+    topAll: [...top.values()].filter(r => r.qty > 0).sort((a, b) => b.qty - a.qty || b.amount - a.amount),
     top: [...top.values()].filter(r => r.qty > 0).sort((a, b) => b.qty - a.qty || b.amount - a.amount).slice(0, 5),
+    categories: [...cats.values()].filter(c => c.qty || c.amount).sort((a, b) => b.amount - a.amount),
+    cashiers: [...people.values()].sort((a, b) => b.amount - a.amount),
+    series,
   };
+}
+
+/** Net revenue for the same-length period just before this one (for "vs previous"). */
+function previousRevenue(range) {
+  const len = range.to - range.from;
+  const prev = buildReport({ from: new Date(range.from - len), to: range.from });
+  return prev.count || prev.refunds ? prev.revenue : null;
+}
+
+/** Stock on hand with cost and retail value (for the stock report). */
+function stockSummary() {
+  const low = Number(state.settings.lowStock) || 0;
+  const rows = [];
+  for (const p of state.products) for (const v of p.variants) {
+    rows.push({ product: p, variant: v, qty: v.stock, cost: costOf(p, v), price: priceOf(p, v),
+      costValue: Math.max(0, v.stock) * costOf(p, v), retailValue: Math.max(0, v.stock) * priceOf(p, v),
+      low: v.stock <= low });
+  }
+  return { rows, units: sum(rows, r => Math.max(0, r.qty)), costValue: sum(rows, r => r.costValue),
+    retailValue: sum(rows, r => r.retailValue), lowCount: rows.filter(r => r.low).length };
 }
 
 /** Money movements for a shift (from the last cash-up until now). */
@@ -1126,6 +1225,7 @@ function printDoc(ref) {
   // PLUG-IN: Bluetooth / ESC-POS printer — send doc.text to the printer here
   // (Web Bluetooth or a vendor SDK) instead of the browser print dialog.
   $('#printArea').textContent = doc.text;
+  setPrintMode('slip');
   window.print();
 }
 
@@ -1738,42 +1838,257 @@ function renderReports() {
       ${recentZ.length ? `<div class="z-list">${recentZ.map(z => `<button class="link" data-action="open-doc" data-doc="z:${esc(z.id)}">Z${fmtNo(z.number)} · ${fmtDate(z.to)} · ${z.diff === 0 ? 'balanced' : (z.diff > 0 ? 'over ' : 'short ') + money(Math.abs(z.diff))}</button>`).join('')}</div>` : ''}
     </div>`;
 
-  setPressed('[data-action="range"]', b => Number(b.dataset.days) === ui.reportDays);
-  const r = buildReport(ui.reportDays);
-  const label = ui.reportDays === 1 ? 'Today' : `Last ${ui.reportDays} days`;
+  // Period picker
+  $('#rangeSeg').innerHTML = RANGES.map(([k, l]) => `<button data-action="range" data-range="${k}">${l}</button>`).join('');
+  setPressed('[data-action="range"]', b => b.dataset.range === ui.reportRange);
+  const range = reportRange();
+  $('#customRange').hidden = ui.reportRange !== 'custom';
+  $('#rFrom').value = toDateInput(range.from);
+  $('#rTo').value = toDateInput(addDays(range.to, -1));
+
+  const r = buildReport(range);
+  const prev = previousRevenue(range);
   const methods = ['cash', 'card', 'eft', 'credit'].filter(k => k !== 'credit' || r.byPayment.credit.sales || r.byPayment.credit.refunds);
-  const maxPay = Math.max(1, ...methods.map(k => r.byPayment[k].sales));
+  const payTotal = Math.max(1, sum(methods, k => Math.max(0, r.byPayment[k].sales - r.byPayment[k].refunds)));
   const vatOn = r.vat !== 0 || effectiveRate() > 0;
+  const pct = n => `${Math.round(n)}%`;
+
+  // "▲ 12% vs previous 7 days"
+  let trend = '';
+  if (prev !== null && prev !== 0) {
+    const change = (r.revenue - prev) / Math.abs(prev) * 100;
+    const word = range.days === 1 ? 'previous day' : `previous ${range.days} days`;
+    trend = `<div class="trend ${change >= 0 ? 'up' : 'down'}">${change >= 0 ? '▲' : '▼'} ${pct(Math.abs(change))} vs ${word}</div>`;
+  } else if (prev === null && r.count) {
+    trend = '<div class="trend">No sales in the period before</div>';
+  }
+
+  // Takings chart (CSS bars). Hours for one day, days otherwise.
+  const pts = r.series.points;
+  const maxPt = Math.max(1, ...pts.map(p => p.amount));
+  const best = pts.reduce((a, p) => (p.amount > (a?.amount ?? 0) ? p : a), null);
+  const every = pts.length > 20 ? 5 : pts.length > 12 ? 2 : 1;
+  const chart = `<div class="chart" style="--n:${pts.length}" role="img" aria-label="Takings per ${r.series.unit}${best ? `; best ${esc(best.label)} with ${money(best.amount)}` : ''}">
+    ${pts.map((p, i) => `<div class="chart-col" title="${esc(p.label)}: ${money(p.amount)} · ${p.count} sale${p.count === 1 ? '' : 's'}">
+      <span class="chart-bar${p === best ? ' best' : ''}" style="height:${Math.max(0, Math.round(p.amount / maxPt * 100))}%"></span>
+      <span class="chart-lbl">${i % every === 0 || p === best ? esc(p.short) : ''}</span></div>`).join('')}
+  </div>
+  <p class="small muted chart-note">${best ? `Best ${r.series.unit}: <strong>${esc(best.label)}</strong> · <span class="money">${money(best.amount)}</span>` : 'No sales in this period.'}</p>`;
+
   $('#reportBody').innerHTML = `
-    <p class="small muted" style="margin:0 0 10px">${label} · from ${fmtDate(r.from.toISOString())} · refunds counted on the day they happen</p>
+    <p class="small muted" style="margin:0 0 10px"><strong>${esc(range.label)}</strong> · refunds counted on the day they happen</p>
     <div class="kpis">
-      <div class="kpi"><div class="label">Net revenue${vatOn ? ' (incl. VAT)' : ''}</div><div class="value money" data-k="revenue">${money(r.revenue)}</div>
-        <div class="sub">${r.refunds ? `${money(r.gross)} sales − ${money(r.refunds)} refunds` : vatOn ? `VAT ${money(r.vat)}` : 'not VAT registered'}</div></div>
+      <div class="kpi hero"><div class="label">Net takings${vatOn ? ' (incl. VAT)' : ''}</div><div class="value money" data-k="revenue">${money(r.revenue)}</div>
+        <div class="sub">${r.refunds ? `<span class="money">${money(r.gross)}</span> sales − <span class="money neg">${money(r.refunds)}</span> refunds` : vatOn ? `VAT <span class="money">${money(r.vat)}</span>` : 'not VAT registered'}</div>${trend}</div>
+      <div class="kpi"><div class="label">Gross profit</div><div class="value money ${r.profit < 0 ? 'neg' : ''}" data-k="profit">${money(r.profit)}</div>
+        <div class="sub">${r.exVat > 0 ? `${r.margin}% margin · ` : ''}cost <span class="money">${money(r.cost)}</span></div></div>
       <div class="kpi"><div class="label">Sales</div><div class="value num" data-k="count">${r.count}</div><div class="sub">${r.items} items · ${r.rets.length} refund${r.rets.length === 1 ? '' : 's'}</div></div>
-      <div class="kpi"><div class="label">Average basket</div><div class="value money" data-k="avg">${money(r.avg)}</div><div class="sub">per sale</div></div>
-      <div class="kpi"><div class="label">Gross profit</div><div class="value money" data-k="profit">${money(r.profit)}</div><div class="sub">${vatOn ? `ex VAT ${money(r.exVat)}` : `revenue ${money(r.revenue)}`} − cost ${money(r.cost)}</div></div>
+      <div class="kpi"><div class="label">Average sale</div><div class="value money" data-k="avg">${money(r.avg)}</div><div class="sub">${r.discounts ? `discounts given <span class="money neg">${money(r.discounts)}</span>` : 'per customer'}</div></div>
     </div>
+
+    <div class="section-title">Takings per ${r.series.unit}</div>
+    <div class="card">${chart}</div>
+
     <div class="report-cols">
       <div>
         <div class="section-title">By payment method</div>
         <div class="card bars">${methods.map(k => {
           const b = r.byPayment[k];
+          const net = b.sales - b.refunds;
           return `<div class="bar-row"><span>${PAY_LABEL[k] === 'Exchange credit' ? 'Credit' : PAY_LABEL[k]}</span>
-            <span class="bar-track" aria-hidden="true"><span class="bar-fill" style="width:${Math.round(b.sales / maxPay * 100)}%"></span></span>
-            <span class="money small" data-k="pay-${k}">${money(b.sales - b.refunds)}${b.refunds ? ` <span class="muted">(−${money(b.refunds)})</span>` : ''}</span></div>`;
+            <span class="bar-track" aria-hidden="true"><span class="bar-fill" style="width:${Math.round(Math.max(0, net) / payTotal * 100)}%"></span></span>
+            <span class="small pay-amt"><span class="money" data-k="pay-${k}">${money(net)}${b.refunds ? ` <span class="muted">(−${money(b.refunds)})</span>` : ''}</span>
+              <span class="muted pay-pct">${pct(Math.max(0, net) / payTotal * 100)}</span></span></div>`;
         }).join('')}
         <p class="small muted" style="margin:6px 0 0">Net of refunds. Cash refunds include unused exchange credit paid out.</p>
         </div>
+
+        <div class="section-title">By category</div>
+        <div class="card">${r.categories.length ? `<table class="list-table">${r.categories.map(c => `
+          <tr><td>${esc(c.name)} <span class="muted small">· ${c.qty} item${c.qty === 1 ? '' : 's'}</span></td><td><span class="money">${money(c.amount)}</span></td></tr>`).join('')}</table>
+          <p class="small muted" style="margin:6px 0 0">Shelf prices, before sale discounts.</p>`
+          : '<div class="muted small">No sales in this period.</div>'}</div>
       </div>
       <div>
-        <div class="section-title">Top 5 sellers</div>
-        <div class="card">${r.top.length ? `<table class="list-table">${r.top.map((t, i) => `
-          <tr><td>${i + 1}. ${esc(t.name)}</td><td>${t.qty} sold · <span class="money">${money(t.amount)}</span></td></tr>`).join('')}</table>`
+        <div class="section-title">Top sellers</div>
+        <div class="card">${r.top.length ? `<table class="list-table">${r.topAll.slice(0, 8).map((t, i) => `
+          <tr><td><span class="rank">${i + 1}</span>${esc(t.name)}</td><td>${t.qty} sold · <span class="money">${money(t.amount)}</span></td></tr>`).join('')}</table>`
           : '<div class="muted small">No sales in this period.</div>'}</div>
+
+        <div class="section-title">By cashier</div>
+        <div class="card">${r.cashiers.length ? `<table class="list-table">${r.cashiers.map(c => `
+          <tr><td>${esc(c.name)} <span class="muted small">· ${c.count} sale${c.count === 1 ? '' : 's'}</span></td><td><span class="money">${money(c.amount)}</span></td></tr>`).join('')}</table>`
+          : '<div class="muted small">No sales in this period.</div>'}</div>
+
+        ${vatOn ? `<div class="section-title">VAT summary</div>
+        <div class="card"><table class="list-table">
+          <tr><td>Takings incl. VAT</td><td><span class="money">${money(r.revenue)}</span></td></tr>
+          <tr><td>VAT (output tax)</td><td><span class="money">${money(r.vat)}</span></td></tr>
+          <tr><td>Takings excl. VAT</td><td><span class="money">${money(r.exVat)}</span></td></tr>
+        </table></div>` : ''}
       </div>
     </div>
     <div class="section-title">Recent sales</div>
     ${r.sales.length ? r.sales.slice().reverse().slice(0, 10).map(saleRow).join('') : '<div class="empty">No sales in this period.</div>'}`;
+}
+
+/* ----- A4 printed reports ----- */
+
+const A4_REPORTS = [
+  ['summary', 'Sales summary', 'Takings, profit, VAT, payments, categories, top sellers and every day in the period'],
+  ['sales', 'Sales list', 'Every sale and refund in the period, with totals — for your bookkeeper'],
+  ['stock', 'Stock on hand', 'Every product and size with quantity, cost value and selling value'],
+  ['cashups', 'Cash-ups', 'Each Z-report in the period: expected and counted cash, over or short'],
+];
+
+function openPrintMenu() {
+  const range = reportRange();
+  openModal({
+    title: 'Print an A4 report',
+    body: `<p class="small muted" style="margin-top:0">Period: <strong>${esc(range.label)}</strong> (change it with the buttons above the report). On an iPad or phone, the print screen also lets you save as PDF or share it.</p>
+      ${A4_REPORTS.map(([k, l, d], i) => `<label class="check print-opt"><input type="radio" name="a4kind" value="${k}" ${i === 0 ? 'checked' : ''}>
+        <span><strong>${esc(l)}</strong><br><span class="small muted">${esc(d)}</span></span></label>`).join('')}`,
+    foot: `<button class="btn" data-action="close-modal">Cancel</button><button class="btn primary" data-action="print-a4">Print</button>`,
+  });
+}
+
+/** Store details + title block at the top of every A4 page set. */
+function a4Header(title, subtitle) {
+  const st = state.settings;
+  return `<header class="a4-head">
+    <div><div class="a4-store">${esc(st.storeName)}</div>
+      <div class="a4-addr">${esc(st.storeAddress || '').replace(/\n/g, ' · ')}${st.storePhone ? ` · ${esc(st.storePhone)}` : ''}${effectiveRate() > 0 && st.vatNumber ? ` · VAT No. ${esc(st.vatNumber)}` : ''}</div></div>
+    <div class="a4-title"><h1>${esc(title)}</h1><div>${esc(subtitle)}</div></div>
+  </header>`;
+}
+const a4Foot = () => `<footer class="a4-foot">Printed ${esc(fmtDT(new Date().toISOString()))}${ui.user ? ` by ${esc(ui.user.name)}` : ''} · Rails POS</footer>`;
+const m4 = (cents, cls = '') => `<span class="m ${cents < 0 || cls === 'neg' ? 'neg' : ''}">${money(cents)}</span>`;
+
+function a4Summary(range) {
+  const r = buildReport(range);
+  const vatOn = r.vat !== 0 || effectiveRate() > 0;
+  const methods = ['cash', 'card', 'eft', 'credit'].filter(k => k !== 'credit' || r.byPayment.credit.sales || r.byPayment.credit.refunds);
+  const dayRows = r.series.unit === 'day'
+    ? r.series.points
+    : [{ label: range.label, amount: r.revenue, count: r.count }];
+  return `${a4Header('Sales summary', range.label)}
+    <section class="a4-kpis">
+      <div><span>Net takings${vatOn ? ' (incl. VAT)' : ''}</span>${m4(r.revenue)}</div>
+      <div><span>Gross profit</span>${m4(r.profit)}<small>${r.exVat > 0 ? `${r.margin}% margin` : ''}</small></div>
+      <div><span>Sales</span><b>${r.count}</b><small>${r.items} items</small></div>
+      <div><span>Average sale</span>${m4(r.avg)}</div>
+    </section>
+    <div class="a4-cols">
+      <section><h2>Takings</h2><table>
+        <tr><td>Sales</td><td class="r">${m4(r.gross)}</td></tr>
+        <tr><td>Refunds (${r.rets.length})</td><td class="r">${m4(-r.refunds)}</td></tr>
+        <tr class="tot"><td>Net takings</td><td class="r">${m4(r.revenue)}</td></tr>
+        ${vatOn ? `<tr><td>VAT included</td><td class="r">${m4(r.vat)}</td></tr><tr><td>Net takings excl. VAT</td><td class="r">${m4(r.exVat)}</td></tr>` : ''}
+        <tr><td>Cost of goods sold</td><td class="r">${m4(-r.cost)}</td></tr>
+        <tr class="tot"><td>Gross profit</td><td class="r">${m4(r.profit)}</td></tr>
+        ${r.discounts ? `<tr><td>Discounts given</td><td class="r">${m4(r.discounts)}</td></tr>` : ''}
+      </table></section>
+      <section><h2>Payment methods</h2><table>
+        <tr><th>Method</th><th class="r">Sales</th><th class="r">Refunds</th><th class="r">Net</th></tr>
+        ${methods.map(k => { const b = r.byPayment[k]; return `<tr><td>${PAY_LABEL[k]}</td><td class="r">${m4(b.sales)}</td><td class="r">${m4(-b.refunds)}</td><td class="r">${m4(b.sales - b.refunds)}</td></tr>`; }).join('')}
+      </table></section>
+    </div>
+    <div class="a4-cols">
+      <section><h2>Categories</h2><table>
+        <tr><th>Category</th><th class="r">Items</th><th class="r">Amount</th></tr>
+        ${r.categories.map(c => `<tr><td>${esc(c.name)}</td><td class="r">${c.qty}</td><td class="r">${m4(c.amount)}</td></tr>`).join('') || '<tr><td colspan="3">No sales</td></tr>'}
+      </table></section>
+      <section><h2>Top sellers</h2><table>
+        <tr><th>#</th><th>Product</th><th class="r">Sold</th><th class="r">Amount</th></tr>
+        ${r.topAll.slice(0, 10).map((t, i) => `<tr><td>${i + 1}</td><td>${esc(t.name)}</td><td class="r">${t.qty}</td><td class="r">${m4(t.amount)}</td></tr>`).join('') || '<tr><td colspan="4">No sales</td></tr>'}
+      </table></section>
+    </div>
+    ${r.cashiers.length ? `<section><h2>Cashiers</h2><table>
+      <tr><th>Cashier</th><th class="r">Sales</th><th class="r">Amount</th></tr>
+      ${r.cashiers.map(c => `<tr><td>${esc(c.name)}</td><td class="r">${c.count}</td><td class="r">${m4(c.amount)}</td></tr>`).join('')}
+    </table></section>` : ''}
+    ${dayRows.length > 1 ? `<section><h2>Day by day</h2><table>
+      <tr><th>Day</th><th class="r">Sales</th><th class="r">Net takings</th></tr>
+      ${dayRows.map(p => `<tr><td>${esc(p.label)}</td><td class="r">${p.count}</td><td class="r">${m4(p.amount)}</td></tr>`).join('')}
+      <tr class="tot"><td>Total</td><td class="r">${r.count}</td><td class="r">${m4(r.revenue)}</td></tr>
+    </table></section>` : ''}
+    ${a4Foot()}`;
+}
+
+function a4SalesList(range) {
+  const r = buildReport(range);
+  const rows = [
+    ...r.sales.map(s => ({ date: s.date, doc: `#${fmtNo(s.number)}`, who: s.cashier || '', how: PAY_LABEL[s.payment] || s.payment,
+      items: sum(s.items, it => it.qty), disc: s.discount || 0, vat: s.vat, total: s.total, note: s.customer?.name || '' })),
+    ...r.rets.map(({ sale, ret }) => ({ date: ret.date, doc: `CN${fmtNo(ret.number)}`, who: ret.cashier || '', how: PAY_LABEL[ret.method] || ret.method,
+      items: -sum(ret.items, ri => ri.qty), disc: 0, vat: -ret.vat, total: -ret.amount, note: `Refund on #${fmtNo(sale.number)}` })),
+  ].sort((a, b) => a.date.localeCompare(b.date));
+  return `${a4Header('Sales list', range.label)}
+    <table class="a4-list">
+      <thead><tr><th>Date</th><th>Time</th><th>No.</th><th>Cashier</th><th>Payment</th><th class="r">Items</th><th class="r">Discount</th><th class="r">VAT</th><th class="r">Total</th><th>Note</th></tr></thead>
+      <tbody>${rows.map(x => `<tr class="${x.total < 0 ? 'refund' : ''}"><td>${fmtDate(x.date)}</td><td>${fmtTime(x.date)}</td><td>${x.doc}</td><td>${esc(x.who)}</td><td>${esc(x.how)}</td>
+        <td class="r">${x.items}</td><td class="r">${x.disc ? m4(x.disc) : ''}</td><td class="r">${m4(x.vat)}</td><td class="r">${m4(x.total)}</td><td>${esc(x.note)}</td></tr>`).join('')
+        || '<tr><td colspan="10">No sales in this period.</td></tr>'}</tbody>
+      <tfoot><tr class="tot"><td colspan="5">${r.count} sales · ${r.rets.length} refunds</td><td class="r">${r.items}</td><td class="r">${m4(r.discounts)}</td><td class="r">${m4(r.vat)}</td><td class="r">${m4(r.revenue)}</td><td></td></tr></tfoot>
+    </table>
+    ${a4Foot()}`;
+}
+
+function a4Stock() {
+  const s = stockSummary();
+  const byProduct = state.products.slice().sort((a, b) => (a.category || '').localeCompare(b.category || '') || a.name.localeCompare(b.name));
+  return `${a4Header('Stock on hand', `As at ${fmtLong(new Date())}`)}
+    <section class="a4-kpis">
+      <div><span>Units in stock</span><b>${s.units}</b></div>
+      <div><span>Value at cost</span>${m4(s.costValue)}</div>
+      <div><span>Value at selling price</span>${m4(s.retailValue)}</div>
+      <div><span>Low or out of stock</span><b>${s.lowCount}</b><small>at or below ${Number(state.settings.lowStock) || 0}</small></div>
+    </section>
+    <table class="a4-list">
+      <thead><tr><th>Product</th><th>Size / colour</th><th>SKU</th><th class="r">Qty</th><th class="r">Cost</th><th class="r">Price</th><th class="r">Cost value</th><th class="r">Selling value</th></tr></thead>
+      <tbody>${byProduct.map(p => p.variants.map((v, i) => {
+        const row = s.rows.find(x => x.variant === v);
+        return `<tr class="${row.low ? 'low' : ''} ${i === 0 ? 'first' : ''}"><td>${i === 0 ? `<b>${esc(p.name)}</b><br><small>${esc(p.category || '')}</small>` : ''}</td>
+          <td>${esc(v.size)} / ${esc(v.colour)}</td><td class="sku">${esc(v.sku)}</td><td class="r">${v.stock}${row.low ? ' !' : ''}</td>
+          <td class="r">${m4(row.cost)}</td><td class="r">${m4(row.price)}</td><td class="r">${m4(row.costValue)}</td><td class="r">${m4(row.retailValue)}</td></tr>`;
+      }).join('')).join('') || '<tr><td colspan="8">No products yet.</td></tr>'}</tbody>
+      <tfoot><tr class="tot"><td colspan="3">Total</td><td class="r">${s.units}</td><td></td><td></td><td class="r">${m4(s.costValue)}</td><td class="r">${m4(s.retailValue)}</td></tr></tfoot>
+    </table>
+    <p class="a4-note">! = at or below the low-stock level.</p>
+    ${a4Foot()}`;
+}
+
+function a4Cashups(range) {
+  const zs = state.cashups.filter(z => { const d = new Date(z.to); return d >= range.from && d < range.to; });
+  return `${a4Header('Cash-ups', range.label)}
+    <table class="a4-list">
+      <thead><tr><th>Z no.</th><th>From</th><th>To</th><th class="r">Sales</th><th class="r">Net takings</th><th class="r">Expected cash</th><th class="r">Counted</th><th class="r">Over / short</th></tr></thead>
+      <tbody>${zs.map(z => `<tr><td>Z${fmtNo(z.number)}</td><td>${z.from ? fmtDT(z.from) : '—'}</td><td>${fmtDT(z.to)}</td><td class="r">${z.salesCount}</td>
+        <td class="r">${m4(z.net)}</td><td class="r">${m4(z.expected)}</td><td class="r">${m4(z.counted)}</td>
+        <td class="r">${z.diff === 0 ? 'Balanced' : m4(z.diff, z.diff < 0 ? 'neg' : '')}</td></tr>`).join('')
+        || '<tr><td colspan="8">No cash-ups in this period.</td></tr>'}</tbody>
+      ${zs.length ? `<tfoot><tr class="tot"><td colspan="3">${zs.length} cash-up${zs.length === 1 ? '' : 's'}</td><td class="r">${sum(zs, z => z.salesCount)}</td><td class="r">${m4(sum(zs, z => z.net))}</td>
+        <td class="r">${m4(sum(zs, z => z.expected))}</td><td class="r">${m4(sum(zs, z => z.counted))}</td><td class="r">${m4(sum(zs, z => z.diff))}</td></tr></tfoot>` : ''}
+    </table>
+    ${a4Foot()}`;
+}
+
+/** Build the chosen report into #printA4 and open the print dialog on A4 paper. */
+function printA4(kind) {
+  const range = reportRange();
+  const html = kind === 'sales' ? a4SalesList(range) : kind === 'stock' ? a4Stock() : kind === 'cashups' ? a4Cashups(range) : a4Summary(range);
+  $('#printA4').innerHTML = html;
+  setPrintMode('a4');
+  closeModal();
+  setTimeout(() => window.print(), 50); // let the modal close first
+}
+
+/** Receipts print on the till slip; A4 reports need an A4 page size. */
+function setPrintMode(mode) {
+  document.body.classList.toggle('printing-a4', mode === 'a4');
+  let st = $('#pageSize');
+  if (!st) { st = document.createElement('style'); st.id = 'pageSize'; document.head.append(st); }
+  st.textContent = mode === 'a4' ? '@page { size: A4 portrait; margin: 12mm 12mm 14mm; }' : '';
 }
 
 /* ----- Settings ----- */
@@ -2483,7 +2798,9 @@ const actions = {
   receive: el => openReceive(el.dataset.id),
   'receive-save': el => saveReceive(el.dataset.id),
   history: el => openHistory(el.dataset.id),
-  range: el => { ui.reportDays = Number(el.dataset.days); renderReports(); },
+  range: el => { ui.reportRange = el.dataset.range; renderReports(); },
+  'print-menu': () => openPrintMenu(),
+  'print-a4': () => printA4($('#modal input[name="a4kind"]:checked')?.value || 'summary'),
   cashup: () => openCashup(),
   'cashup-save': () => saveCashup(),
   'backup-download': () => backupDownload(),
@@ -2510,7 +2827,7 @@ const ACTION_PERMS = {
   'toggle-low': 'stock', 'add-product': 'stock', 'np-all': 'stock', 'np-save': 'stock', 'edit-product': 'stock', 'ep-save': 'stock',
   'add-variant': 'stock', 'edit-variant': 'stock', 'variant-save': 'stock', 'delete-variant': 'stock', 'delete-product': 'stock',
   'stock-d': 'stock', receive: 'stock', 'receive-save': 'stock', history: 'stock',
-  range: 'reports', cashup: 'reports', 'cashup-save': 'reports',
+  range: 'reports', cashup: 'reports', 'cashup-save': 'reports', 'print-menu': 'reports', 'print-a4': 'reports',
   'backup-download': 'settings', 'backup-copy': 'settings', 'backup-share': 'settings', 'restore-paste': 'settings',
   'export-csv': 'settings', 'start-fresh': 'settings', 'load-demo': 'settings',
   'user-add': 'admin', 'user-edit': 'admin', 'user-save': 'admin', 'user-delete': 'admin',
@@ -2549,6 +2866,10 @@ function bindEvents() {
     if (t.dataset.setting && allowed('settings')) onSettingChange(t);
     if (t.id === 'restoreFile' && t.files[0] && allowed('settings')) { t.files[0].text().then(restoreFromText); t.value = ''; }
     if (t.id === 'uRole' || (t.dataset.perm && t.closest('#modal'))) onUserFormChange(t);
+    if ((t.id === 'rFrom' || t.id === 'rTo') && t.value) {
+      ui.customFrom = $('#rFrom').value; ui.customTo = $('#rTo').value;
+      renderReports();
+    }
   });
 
   document.addEventListener('input', e => {
@@ -2596,6 +2917,7 @@ function bindEvents() {
   window.addEventListener('pagehide', flush);
 
   window.matchMedia('(min-width: 860px)').addEventListener('change', () => { closeCartSheet(); updateInert(); });
+  window.addEventListener('afterprint', () => setPrintMode('slip'));
 
   channel?.addEventListener('message', e => { if (e.data?.type === 'takeover') pauseThisTab(); });
 }

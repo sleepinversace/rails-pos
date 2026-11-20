@@ -221,12 +221,40 @@ test('Partial return: 1 of 2 items, cash refund, credit note', async () => {
 
 test('Reports: revenue, average, profit and payment split include the refund', async () => {
   await nav('reports');
-  click('[data-action="range"][data-days="1"]'); await tick();
+  click('[data-action="range"][data-range="today"]'); await tick();
   const k = n => $(`[data-k="${n}"]`).textContent;
   // gross 460 + 207 = 667, refund 230 -> 437; VAT 60 + 27 - 30 = 57; cost 200 + 100 - 100 = 200
   eq([k('revenue'), k('count'), k('avg'), k('profit')], ['R437.00', '2', 'R333.50', 'R180.00'], 'KPIs');
   ok(k('pay-cash').startsWith('R230.00'), 'cash net of refund: ' + k('pay-cash'));
   ok(k('pay-card').startsWith('R207.00'), 'card');
+});
+
+test('Reports: periods, chart, green money and A4 printouts', async () => {
+  await nav('reports');
+  click('[data-action="range"][data-range="7"]'); await tick();
+  eq(d.querySelectorAll('.chart-col').length, 7, '7 day columns');
+  ok(w.getComputedStyle($('[data-k="revenue"]')).color !== w.getComputedStyle($('.kpi .label')).color, 'money is coloured');
+  click('[data-action="range"][data-range="yesterday"]'); await tick();
+  eq($('[data-k="count"]').textContent, '0', 'nothing sold yesterday');
+  click('[data-action="range"][data-range="custom"]'); await tick();
+  ok(!$('#customRange').hidden, 'date pickers shown');
+  click('[data-action="range"][data-range="month"]'); await tick();
+  const range = w.reportRange('today');
+  const docs = [w.a4Summary(range), w.a4SalesList(range), w.a4Stock(), w.a4Cashups(range)];
+  for (const h of docs) ok(!/undefined|NaN/.test(h), 'no undefined/NaN in A4 report');
+  ok(docs[0].includes('R437.00'), 'summary has net takings');
+  ok(docs[1].includes('CN00001') && docs[1].includes('-R230.00'), 'sales list has the refund');
+  ok(docs[2].includes('Test &lt;b&gt;Tee&lt;/b&gt;') && docs[2].includes('TB-RED-S'), 'stock report escaped, lists SKUs');
+  click('[data-action="print-menu"]'); await tick();
+  eq(d.querySelectorAll('#modal input[name="a4kind"]').length, 4, 'four A4 reports offered');
+  const origPrint = w.print; let printed = false; w.print = () => { printed = true; };
+  $('#modal input[value="stock"]').checked = true;
+  click('[data-action="print-a4"]'); await tick(150);
+  w.print = origPrint;
+  ok(printed && d.body.classList.contains('printing-a4') && $('#printA4').textContent.includes('Stock on hand'), 'A4 print prepared');
+  ok($('#pageSize').textContent.includes('A4'), 'A4 page size');
+  w.setPrintMode('slip');
+  ok(!d.body.classList.contains('printing-a4') && !$('#pageSize').textContent, 'back to slip printing');
 });
 
 test('Exchange: return the other item as credit, buy a dearer one, pay the difference', async () => {
@@ -401,7 +429,7 @@ test('Accessibility: focus is kept in dialogs; nav has aria-current; colours hav
     d.documentElement.dataset.theme = theme;
     const css = n => w.getComputedStyle(d.documentElement).getPropertyValue(n).trim();
     const pairs = [['--text', '--bg'], ['--muted', '--bg'], ['--muted', '--surface'], ['--muted', '--surface-2'], ['--accent-ink', '--accent'],
-      ['--accent', '--surface'], ['--warn', '--warn-soft'], ['--danger', '--danger-soft'], ['--danger', '--surface'], ['--ok', '--ok-soft']];
+      ['--accent', '--surface'], ['--warn', '--warn-soft'], ['--danger', '--danger-soft'], ['--danger', '--surface'], ['--ok', '--ok-soft'], ['--money', '--surface'], ['--money', '--bg']];
     for (const [fg, bg] of pairs) { const c = contrast(css(fg), css(bg)); if (c < 4.5) fails.push(`${theme} ${fg} on ${bg}: ${c.toFixed(2)}`); }
   }
   delete d.documentElement.dataset.theme;

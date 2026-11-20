@@ -26,6 +26,8 @@
   --warn-soft: #fcefd2;
   --ok: #157a3c;
   --ok-soft: #dcf3e3;
+  --money: #0f7a3c;      /* rand amounts in reports */
+  --money-bar: #22a05a;  /* chart bars */
   --shadow-sm: 0 1px 2px rgba(20,30,55,.06);
   --shadow: 0 1px 3px rgba(20,30,55,.08), 0 10px 28px rgba(20,30,55,.10);
   --radius: 14px;
@@ -58,6 +60,8 @@
     --warn-soft: #3a2d0e;
     --ok: #4ade80;
     --ok-soft: #12321e;
+    --money: #4ade80;
+    --money-bar: #2fb66a;
     --shadow-sm: 0 1px 2px rgba(0,0,0,.35);
     --shadow: 0 1px 3px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.4);
     color-scheme: dark;
@@ -83,6 +87,8 @@
   --warn-soft: #3a2d0e;
   --ok: #4ade80;
   --ok-soft: #12321e;
+  --money: #4ade80;
+  --money-bar: #2fb66a;
   --shadow-sm: 0 1px 2px rgba(0,0,0,.35);
   --shadow: 0 1px 3px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.4);
   color-scheme: dark;
@@ -346,6 +352,49 @@ label.field > span { display: block; font-size: 13px; font-weight: 600; color: v
 .kpi .label { font-size: 12px; color: var(--muted); font-weight: 600; }
 .kpi .value { font-size: 22px; font-weight: 800; margin-top: 2px; }
 .kpi .sub { font-size: 12px; color: var(--muted); }
+
+/* ----- Reports: money in green, refunds/losses in red ----- */
+#view-reports .money { color: var(--money); font-weight: 700; }
+#view-reports .money.neg, #view-reports .money .neg { color: var(--danger); }
+#view-reports .money .muted { color: var(--muted); font-weight: 500; }
+#view-reports .kpi .value.money { font-size: 24px; }
+#view-reports .kpi.hero { background: linear-gradient(160deg, color-mix(in srgb, var(--money) 9%, var(--surface)), var(--surface) 70%); border-top-color: var(--money); }
+#view-reports .sale-row:not(.returned) .t { color: var(--money); }
+.trend { margin-top: 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.trend.up { color: var(--money); }
+.trend.down { color: var(--danger); }
+.report-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.report-bar .seg.range { flex: 1 1 420px; max-width: 640px; margin: 0; overflow-x: auto; scrollbar-width: none; }
+.report-bar .seg.range button { flex: 1 0 auto; padding: 8px 10px; }
+.report-bar > .btn { flex: none; }
+.ico-sm { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.custom-range { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; max-width: 420px; }
+.pay-amt { display: inline-flex; gap: 8px; align-items: baseline; justify-content: flex-end; }
+.pay-pct { min-width: 34px; text-align: right; font-size: 12px; }
+#view-reports .bar-fill { background: var(--money-bar); }
+#view-reports .kpi { border-top-color: var(--money); }
+.rank {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; margin-right: 8px; border-radius: 99px;
+  background: var(--surface-2); font-size: 12px; font-weight: 700; color: var(--muted);
+}
+.list-table tr:first-child .rank { background: var(--accent); color: var(--accent-ink); }
+.print-opt { padding: 12px; border: 1px solid var(--border); border-radius: 12px; margin-bottom: 8px; }
+.print-opt:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+
+/* Takings chart: one column per hour/day */
+.chart {
+  display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 3px;
+  align-items: end; height: 170px; padding-top: 6px;
+}
+.chart-col { display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; height: 100%; min-width: 0; }
+.chart-bar {
+  display: block; min-height: 2px; border-radius: 5px 5px 2px 2px;
+  background: color-mix(in srgb, var(--money-bar) 55%, var(--surface-2));
+  transition: background-color .15s;
+}
+.chart-bar.best, .chart-col:hover .chart-bar { background: var(--money-bar); }
+.chart-lbl { height: 18px; margin-top: 4px; font-size: 11px; color: var(--muted); text-align: center; white-space: nowrap; overflow: visible; }
+.chart-note { margin: 6px 0 0; }
 .bars .bar-row { display: grid; grid-template-columns: 56px 1fr auto; gap: 8px; align-items: center; margin: 6px 0; font-size: 14px; }
 .bar-track { height: 10px; background: var(--surface-2); border-radius: 99px; overflow: hidden; }
 .bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
@@ -519,9 +568,52 @@ input:disabled { opacity: .5; }
   .toast { bottom: 24px; }
 }
 
-/* Print: only the receipt */
+/* ----- Printing -----
+   Receipts: only the till slip (#printArea).
+   A4 reports: body.printing-a4 shows only #printA4 (page size set from app.js). */
+.print-a4 { display: none; }
 @media print {
-  body { background: #fff; padding: 0; }
-  body > *:not(.print-area) { display: none !important; }
-  .print-area { display: block; font: 12px/1.3 "Courier New", monospace; color: #000; white-space: pre; margin: 0; }
+  body { background: #fff; padding: 0 !important; }
+  body > * { display: none !important; }
+  body:not(.printing-a4) > .print-area { display: block !important; font: 12px/1.3 "Courier New", monospace; color: #000; white-space: pre; margin: 0; }
+  body.printing-a4 > .print-a4 { display: block !important; }
 }
+.print-a4 {
+  color: #111; font: 10pt/1.35 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+.print-a4 .a4-head {
+  display: flex; justify-content: space-between; align-items: flex-end; gap: 16px;
+  padding-bottom: 8px; margin-bottom: 12px; border-bottom: 3px solid #1e2a44;
+}
+.print-a4 .a4-store { font-size: 15pt; font-weight: 800; color: #1e2a44; }
+.print-a4 .a4-addr { font-size: 8.5pt; color: #555; margin-top: 2px; }
+.print-a4 .a4-title { text-align: right; }
+.print-a4 .a4-title h1 { font-size: 14pt; margin: 0; color: #c0442f; }
+.print-a4 .a4-title div { font-size: 9pt; color: #333; }
+.print-a4 h2 { font-size: 10.5pt; margin: 12px 0 4px; color: #1e2a44; text-transform: uppercase; letter-spacing: .04em; }
+.print-a4 table { width: 100%; border-collapse: collapse; }
+.print-a4 th { text-align: left; font-size: 8.5pt; color: #555; font-weight: 700; border-bottom: 1.5px solid #1e2a44; padding: 3px 4px; }
+.print-a4 td { padding: 3px 4px; border-bottom: 0.5px solid #d6d9e0; vertical-align: top; }
+.print-a4 .r { text-align: right; white-space: nowrap; }
+.print-a4 .m { color: #0b6b34; font-weight: 600; font-variant-numeric: tabular-nums; }
+.print-a4 .m.neg { color: #b42318; }
+.print-a4 tr.tot td { border-top: 1.5px solid #1e2a44; border-bottom: 0; font-weight: 800; }
+.print-a4 tr.refund td { background: #fdf0ee; }
+.print-a4 tr.low td { background: #fdf5e4; }
+.print-a4 tr.first td { border-top: 1px solid #b9c0cc; }
+.print-a4 .sku { font-family: ui-monospace, Consolas, monospace; font-size: 8pt; }
+.print-a4 small { color: #666; font-size: 8pt; }
+.print-a4 .a4-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 6px; }
+.print-a4 .a4-kpis > div { border: 1px solid #d6d9e0; border-top: 3px solid #0b6b34; border-radius: 6px; padding: 6px 8px; }
+.print-a4 .a4-kpis span:not(.m) { display: block; font-size: 8pt; color: #555; }
+.print-a4 .a4-kpis .m { display: block; }
+.print-a4 .a4-kpis .m, .print-a4 .a4-kpis b { font-size: 13pt; font-weight: 800; }
+.print-a4 .a4-kpis small { display: block; }
+.print-a4 .a4-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.print-a4 section { break-inside: avoid; }
+.print-a4 .a4-list thead { display: table-header-group; } /* repeat headings on every page */
+.print-a4 .a4-list tr { break-inside: avoid; }
+.print-a4 .a4-list { font-size: 9pt; }
+.print-a4 .a4-note { font-size: 8pt; color: #555; }
+.print-a4 .a4-foot { margin-top: 14px; padding-top: 6px; border-top: 1px solid #d6d9e0; font-size: 8pt; color: #666; }
