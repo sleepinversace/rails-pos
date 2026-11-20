@@ -494,6 +494,7 @@ function cartTotals() {
   } else {
     discount = Math.min(subtotal, Math.max(0, parseMoney(c.discountText) || 0));
   }
+  if (!can('discount')) { discount = 0; pct = 0; } // this user may not give discounts
   const total = subtotal - discount;
   const vat = vatFromInclusive(total, rate);
   const credit = c.credit?.amount || 0;
@@ -1132,7 +1133,7 @@ function showDoc(ref, { justSold = false } = {}) {
   const doc = resolveDoc(ref);
   if (!doc) return;
   const s = doc.sale;
-  const canReturn = doc.kind === 'sale' && s.status !== 'returned';
+  const canReturn = doc.kind === 'sale' && s.status !== 'returned' && can('returns');
   openModal({
     title: (justSold ? 'Sale complete · ' : '') + doc.title,
     body: `
@@ -1255,9 +1256,9 @@ function renderBanners() {
   }
   if (state.meta.demo) {
     html += `<div class="banner info"><p><strong>Demo data.</strong> These products and sales are samples to try things out.</p>
-      <button class="btn sm primary" data-action="start-fresh">Start fresh</button></div>`;
+      ${can('settings') ? '<button class="btn sm primary" data-action="start-fresh">Start fresh</button>' : ''}</div>`;
   }
-  if (backupOverdue()) {
+  if (backupOverdue() && can('settings')) {
     const last = state.settings.lastBackupAt;
     html += `<div class="banner"><p><strong>Back up your data.</strong> ${last ? `Last backup ${daysAgo(last)} days ago.` : 'No backup yet.'} Your data lives only on this device.</p>
       <button class="btn sm" data-action="backup-download">Back up now</button></div>`;
@@ -1277,9 +1278,11 @@ function renderAll() {
   // Theme: no attribute = follow the device; otherwise force light/dark.
   if (state.settings.theme === 'auto') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = state.settings.theme;
+  applyPermissions();
   renderBanners();
   renderSell();
   renderCart();
+  if (ui.view === 'admin') renderAdmin();
   if (ui.view === 'stock') renderStock();
   if (ui.view === 'sales') renderSales();
   if (ui.view === 'reports') renderReports();
@@ -1287,6 +1290,10 @@ function renderAll() {
 }
 
 function showView(name) {
+  if (VIEW_PERMS[name] && !can(VIEW_PERMS[name])) {
+    if (ui.user) toast(`${ui.user.name} doesn't have access to ${name}`, true);
+    name = 'sell';
+  }
   ui.view = name;
   $$('.view').forEach(v => v.classList.toggle('active', v.id === `view-${name}`));
   $$('.app-nav button').forEach(b => {
@@ -2023,14 +2030,39 @@ const PIN_ITERATIONS = 100000;
 const SESSION_KEY = DB_NAME + '-signed-in';
 const MAX_TRIES = 5;          // wrong PINs in a row before a pause
 const LOCKOUT_MS = 30 * 1000; // length of that pause
+/* What a user may do. Selling is always allowed. [key, label, description] */
+const PERMISSIONS = [
+  ['discount', 'Give discounts', 'Type a discount in the cart'],
+  ['returns', 'Refunds and exchanges', 'Return items on a sale'],
+  ['sales', 'Sales history', 'See past sales and reprint receipts'],
+  ['stock', 'Stock', 'Add and edit products, change stock, receive deliveries'],
+  ['reports', 'Reports and cash-up', 'See takings and profit, do the cash-up'],
+  ['settings', 'Settings and backups', 'Store details, VAT, backup, restore, start fresh'],
+  ['admin', 'Admin', 'Add, change and delete users and what they may do'],
+];
+const ALL_PERMS = PERMISSIONS.map(p => p[0]);
+/* Roles are presets that tick the boxes; any change to the boxes makes it "Custom". */
+const ROLES = {
+  owner: { label: 'Owner', perms: ALL_PERMS },
+  manager: { label: 'Manager', perms: ALL_PERMS.filter(p => p !== 'admin') },
+  cashier: { label: 'Cashier', perms: ['sales'] },
+  custom: { label: 'Custom', perms: null },
+};
+/* Which permission each screen needs (Sell needs none). */
+const VIEW_PERMS = { stock: 'stock', sales: 'sales', reports: 'reports', settings: 'settings', admin: 'admin' };
+
 // The owner account created on first run (PIN stored as a hash only).
 const DEFAULT_AUTH = {
   users: [{
-    username: 'amish', name: 'Amish', role: 'owner',
+    id: 'u-amish', name: 'Amish', role: 'owner', perms: [...ALL_PERMS],
     salt: 'DTcSYbvG4OYR8B5sHx9K0Q==', hash: 'zMlfNbdHmzdX1/zOgfOfG1N0mOQBaWlTbg3lN6KwEXY=',
   }],
 };
 const signinState = { failures: 0, lockedUntil: 0 };
+
+/** Does the signed-in user have this permission? */
+const can = perm => !!ui.user?.perms?.includes(perm);
+const roleOf = perms => Object.keys(ROLES).find(r => ROLES[r].perms && ROLES[r].perms.length === perms.length && ROLES[r].perms.every(p => perms.includes(p))) || 'custom';
 
 const normUser = s => String(s ?? '').trim().toLowerCase();
 const toB64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
@@ -2045,38 +2077,53 @@ async function hashPin(pin, saltB64) {
 /** The accounts record; creates the default owner on first run. */
 async function loadAuth() {
   let auth = await DB.get('kv', 'auth');
-  if (!auth?.users?.length) {
-    auth = structuredClone(DEFAULT_AUTH);
-    await DB.write([opKv('auth', auth)]);
+  let changed = false;
+  if (!auth?.users?.length) { auth = structuredClone(DEFAULT_AUTH); changed = true; }
+  // Accounts from the first sign-in version had no id or permissions.
+  for (const u of auth.users) {
+    if (!u.id) { u.id = 'u-' + normUser(u.name || u.username); changed = true; }
+    if (!Array.isArray(u.perms)) { u.perms = [...(ROLES[u.role] || ROLES.cashier).perms]; changed = true; }
+    if ('username' in u) { delete u.username; changed = true; }
   }
+  if (changed) await DB.write([opKv('auth', auth)]);
   return auth;
 }
+async function saveAuth(auth) { await DB.write([opKv('auth', auth)]); }
+const adminCount = users => users.filter(u => u.perms.includes('admin')).length;
 
-/** Returns the matching user, or null. */
+/** Returns the matching user, or null. The username is the user's name, in any capitals. */
 async function checkLogin(username, pin) {
   const auth = await loadAuth();
-  const user = auth.users.find(u => u.username === normUser(username));
+  const user = auth.users.find(u => normUser(u.name) === normUser(username));
   // Hash even for an unknown name, so both kinds of mistake take equally long.
   const hash = await hashPin(pin, user?.salt || DEFAULT_AUTH.users[0].salt);
   return user && hash === user.hash ? user : null;
 }
 
 function readSession() { try { return sessionStorage.getItem(SESSION_KEY); } catch { return null; } }
-function writeSession(username) {
-  try { if (username) sessionStorage.setItem(SESSION_KEY, username); else sessionStorage.removeItem(SESSION_KEY); } catch { /* private mode */ }
+function writeSession(userId) {
+  try { if (userId) sessionStorage.setItem(SESSION_KEY, userId); else sessionStorage.removeItem(SESSION_KEY); } catch { /* private mode */ }
 }
 function setUser(u) {
-  ui.user = u ? { username: u.username, name: u.name, role: u.role } : null;
+  ui.user = u ? { id: u.id, name: u.name, role: u.role, perms: [...u.perms] } : null;
   $('#userLabel').textContent = u ? u.name : '';
   $('#lockBtn').hidden = !u;
   $('#lockBtn').setAttribute('aria-label', u ? `Lock the till (signed in as ${u.name})` : 'Lock');
+  applyPermissions();
+}
+
+/** Show only the screens and controls the signed-in user may use. */
+function applyPermissions() {
+  $$('.app-nav [data-perm]').forEach(b => { b.hidden = !can(b.dataset.perm); });
+  $('#discountRow').hidden = !can('discount');
+  if (VIEW_PERMS[ui.view] && !can(VIEW_PERMS[ui.view])) showView('sell');
 }
 
 /** Still signed in from earlier in this tab (e.g. after a reload)? */
 async function resumeSession() {
-  const name = readSession();
-  if (!name) return false;
-  const user = (await loadAuth()).users.find(u => u.username === name);
+  const id = readSession();
+  if (!id) return false;
+  const user = (await loadAuth()).users.find(u => u.id === id);
   if (user) setUser(user);
   return !!user;
 }
@@ -2119,7 +2166,7 @@ async function submitSignIn() {
     return;
   }
   signinState.failures = 0;
-  writeSession(user.username);
+  writeSession(user.id);
   setUser(user);
   $('#siPin').value = '';
   err.textContent = '';
@@ -2154,14 +2201,120 @@ async function saveNewPin() {
   if (!ui.user) return;
   if (!/^\d{4}$/.test(newPin)) return toast('The new PIN must be exactly 4 digits', true);
   if (newPin !== again) return toast('The two new PINs are not the same', true);
-  if (!(await checkLogin(ui.user.username, oldPin))) return toast('The current PIN is wrong', true);
+  if (!(await checkLogin(ui.user.name, oldPin))) return toast('The current PIN is wrong', true);
   const auth = await loadAuth();
-  const user = auth.users.find(u => u.username === ui.user.username);
-  user.salt = toB64(crypto.getRandomValues(new Uint8Array(16)));
-  user.hash = await hashPin(newPin, user.salt);
-  await DB.write([opKv('auth', auth)]);
+  const user = auth.users.find(u => u.id === ui.user.id);
+  await setPin(user, newPin);
+  await saveAuth(auth);
   closeModal();
   toast('PIN changed');
+}
+
+async function setPin(user, pin) {
+  user.salt = toB64(crypto.getRandomValues(new Uint8Array(16)));
+  user.hash = await hashPin(pin, user.salt);
+}
+
+/* ----- Admin: users and what they may do ----- */
+
+async function renderAdmin() {
+  const auth = await loadAuth();
+  const label = p => PERMISSIONS.find(x => x[0] === p)?.[1];
+  $('#userList').innerHTML = auth.users.map(u => {
+    const me = u.id === ui.user?.id;
+    return `<div class="card user-card">
+      <div class="user-head">
+        <div><h3>${esc(u.name)}${me ? ' <span class="small muted">(you)</span>' : ''}</h3>
+          <span class="role-tag">${esc(ROLES[u.role]?.label || 'Custom')}</span></div>
+        <div class="row gap-s wrap">
+          <button class="btn sm" data-action="user-edit" data-id="${esc(u.id)}">Edit</button>
+          ${me ? '' : `<button class="btn sm danger" data-action="user-delete" data-id="${esc(u.id)}">Delete</button>`}
+        </div>
+      </div>
+      <p class="small muted" style="margin:8px 0 0">Can: ${['Sell', ...ALL_PERMS.filter(p => u.perms.includes(p)).map(label)].map(esc).join(' · ')}</p>
+    </div>`;
+  }).join('');
+}
+
+function openUserForm(id = null) {
+  loadAuth().then(auth => {
+    const u = id ? auth.users.find(x => x.id === id) : null;
+    if (id && !u) return toast('That user no longer exists', true);
+    const perms = u ? u.perms : ROLES.cashier.perms;
+    const role = u ? roleOf(u.perms) : 'cashier';
+    openModal({
+      title: u ? `Edit ${u.name}` : 'Add user',
+      body: `
+        <label class="field"><span>Username</span><input id="uName" class="input" maxlength="30" autocomplete="off" autocapitalize="words" value="${esc(u?.name || '')}"></label>
+        <p class="small muted" style="margin:-4px 0 12px">They type this to sign in. Capitals don't matter.</p>
+        <label class="field"><span>Role</span><select id="uRole">
+          ${Object.entries(ROLES).map(([k, r]) => `<option value="${k}" ${k === role ? 'selected' : ''}>${r.label}</option>`).join('')}
+        </select></label>
+        <div class="section-title" style="margin-top:4px">May use</div>
+        <label class="check"><input type="checkbox" checked disabled><span><strong>Sell</strong><br><span class="small muted">Always allowed</span></span></label>
+        ${PERMISSIONS.map(([k, l, d]) => `<label class="check"><input type="checkbox" data-perm="${k}" ${perms.includes(k) ? 'checked' : ''}>
+          <span><strong>${esc(l)}</strong><br><span class="small muted">${esc(d)}</span></span></label>`).join('')}
+        <div class="grid-2" style="margin-top:12px">
+          <label class="field"><span>${u ? 'New PIN (blank = keep)' : 'PIN (4 digits)'}</span><input id="uPin" class="input pin-input" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password"></label>
+          <label class="field"><span>PIN again</span><input id="uPin2" class="input pin-input" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password"></label>
+        </div>`,
+      foot: `<button class="btn" data-action="close-modal">Cancel</button><button class="btn primary" data-action="user-save" data-id="${esc(id || '')}">${u ? 'Save' : 'Add user'}</button>`,
+    });
+  });
+}
+
+async function saveUser(id) {
+  const auth = await loadAuth();
+  const name = $('#uName').value.trim().replace(/\s+/g, ' ');
+  const pin = $('#uPin').value.trim(), pin2 = $('#uPin2').value.trim();
+  const perms = $$('#modal [data-perm]').filter(c => c.checked).map(c => c.dataset.perm);
+  if (!name) return toast('Enter a username', true);
+  if (auth.users.some(u => u.id !== id && normUser(u.name) === normUser(name))) return toast(`There is already a user called ${name}`, true);
+  if (!id || pin || pin2) {
+    if (!/^\d{4}$/.test(pin)) return toast('The PIN must be exactly 4 digits', true);
+    if (pin !== pin2) return toast('The two PINs are not the same', true);
+  }
+
+  const user = id ? auth.users.find(u => u.id === id) : { id: uid('u-') };
+  if (!user) return toast('That user no longer exists', true);
+  const before = { ...user };
+  Object.assign(user, { name, perms, role: roleOf(perms) });
+  const users = id ? auth.users : [...auth.users, user];
+  if (!adminCount(users)) {
+    Object.assign(user, before);
+    return toast('At least one user must keep Admin access', true);
+  }
+  if (pin) await setPin(user, pin);
+  if (!id) auth.users.push(user);
+  await saveAuth(auth);
+  closeModal();
+  toast(id ? `${name} saved` : `${name} added`);
+  if (user.id === ui.user?.id) setUser(user); // own name or access changed
+  if (ui.view === 'admin') renderAdmin();
+}
+
+async function deleteUser(id) {
+  const auth = await loadAuth();
+  const user = auth.users.find(u => u.id === id);
+  if (!user) return;
+  if (id === ui.user?.id) return toast("You can't delete yourself while signed in", true);
+  const rest = auth.users.filter(u => u.id !== id);
+  if (!adminCount(rest)) return toast('At least one user must keep Admin access', true);
+  if (!(await confirmBox(`Delete ${user.name}? They will no longer be able to sign in. Their past sales keep their name.`, 'Delete user', true))) return;
+  auth.users = rest;
+  await saveAuth(auth);
+  toast(`${user.name} deleted`);
+  renderAdmin();
+}
+
+/** Role picked → tick its boxes. Box changed → show the matching role (or Custom). */
+function onUserFormChange(t) {
+  if (t.id === 'uRole' && ROLES[t.value].perms) {
+    $$('#modal [data-perm]').forEach(c => { c.checked = ROLES[t.value].perms.includes(c.dataset.perm); });
+  }
+  if (t.dataset.perm) {
+    $('#uRole').value = roleOf($$('#modal [data-perm]').filter(c => c.checked).map(c => c.dataset.perm));
+  }
 }
 
 /* ===== 15. One tab at a time ============================================
@@ -2345,14 +2498,37 @@ const actions = {
   lock: () => lockTill(),
   'change-pin': () => openChangePin(),
   'pin-save': () => saveNewPin(),
+  'user-add': () => openUserForm(),
+  'user-edit': el => openUserForm(el.dataset.id),
+  'user-save': el => saveUser(el.dataset.id || null),
+  'user-delete': el => deleteUser(el.dataset.id),
 };
+
+/* Actions that need a permission. Buttons are hidden too, but this is the real check. */
+const ACTION_PERMS = {
+  'open-return': 'returns', 'ret-qty': 'returns', 'ret-all': 'returns', 'ret-method': 'returns', 'ret-go': 'returns',
+  'toggle-low': 'stock', 'add-product': 'stock', 'np-all': 'stock', 'np-save': 'stock', 'edit-product': 'stock', 'ep-save': 'stock',
+  'add-variant': 'stock', 'edit-variant': 'stock', 'variant-save': 'stock', 'delete-variant': 'stock', 'delete-product': 'stock',
+  'stock-d': 'stock', receive: 'stock', 'receive-save': 'stock', history: 'stock',
+  range: 'reports', cashup: 'reports', 'cashup-save': 'reports',
+  'backup-download': 'settings', 'backup-copy': 'settings', 'backup-share': 'settings', 'restore-paste': 'settings',
+  'export-csv': 'settings', 'start-fresh': 'settings', 'load-demo': 'settings',
+  'user-add': 'admin', 'user-edit': 'admin', 'user-save': 'admin', 'user-delete': 'admin',
+};
+function allowed(perm) {
+  if (!perm || can(perm)) return true;
+  toast(`${ui.user?.name || 'This user'} doesn't have access to that`, true);
+  return false;
+}
 
 function bindEvents() {
   document.addEventListener('click', e => {
     const el = e.target.closest('[data-action]');
     if (!el || el.disabled || el.closest('[inert]')) return;
     const fn = actions[el.dataset.action];
-    if (fn) { e.preventDefault(); fn(el, e); }
+    if (!fn) return;
+    e.preventDefault();
+    if (allowed(ACTION_PERMS[el.dataset.action])) fn(el, e);
   });
 
   $('#signinForm').addEventListener('submit', e => { e.preventDefault(); submitSignIn(); });
@@ -2369,9 +2545,10 @@ function bindEvents() {
 
   document.addEventListener('change', e => {
     const t = e.target;
-    if (t.dataset.stockInput) adjustStock(t.dataset.stockInput, t.value === '' ? 0 : t.value, 'count');
-    if (t.dataset.setting) onSettingChange(t);
-    if (t.id === 'restoreFile' && t.files[0]) { t.files[0].text().then(restoreFromText); t.value = ''; }
+    if (t.dataset.stockInput && allowed('stock')) adjustStock(t.dataset.stockInput, t.value === '' ? 0 : t.value, 'count');
+    if (t.dataset.setting && allowed('settings')) onSettingChange(t);
+    if (t.id === 'restoreFile' && t.files[0] && allowed('settings')) { t.files[0].text().then(restoreFromText); t.value = ''; }
+    if (t.id === 'uRole' || (t.dataset.perm && t.closest('#modal'))) onUserFormChange(t);
   });
 
   document.addEventListener('input', e => {

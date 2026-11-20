@@ -428,6 +428,69 @@ test('Sign-in: reload keeps you in, Lock asks again, PIN can be changed, sales r
   click('[data-action="pin-save"]'); await waitFor(() => $('#modal').hidden, 3000, 'PIN change back');
 });
 
+test('Admin: add a cashier who can only sell and see sales; edit, protect the last admin, delete', async () => {
+  await nav('admin'); await tick(150);
+  ok(!$('#view-admin').hidden && P.ui.view === 'admin', 'owner can open Admin');
+  click('[data-action="user-add"]'); await tick();
+  type('#uName', 'Thandi');
+  eq($('#uRole').value, 'cashier', 'new user starts as cashier');
+  type('#uPin', '1111'); type('#uPin2', '1111');
+  click('[data-action="user-save"]'); await waitFor(() => $('#modal').hidden, 3000, 'user added');
+  ok($('#userList').textContent.includes('Thandi'), 'listed');
+  // Duplicate names are refused, whatever the capitals
+  click('[data-action="user-add"]'); await tick();
+  type('#uName', 'THANDI'); type('#uPin', '2222'); type('#uPin2', '2222');
+  click('[data-action="user-save"]'); await tick(300);
+  ok(!$('#modal').hidden && $('#toast').textContent.includes('already'), 'duplicate refused');
+  closeModal(); await tick();
+
+  // Sign in as the cashier
+  click('#lockBtn'); await tick(100);
+  await signIn('thandi', '1111');
+  ok($('#signin').hidden, 'cashier signed in');
+  const visible = [...d.querySelectorAll('.app-nav button')].filter(b => !b.hidden).map(b => b.dataset.view);
+  eq(visible, ['sell', 'sales'], 'cashier sees only Sell and Sales');
+  ok($('#discountRow').hidden, 'no discount box');
+  P.actions.nav({ dataset: { view: 'reports' } }); await tick();
+  eq(P.ui.view, 'sell', 'reports blocked');
+  P.actions.nav({ dataset: { view: 'admin' } }); await tick();
+  eq(P.ui.view, 'sell', 'admin blocked');
+  P.ui.cart.discountType = 'R'; P.ui.cart.discountText = '50';
+  await addItem(product('Test <b>Tee</b>'), 'S', 'Red');
+  eq(P.cartTotals().discount, 0, 'discount ignored for cashier');
+  await pay('card');
+  eq([lastSale().cashier, lastSale().discount], ['Thandi', 0], 'sale by Thandi, no discount');
+  ok(receiptText().includes('Served by Thandi'), 'receipt names the cashier');
+  ok(!$('[data-action="open-return"]'), 'no Return button for a cashier');
+  closeModal(); await tick();
+
+  // Back to the owner: give Thandi reports, rename her, then delete her
+  click('#lockBtn'); await tick(100);
+  await signIn('AMISH', OWNER.pin);
+  await nav('admin'); await tick(150);
+  const thandi = (await P.DB.get('kv', 'auth')).users.find(u => u.name === 'Thandi');
+  click(`[data-action="user-edit"][data-id="${thandi.id}"]`); await tick(150);
+  type('#uName', 'Thandi M');
+  const rep = $('#modal [data-perm="reports"]'); rep.checked = true; rep.dispatchEvent(new w.Event('change', { bubbles: true }));
+  eq($('#uRole').value, 'custom', 'role becomes Custom');
+  click('[data-action="user-save"]'); await waitFor(() => $('#modal').hidden, 3000, 'user saved');
+  const edited = (await P.DB.get('kv', 'auth')).users.find(u => u.id === thandi.id);
+  eq([edited.name, edited.perms.includes('reports'), edited.hash === thandi.hash], ['Thandi M', true, true], 'renamed, reports added, PIN kept');
+
+  // The only admin can't remove their own Admin access
+  const me = (await P.DB.get('kv', 'auth')).users.find(u => u.name === 'Amish');
+  click(`[data-action="user-edit"][data-id="${me.id}"]`); await tick(150);
+  const adm = $('#modal [data-perm="admin"]'); adm.checked = false; adm.dispatchEvent(new w.Event('change', { bubbles: true }));
+  click('[data-action="user-save"]'); await tick(300);
+  ok($('#toast').textContent.includes('Admin access'), 'last admin protected');
+  closeModal(); await tick();
+  ok(!$(`[data-action="user-delete"][data-id="${me.id}"]`), 'no delete button for yourself');
+
+  click(`[data-action="user-delete"][data-id="${thandi.id}"]`); await confirmYes();
+  eq((await P.DB.get('kv', 'auth')).users.length, 1, 'deleted');
+  ok(P.state.sales.some(s => s.cashier === 'Thandi'), 'her past sale keeps her name');
+});
+
 test('Upgrade: data saved by version 1 is migrated', async () => {
   await blank(document.getElementById('app'));
   await deleteDb();

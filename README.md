@@ -39,6 +39,12 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - Five wrong PINs in a row pause sign-in for 30 seconds. The PIN can be changed under **Settings, then Account**.
   - PINs are stored only as PBKDF2 hashes, separately from shop data, so backups, restores and Start fresh never touch them.
   - Each sale records who was signed in ("Served by" on the receipt).
+- **Admin: users and access**
+  - Add, rename and delete users, and reset their PIN.
+  - Each user gets a role: Owner (everything), Manager (everything except Admin), Cashier (sell and see sales) or Custom.
+  - Tick or untick each permission: discounts, refunds and exchanges, sales history, stock, reports and cash-up, settings and backups, admin. Selling is always allowed.
+  - Screens and buttons a user may not use are hidden, and every action is checked again when tapped. A cashier's cart ignores any discount.
+  - You can't delete yourself, and there is always at least one user with Admin access.
   - This keeps staff and customers out of the till. It is not copy protection: a licence check needs a server (see *What to build next*).
 - **Usable by everyone**
   - Light and dark mode.
@@ -78,8 +84,9 @@ Then open http://localhost:8000. Offline mode only works over `http://localhost`
 
 With the server running, open **http://localhost:8000/tests.html** and click **Run all tests**, or open `tests.html?auto` to run them straight away.
 
-The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 25 tests should pass. They cover:
+The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 26 tests should pass. They cover:
 - sign-in, lock and changing the PIN
+- admin: adding, editing and deleting users, and what a cashier can't do
 - selling and stock
 - partial returns, exchanges and cancelled exchanges
 - report numbers
@@ -134,7 +141,7 @@ Search `app.js` and `sw.js` for `PLUG-IN:`.
 | Card terminal (Yoco / SumUp / iKhokha) | `checkout()`: call the terminal before saving |
 | Bluetooth / ESC-POS printer | `printDoc()` |
 | Licence check / cloud accounts | `checkLogin()` in section 14b of `app.js` |
-| More cashiers | `DEFAULT_AUTH` / the `auth` record: add users (sales already store `cashier`) |
+| New permissions | `PERMISSIONS`, `ROLES` and `ACTION_PERMS` in `app.js` |
 | Multiple branches | `DEFAULT_SETTINGS`: add `storeId` and stamp it on sales |
 
 ## Tax notes (check with your accountant)
