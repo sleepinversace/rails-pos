@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rails POS tests</title>
+<style>
+  :root { color-scheme: light dark; --ok: #157a3c; --bad: #b42318; }
+  body { font: 15px/1.45 system-ui, sans-serif; margin: 16px; background: Canvas; color: CanvasText; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  #summary { font-weight: 700; margin-left: 10px; }
+  #results { padding-left: 22px; }
+  #results li { margin: 4px 0; }
+  .pass { color: var(--ok); } .fail { color: var(--bad); } .fail pre { white-space: pre-wrap; margin: 2px 0 6px; font-size: 12px; }
+  .frames { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+  iframe { border: 1px solid #8884; border-radius: 8px; background: #fff; }
+  button { font: inherit; padding: 8px 16px; }
+</style>
+</head>
+<body>
+<h1>Rails POS — automated tests</h1>
+<p>These drive the real app (clicks, typing, reloads) inside the frame below. They use a <strong>separate test database</strong>, so your shop's data is not touched. Open this page through a local server, e.g. <code>http://localhost:8000/tests.html</code>.</p>
+<button id="run">Run all tests</button><span id="summary"></span>
+<ol id="results"></ol>
+<div class="frames">
+  <iframe id="app" title="App under test" width="390" height="844"></iframe>
+  <iframe id="app2" title="Second tab" width="390" height="400"></iframe>
+</div>
+
+<script>
+'use strict';
+/* ---------- tiny test harness ---------- */
+const TEST_DB = 'rails-pos-test';
+const tests = [];
+const test = (name, fn) => tests.push({ name, fn });
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let frame, w, d, P;
+
+function use(f) { frame = f; w = f.contentWindow; d = f.contentDocument; P = w.__pos; }
+async function waitFor(fn, ms = 4000, what = 'condition') {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { try { if (fn()) return; } catch {} await sleep(30); }
+  throw new Error('Timed out waiting for ' + what);
+}
+async function loadApp(f = document.getElementById('app')) {
+  f.src = 'index.html?test=1&t=' + Date.now();
+  await new Promise(r => { f.onload = r; });
+  await waitFor(() => f.contentWindow.__pos && (f.contentWindow.__pos.ui.appActive || !f.contentDocument.getElementById('blocker').hidden), 5000, 'app to start');
+  use(f);
+}
+async function blank(f) { f.src = 'about:blank'; await new Promise(r => { f.onload = r; }); }
+function deleteDb() {
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.deleteDatabase(TEST_DB);
+    r.onsuccess = resolve; r.onerror = () => reject(r.error); r.onblocked = () => setTimeout(resolve, 300);
+  });
+}
+const $ = sel => d.querySelector(sel);
+function click(sel) { const el = $(sel); if (!el) throw new Error('Not found: ' + sel); el.click(); }
+function type(sel, v) {
+  const el = $(sel); if (!el) throw new Error('Not found: ' + sel);
+  el.value = v;
+  el.dispatchEvent(new w.Event('input', { bubbles: true }));
+  el.dispatchEvent(new w.Event('change', { bubbles: true }));
+}
+const tick = (ms = 80) => sleep(ms);
+function eq(actual, expected, label) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+}
+function ok(cond, label) { if (!cond) throw new Error(label); }
+async function confirmYes() { await waitFor(() => $('[data-action="confirm-ok"]'), 2000, 'confirm dialog'); click('[data-action="confirm-ok"]'); await tick(400); }
+function closeModal() { const b = $('#modal [data-action="close-modal"]'); if (b) b.click(); }
+async function nav(view) { closeModal(); click(`[data-action="nav"][data-view="${view}"]`); await tick(); }
+const product = name => P.state.products.find(p => p.name === name);
+const variant = (p, size, colour) => p.variants.find(v => v.size === size && v.colour === colour);
+const lastSale = () => P.state.sales[P.state.sales.length - 1];
+const movements = async () => (await P.DB.getAll('movements')).sort((a, b) => a.date.localeCompare(b.date));
+
+/** Pick a product + size/colour in the picker and add qty to the cart. */
+async function addItem(p, size, colour, qty = 1) {
+  await nav('sell');
+  click(`[data-action="pick"][data-id="${p.id}"]`); await tick();
+  if (p.variants.length === 1) return;
+  const sz = $(`[data-action="pk-size"][data-v="${size}"]`); if (!sz.classList.contains('on')) sz.click(); await tick(30);
+  const co = $(`[data-action="pk-colour"][data-v="${colour}"]`); if (!co.classList.contains('on')) co.click(); await tick(30);
+  for (let i = 1; i < qty; i++) { click('[data-action="pk-qty"][data-d="1"]'); await tick(20); }
+  click('[data-action="pk-add"]'); await tick();
+}
+/** Open the cart and pay. */
+async function pay(method = 'cash', tendered = '') {
+  click('[data-action="open-cart"]'); await tick();
+  click(`[data-action="pay"][data-pay="${method}"]`); await tick(30);
+  if (method === 'cash' && !$('#cashRow').hidden) type('#tendered', tendered);
+  await tick(30);
+  click('#chargeBtn'); await tick(450);
+}
+const receiptText = () => $('#modal .receipt')?.textContent || '';
+
+/* ---------- colour contrast (WCAG) ---------- */
+function lum(hex) {
+  const c = hex.trim().replace('#', '');
+  const rgb = [0, 2, 4].map(i => parseInt(c.slice(i, i + 2), 16) / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+}
+const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+
+/* =================== TESTS =================== */
+
+test('First run loads 8 demo products and sample sales', async () => {
+  eq(P.state.products.length, 8, 'products');
+  ok(P.state.sales.length > 0, 'has demo sales');
+  eq(P.state.meta.demo, true, 'demo flag');
+  ok($('#banners').textContent.includes('Demo data'), 'demo banner shown');
+});
+
+test('Start fresh empties the shop', async () => {
+  click('#banners [data-action="start-fresh"]'); await confirmYes();
+  eq([P.state.products.length, P.state.sales.length, P.state.meta.nextReceiptNo, P.state.meta.demo], [0, 0, 1, false], 'counts');
+});
+
+test('Add product: sizes × colours make the variant grid; names are escaped', async () => {
+  await nav('stock');
+  click('[data-action="add-product"]'); await tick();
+  type('#fName', 'Test <b>Tee</b>'); type('#fCat', 'Tops'); type('#fPrice', '230'); type('#fCost', '100');
+  type('#fSizes', 'S, M'); type('#fColours', 'Red, Blue'); await tick(30);
+  type('#fAll', '5'); click('[data-action="np-all"]');
+  click('[data-action="np-save"]'); await tick(300);
+  const p = product('Test <b>Tee</b>');
+  ok(p, 'product exists');
+  eq(p.variants.map(v => `${v.sku}:${v.stock}`), ['TB-RED-S:5', 'TB-RED-M:5', 'TB-BLU-S:5', 'TB-BLU-M:5'], 'variants');
+  eq($('#stockList h3').innerHTML, 'Test &lt;b&gt;Tee&lt;/b&gt;', 'escaped heading');
+  eq((await movements()).filter(m => m.reason === 'new').length, 4, 'opening stock movements');
+});
+
+test('Variant with its own price (XL costs more)', async () => {
+  const p = product('Test <b>Tee</b>');
+  click(`[data-action="add-variant"][data-id="${p.id}"]`); await tick();
+  type('#vSize', 'XL'); type('#vColour', 'Red'); type('#vStock', '2'); type('#vPrice', '260');
+  click('[data-action="variant-save"]'); await tick(300);
+  const xl = variant(p, 'XL', 'Red');
+  eq([xl.price, xl.stock], [26000, 2], 'XL price & stock');
+  await nav('sell');
+  ok($(`[data-action="pick"][data-id="${p.id}"]`).textContent.includes('from R230.00'), 'card shows "from" price');
+});
+
+test('Cash sale: totals, VAT, change, stock down, movement, tax invoice', async () => {
+  const p = product('Test <b>Tee</b>');
+  await addItem(p, 'M', 'Red', 2);
+  await pay('cash', '500');
+  const s = lastSale();
+  eq([s.number, s.total, s.vat, s.change, s.paid], [1, 46000, 6000, 4000, 46000], 'sale numbers');
+  eq(variant(p, 'M', 'Red').stock, 3, 'stock after sale');
+  const m = (await movements()).filter(x => x.reason === 'sale');
+  eq(m.map(x => [x.change, x.after, x.ref]), [[-2, 3, '#00001']], 'sale movement');
+  ok(receiptText().includes('TAX INVOICE'), 'tax invoice header');
+  ok($('#modal .receipt').innerHTML.includes('&lt;b&gt;'), 'receipt escapes HTML');
+  closeModal();
+});
+
+test('Cannot sell more than is in stock', async () => {
+  const p = product('Test <b>Tee</b>');
+  await addItem(p, 'M', 'Blue', 5);
+  click('[data-action="open-cart"]'); await tick();
+  click('[data-action="line-qty"][data-d="1"]'); await tick();
+  eq(P.ui.cart.lines[0].qty, 5, 'qty capped at stock');
+  ok($('#toast').textContent.includes('Only 5 in stock'), 'warning shown');
+  click('[data-action="clear-cart"]'); await tick();
+  eq(P.ui.cart.lines.length, 0, 'cart cleared');
+  click('[data-action="close-cart"]'); await tick();
+});
+
+test('Card sale with 10% discount', async () => {
+  const p = product('Test <b>Tee</b>');
+  await addItem(p, 'S', 'Blue');
+  click('[data-action="open-cart"]'); await tick();
+  click('[data-action="disc-type"][data-type="%"]'); type('#discountValue', '10'); await tick(30);
+  await pay('card');
+  const s = lastSale();
+  eq([s.subtotal, s.discount, s.total, s.vat, s.payment], [23000, 2300, 20700, 2700, 'card'], 'sale');
+  closeModal();
+});
+
+test('Partial return: 1 of 2 items, cash refund, credit note', async () => {
+  await nav('sales');
+  const s1 = P.state.sales[0];
+  click(`[data-action="open-doc"][data-doc="sale:${s1.id}"]`); await tick();
+  click('[data-action="open-return"]'); await tick();
+  click('[data-action="ret-qty"][data-idx="0"][data-d="1"]'); await tick(30);
+  click('[data-action="ret-method"][data-m="cash"]'); await tick(30);
+  click('[data-action="ret-go"][data-mode="refund"]'); await tick(400);
+  const r = s1.returns[0];
+  eq([r.number, r.amount, r.vat, r.method, s1.status], [1, 23000, 3000, 'cash', 'partial'], 'return');
+  eq(variant(product('Test <b>Tee</b>'), 'M', 'Red').stock, 4, 'stock back');
+  ok(receiptText().includes('CREDIT NOTE') && receiptText().includes('CN00001'), 'credit note shown');
+  closeModal();
+});
+
+test('Reports: revenue, average, profit and payment split include the refund', async () => {
+  await nav('reports');
+  click('[data-action="range"][data-days="1"]'); await tick();
+  const k = n => $(`[data-k="${n}"]`).textContent;
+  // gross 460 + 207 = 667, refund 230 -> 437; VAT 60 + 27 - 30 = 57; cost 200 + 100 - 100 = 200
+  eq([k('revenue'), k('count'), k('avg'), k('profit')], ['R437.00', '2', 'R333.50', 'R180.00'], 'KPIs');
+  ok(k('pay-cash').startsWith('R230.00'), 'cash net of refund: ' + k('pay-cash'));
+  ok(k('pay-card').startsWith('R207.00'), 'card');
+});
+
+test('Exchange: return the other item as credit, buy a dearer one, pay the difference', async () => {
+  await nav('sales');
+  const s1 = P.state.sales[0];
+  click(`[data-action="open-doc"][data-doc="sale:${s1.id}"]`); await tick();
+  click('[data-action="open-return"]'); await tick();
+  click('[data-action="ret-all"]'); await tick(30);
+  click('[data-action="ret-go"][data-mode="exchange"]'); await tick(400);
+  eq([P.ui.cart.credit.amount, s1.status], [23000, 'returned'], 'credit in cart, sale fully returned');
+  click('[data-action="close-cart"]'); await tick();
+  const p = product('Test <b>Tee</b>');
+  await addItem(p, 'XL', 'Red');
+  await pay('cash', '');
+  const s = lastSale();
+  eq([s.total, s.creditUsed, s.paid, s.creditRef, P.ui.cart.credit], [26000, 23000, 3000, 'CN00002', null], 'exchange sale');
+  ok(receiptText().includes('Credit CN00002'), 'receipt shows credit');
+  closeModal();
+});
+
+test('Cancelling an exchange turns the credit into a cash refund', async () => {
+  await nav('sales');
+  const s2 = P.state.sales[1];
+  click(`[data-action="open-doc"][data-doc="sale:${s2.id}"]`); await tick();
+  click('[data-action="open-return"]'); await tick();
+  click('[data-action="ret-all"]'); await tick(30);
+  click('[data-action="ret-go"][data-mode="exchange"]'); await tick(400);
+  eq(P.ui.cart.credit.amount, 20700, 'credit');
+  click('[data-action="clear-cart"]'); await confirmYes();
+  eq([P.ui.cart.credit, s2.returns[0].method], [null, 'cash'], 'credit refunded in cash');
+  closeModal();
+  click('[data-action="close-cart"]'); await tick();
+});
+
+test('Not VAT registered: plain receipt with no VAT', async () => {
+  await nav('settings'); await tick(200);
+  const cb = $('[data-setting="vatRegistered"]'); cb.checked = false; cb.dispatchEvent(new w.Event('change', { bubbles: true })); await tick(300);
+  await addItem(product('Test <b>Tee</b>'), 'S', 'Red');
+  await pay('eft');
+  const s = lastSale();
+  eq([s.vat, s.vatRate], [0, 0], 'no VAT');
+  ok(receiptText().includes('RECEIPT') && !receiptText().includes('TAX INVOICE') && !/VAT/.test(receiptText()), 'plain receipt');
+  closeModal();
+});
+
+test('VAT vendor: VAT number on invoice; over R5 000 asks for the buyer', async () => {
+  await nav('settings'); await tick(200);
+  const cb = $('[data-setting="vatRegistered"]'); cb.checked = true; cb.dispatchEvent(new w.Event('change', { bubbles: true })); await tick(300);
+  type('[data-setting="vatNumber"]', '4123456789'); await tick(200);
+  await nav('stock');
+  click('[data-action="add-product"]'); await tick();
+  type('#fName', 'Wedding Suit'); type('#fPrice', '6000'); type('#fCost', '3000'); type('#fSizes', '40'); type('#fColours', 'Black'); type('#fAll', '1');
+  click('[data-action="np-all"]'); click('[data-action="np-save"]'); await tick(300);
+  await addItem(product('Wedding Suit'));
+  await pay('card');
+  ok($('#cName'), 'customer form opened');
+  type('#cName', 'Thandi Mokoena'); type('#cAddress', '5 Main Road, Durban');
+  click('[data-action="customer-save"]'); await tick(450);
+  const s = lastSale();
+  eq([s.total, s.customer.name], [600000, 'Thandi Mokoena'], 'sale with customer');
+  const t = receiptText();
+  ok(t.includes('TAX INVOICE') && t.includes('VAT No. 4123456789') && t.includes('Customer: Thandi Mokoena'), 'full tax invoice');
+  closeModal();
+});
+
+test('Changing the VAT rate changes the next receipt', async () => {
+  await nav('settings'); await tick(200);
+  type('[data-setting="vatRate"]', '10'); await tick(300);
+  await addItem(product('Test <b>Tee</b>'), 'S', 'Red');
+  await pay('card');
+  eq([lastSale().vat, lastSale().vatRate], [2091, 10], 'VAT at 10%');
+  ok(receiptText().includes('VAT @ 10% (incl.)'), 'receipt line');
+  closeModal();
+  await nav('settings'); await tick(200); type('[data-setting="vatRate"]', '15'); await tick(300);
+});
+
+test('Stock +/− taps make one "adjusted" movement; typed count is a "stock count"', async () => {
+  await nav('stock');
+  const p = product('Test <b>Tee</b>'); const v = variant(p, 'M', 'Blue');
+  for (let i = 0; i < 3; i++) { click(`[data-action="stock-d"][data-id="${v.id}"][data-d="1"]`); await tick(30); }
+  await tick(1000);
+  type(`[data-stock-input="${v.id}"]`, '20'); await tick(1000);
+  const m = (await movements()).filter(x => x.variantId === v.id && ['adjust', 'count'].includes(x.reason));
+  eq(m.map(x => [x.reason, x.change, x.after]), [['adjust', 3, 8], ['count', 12, 20]], 'movements');
+});
+
+test('Receive a delivery and see it in the stock history', async () => {
+  const p = product('Test <b>Tee</b>');
+  click(`[data-action="receive"][data-id="${p.id}"]`); await tick();
+  type('[data-recv]', '4'); type('#rcvNote', 'INV-77');
+  click('[data-action="receive-save"]'); await tick(300);
+  eq(p.variants[0].stock, 7, 'S/Red received 4');
+  click(`[data-action="history"][data-id="${p.id}"]`); await tick(300);
+  const h = $('#modal').textContent;
+  ok(h.includes('Received') && h.includes('INV-77') && h.includes('Sold') && h.includes('Returned'), 'history lists receive, sale and return');
+  closeModal();
+});
+
+test('Cart (with discount) survives a reload', async () => {
+  await addItem(product('Test <b>Tee</b>'), 'S', 'Red');
+  click('[data-action="open-cart"]'); await tick();
+  click('[data-action="disc-type"][data-type="R"]'); type('#discountValue', '20'); await tick(500);
+  const before = { sales: P.state.sales.length, products: P.state.products.length, next: P.state.meta.nextReceiptNo };
+  await loadApp();
+  eq([P.ui.cart.lines.length, $('#discountValue').value], [1, '20'], 'cart restored');
+  eq({ sales: P.state.sales.length, products: P.state.products.length, next: P.state.meta.nextReceiptNo }, before, 'data persisted');
+  click('[data-action="open-cart"]'); await tick();
+  click('[data-action="clear-cart"]'); await tick();
+  click('[data-action="close-cart"]'); await tick();
+});
+
+test('Cash-up: expected cash, short amount, Z-report, new shift', async () => {
+  const sh = P.computeShift(P.state.meta.lastCashupAt, new Date().toISOString());
+  // cash in: 460 (sale 1) + 30 (exchange top-up); cash out: 230 refund + 207 cancelled exchange
+  eq([sh.cashSales, sh.cashOut, sh.expected], [49000, 43700, 5300], 'shift maths');
+  await nav('reports');
+  click('[data-action="cashup"]'); await tick();
+  type('#cuCounted', '43'); type('#cuFloat', '500'); await tick(30);
+  ok($('#cuDiff').textContent.includes('Short by R10.00'), 'shows short');
+  click('[data-action="cashup-save"]'); await tick(400);
+  const z = P.state.cashups[0];
+  eq([z.number, z.expected, z.counted, z.diff, P.state.meta.float], [1, 5300, 4300, -1000, 50000], 'z record');
+  ok(receiptText().includes('SHORT'), 'Z text');
+  closeModal();
+  eq(P.computeShift(P.state.meta.lastCashupAt, new Date().toISOString()).salesCount, 0, 'new shift is empty');
+});
+
+test('Only one tab at a time; the other can take over', async () => {
+  const main = document.getElementById('app'), second = document.getElementById('app2');
+  await loadApp(second);
+  ok(!d.getElementById('blocker').hidden, 'second tab blocked');
+  click('[data-action="takeover"]');
+  await waitFor(() => second.contentWindow.__pos.ui.appActive, 3000, 'second tab to take over');
+  use(main);
+  await waitFor(() => !d.getElementById('blocker').hidden, 3000, 'first tab to pause');
+  await blank(second);
+  click('[data-action="takeover"]');
+  await waitFor(() => P.ui.appActive, 3000, 'first tab back');
+});
+
+test('Backup → start fresh → restore gives everything back', async () => {
+  const json = await w.backupJson();
+  const data = JSON.parse(json);
+  const counts = [P.state.products.length, P.state.sales.length, P.state.cashups.length, data.movements.length];
+  await nav('settings'); await tick(200);
+  click('[data-action="start-fresh"]'); await confirmYes();
+  eq(P.state.sales.length, 0, 'emptied');
+  w.restoreFromText(json); await confirmYes(); await tick(300);
+  eq([P.state.products.length, P.state.sales.length, P.state.cashups.length, (await movements()).length], counts, 'restored');
+  w.restoreFromText('{oops'); await tick(100);
+  ok($('#toast').textContent.includes('not valid'), 'bad JSON rejected');
+});
+
+test('CSV export has refunds and blocks spreadsheet formulas', async () => {
+  let csv = '';
+  const orig = w.downloadFile; w.downloadFile = (n, t) => { csv = t; };
+  const it = P.state.sales[0].items[0]; const old = it.name; it.name = '=HYPERLINK("x")';
+  w.exportCsv(); w.downloadFile = orig; it.name = old;
+  ok(csv.includes(`"'=HYPERLINK(""x"")"`), 'formula prefixed');
+  ok(csv.split('\r\n').some(r => r.startsWith('refund,CN00001')), 'refund rows');
+});
+
+test('Accessibility: focus is kept in dialogs; nav has aria-current; colours have enough contrast', async () => {
+  await nav('sell');
+  ok($('[data-view="sell"]').getAttribute('aria-current') === 'page', 'aria-current');
+  click(`[data-action="pick"][data-id="${product('Test <b>Tee</b>').id}"]`); await tick();
+  ok($('.app-main .sell-products').inert && $('.app-nav').inert, 'background inert while dialog open');
+  closeModal(); await tick();
+  ok(!$('.app-nav').inert, 'background usable again');
+  const fails = [];
+  for (const theme of ['light', 'dark']) {
+    d.documentElement.dataset.theme = theme;
+    const css = n => w.getComputedStyle(d.documentElement).getPropertyValue(n).trim();
+    const pairs = [['--text', '--bg'], ['--muted', '--bg'], ['--muted', '--surface'], ['--muted', '--surface-2'], ['--accent-ink', '--accent'],
+      ['--accent', '--surface'], ['--warn', '--warn-soft'], ['--danger', '--danger-soft'], ['--danger', '--surface'], ['--ok', '--ok-soft']];
+    for (const [fg, bg] of pairs) { const c = contrast(css(fg), css(bg)); if (c < 4.5) fails.push(`${theme} ${fg} on ${bg}: ${c.toFixed(2)}`); }
+  }
+  delete d.documentElement.dataset.theme;
+  ok(!fails.length, 'Low contrast: ' + fails.join('; '));
+});
+
+test('Upgrade: data saved by version 1 is migrated', async () => {
+  await blank(document.getElementById('app'));
+  await deleteDb();
+  await new Promise((resolve, reject) => {
+    const r = indexedDB.open(TEST_DB, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => {
+      const tx = r.result.transaction('kv', 'readwrite'); const kv = tx.objectStore('kv');
+      const v = { id: 'v1', size: 'M', colour: 'Red', sku: 'OLD-RED-M', stock: 3 };
+      kv.put({ ...{ storeName: 'Old Shop', vatRate: 15 } }, 'settings');
+      kv.put({ nextReceiptNo: 2, demo: false }, 'meta');
+      kv.put([{ id: 'p1', name: 'Old Tee', category: 'Tops', price: 10000, cost: 4000, variants: [v] }], 'products');
+      kv.put([{ id: 's1', number: 1, date: new Date().toISOString(), items: [{ productId: 'p1', variantId: 'v1', name: 'Old Tee', size: 'M', colour: 'Red', sku: 'OLD-RED-M', qty: 1, unitPrice: 10000, unitCost: 4000 }],
+        subtotal: 10000, discountType: 'R', discountValue: 0, discount: 0, total: 10000, vatRate: 15, vat: 1304, payment: 'cash', tendered: 10000, change: 0, status: 'returned', returnedAt: new Date().toISOString() }], 'sales');
+      tx.oncomplete = () => { r.result.close(); resolve(); }; tx.onerror = () => reject(tx.error);
+    };
+    r.onerror = () => reject(r.error);
+  });
+  await loadApp();
+  eq([P.state.products.length, P.state.sales.length, P.state.sales[0].status, P.state.sales[0].returns.length, P.state.settings.storeName], [1, 1, 'returned', 1, 'Old Shop'], 'migrated');
+  eq((await P.DB.getAll('products')).length, 1, 'products in their own store');
+  eq(await P.DB.get('kv', 'products'), undefined, 'old array removed');
+});
+
+/* ---------- runner ---------- */
+async function runAll() {
+  const out = document.getElementById('results');
+  const summary = document.getElementById('summary');
+  out.innerHTML = ''; summary.textContent = 'Running…';
+  await blank(document.getElementById('app2'));
+  await blank(document.getElementById('app'));
+  await deleteDb();
+  await loadApp();
+  let pass = 0;
+  const failures = [];
+  for (const t of tests) {
+    const li = document.createElement('li');
+    try { await t.fn(); li.className = 'pass'; li.textContent = '✓ ' + t.name; pass++; }
+    catch (err) { li.className = 'fail'; li.innerHTML = '✗ '; li.append(t.name); const pre = document.createElement('pre'); pre.textContent = err.message; li.append(pre); failures.push(t.name + ': ' + err.message); }
+    out.append(li);
+  }
+  summary.textContent = `${pass}/${tests.length} passed`;
+  summary.className = pass === tests.length ? 'pass' : 'fail';
+  document.title = `${pass === tests.length ? 'PASS' : 'FAIL'} ${pass}/${tests.length} · Rails POS tests`;
+  window.__results = { pass, total: tests.length, failures };
+  return window.__results;
+}
+document.getElementById('run').addEventListener('click', runAll);
+if (new URLSearchParams(location.search).has('auto')) runAll();
+</script>
+</body>
+</html>

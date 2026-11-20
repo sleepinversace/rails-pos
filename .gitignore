@@ -1,0 +1,10 @@
+# Personal Claude Code permissions (machine-specific)
+.claude/settings.local.json
+
+# Backups and exports downloaded while testing — they contain shop data
+rails-pos-backup-*.json
+rails-pos-sales-*.csv
+
+# OS clutter
+Thumbs.db
+.DS_Store

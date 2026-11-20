@@ -1,0 +1,3 @@
+# Keep LF line endings in the repo and working copy (web files, any OS)
+* text=auto eol=lf
+*.png binary

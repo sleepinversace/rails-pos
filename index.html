@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en-ZA">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Rails POS</title>
+  <meta name="description" content="Offline-first point of sale for small clothing stores.">
+  <meta name="theme-color" content="#0f766e">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Rails POS">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body class="on-sell">
+  <!-- Reusable line icons (stroke = currentColor, so they follow the theme) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-sell" viewBox="0 0 24 24"><path d="M3 4h2l2.4 11.2a2 2 0 0 0 2 1.6h7.7a2 2 0 0 0 2-1.5L21 8H6"/><circle cx="10" cy="20" r="1.3"/><circle cx="17" cy="20" r="1.3"/></symbol>
+    <symbol id="i-stock" viewBox="0 0 24 24"><path d="M8 3 4 5.5 2.5 10l3 1.2V21h13V11.2l3-1.2L20 5.5 16 3c-.6 1.7-2.2 2.8-4 2.8S8.6 4.7 8 3Z"/></symbol>
+    <symbol id="i-sales" viewBox="0 0 24 24"><path d="M6 2.5h12v19l-3-2-3 2-3-2-3 2Z"/><path d="M9 8h6M9 12h6M9 16h3"/></symbol>
+    <symbol id="i-reports" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></symbol>
+  </svg>
+
+  <!-- ===== Header ===== -->
+  <header class="app-header">
+    <div class="brand">
+      <img src="icon-192.png" alt="" width="28" height="28">
+      <span id="storeNameLabel">Rails POS</span>
+    </div>
+    <span id="netStatus" class="net" role="status">Online</span>
+  </header>
+
+  <!-- ===== Navigation: bottom bar on phones, left rail on tablets ===== -->
+  <nav class="app-nav" aria-label="Main">
+    <button data-action="nav" data-view="sell" class="active" aria-current="page"><svg class="ico" aria-hidden="true"><use href="#i-sell"/></svg>Sell</button>
+    <button data-action="nav" data-view="stock"><svg class="ico" aria-hidden="true"><use href="#i-stock"/></svg>Stock</button>
+    <button data-action="nav" data-view="sales"><svg class="ico" aria-hidden="true"><use href="#i-sales"/></svg>Sales</button>
+    <button data-action="nav" data-view="reports"><svg class="ico" aria-hidden="true"><use href="#i-reports"/></svg>Reports</button>
+    <button data-action="nav" data-view="settings"><svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg>Settings</button>
+  </nav>
+
+  <main class="app-main">
+    <!-- Banners (update ready, demo data, backup reminder) are rendered here -->
+    <div id="banners"></div>
+
+    <!-- ===== SELL ===== -->
+    <section id="view-sell" class="view active" aria-label="Sell">
+      <div class="sell-products">
+        <div class="search-row">
+          <input id="sellSearch" type="search" placeholder="Search name or scan SKU…" autocomplete="off" enterkeyhint="go" aria-label="Search products or scan SKU">
+        </div>
+        <div id="catChips" class="chips" role="group" aria-label="Categories"></div>
+        <div id="productGrid" class="product-grid"></div>
+      </div>
+
+      <!-- Cart: a side panel on tablets, a slide-up sheet on phones -->
+      <aside id="cartPanel" class="cart-panel" aria-label="Cart">
+        <div class="cart-head">
+          <h2 id="cartTitle" tabindex="-1">Cart</h2>
+          <button class="btn ghost sm" data-action="clear-cart">Clear</button>
+          <button class="btn ghost sm cart-close" data-action="close-cart" aria-label="Close cart">✕</button>
+        </div>
+        <div id="cartCredit"></div>
+        <div id="cartItems" class="cart-items"></div>
+        <div class="cart-foot">
+          <div class="row gap-s">
+            <label class="small-label" for="discountValue">Discount</label>
+            <div class="seg sm" role="group" aria-label="Discount type">
+              <button data-action="disc-type" data-type="R" aria-label="Discount in rand">R</button>
+              <button data-action="disc-type" data-type="%" aria-label="Discount in percent">%</button>
+            </div>
+            <input id="discountValue" class="input sm grow" inputmode="decimal" placeholder="0">
+          </div>
+          <div class="seg pay" role="group" aria-label="Payment method">
+            <button data-action="pay" data-pay="cash">Cash</button>
+            <button data-action="pay" data-pay="card">Card</button>
+            <button data-action="pay" data-pay="eft">EFT</button>
+          </div>
+          <div id="cashRow" class="cash-row">
+            <input id="tendered" class="input sm" inputmode="decimal" placeholder="Cash tendered (blank = exact)" aria-label="Cash tendered">
+            <div id="quickCash" class="quick-cash"></div>
+          </div>
+          <div id="cartTotals" class="totals" aria-live="polite"></div>
+          <button id="chargeBtn" class="btn primary block lg" data-action="checkout">Charge</button>
+        </div>
+      </aside>
+
+      <!-- Sticky cart bar (phones only) -->
+      <button id="cartBar" class="cart-bar" data-action="open-cart">
+        <span id="cartBarCount">Cart empty</span>
+        <strong id="cartBarTotal">R0.00</strong>
+        <span class="cart-bar-go">View cart ›</span>
+      </button>
+    </section>
+
+    <!-- ===== STOCK ===== -->
+    <section id="view-stock" class="view" aria-label="Stock">
+      <div class="toolbar">
+        <input id="stockSearch" type="search" placeholder="Search stock…" aria-label="Search stock">
+        <button id="lowToggle" class="btn chip-btn" data-action="toggle-low" aria-pressed="false">Low stock</button>
+        <button class="btn primary" data-action="add-product">+ Product</button>
+      </div>
+      <div id="stockList"></div>
+    </section>
+
+    <!-- ===== SALES (history, returns, exchanges) ===== -->
+    <section id="view-sales" class="view" aria-label="Sales">
+      <div class="toolbar">
+        <input id="salesSearch" type="search" placeholder="Receipt no., customer or item…" aria-label="Search sales">
+      </div>
+      <div id="salesList"></div>
+    </section>
+
+    <!-- ===== REPORTS (incl. cash-up) ===== -->
+    <section id="view-reports" class="view" aria-label="Reports">
+      <div id="cashupCard"></div>
+      <div class="seg range" role="group" aria-label="Report period">
+        <button data-action="range" data-days="1">Today</button>
+        <button data-action="range" data-days="7">7 days</button>
+        <button data-action="range" data-days="30">30 days</button>
+      </div>
+      <div id="reportBody"></div>
+    </section>
+
+    <!-- ===== SETTINGS ===== -->
+    <section id="view-settings" class="view" aria-label="Settings">
+      <div id="settingsBody"></div>
+    </section>
+  </main>
+
+  <!-- Modal host (variant picker, receipts, returns, forms, confirms) -->
+  <div id="backdrop" class="backdrop" data-action="backdrop" hidden></div>
+  <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" hidden></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- Shown when the app is open in another tab (only one tab may write data) -->
+  <div id="blocker" class="blocker" role="alertdialog" aria-labelledby="blockerMsg" hidden>
+    <div class="blocker-box">
+      <img src="icon-192.png" alt="" width="56" height="56">
+      <p id="blockerMsg">Rails POS is already open in another tab or window.</p>
+      <p class="small muted">Only one copy can be open at a time so that no sales get lost.</p>
+      <button class="btn primary lg" data-action="takeover">Use it here instead</button>
+    </div>
+  </div>
+
+  <!-- Only this is shown when printing -->
+  <pre id="printArea" class="print-area"></pre>
+
+  <script src="app.js"></script>
+</body>
+</html>
