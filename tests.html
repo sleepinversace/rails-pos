@@ -538,6 +538,133 @@ test('Cash-up: expected cash, short amount, Z-report, new shift', async () => {
   eq(P.computeShift(P.state.meta.lastCashupAt, new Date().toISOString()).salesCount, 0, 'new shift is empty');
 });
 
+/** Open the cart sheet and start a lay-by from it. */
+async function startLayby() {
+  click('[data-action="open-cart"]'); await tick();
+  ok(!$('#laybyBtn').hidden && !$('#laybyBtn').disabled, 'Lay-by button available');
+  click('#laybyBtn'); await tick();
+}
+async function openClient(id) {
+  await nav('customers');
+  click(`[data-action="open-customer"][data-id="${id}"]`); await tick();
+}
+const teeVariantWithMostStock = () => product('Test <b>Tee</b>').variants.slice().sort((a, b) => b.stock - a.stock)[0];
+
+test('Lay-bys: new client, deposit, add more items later, payments, overdue, statement, collect = tax invoice listing all payments', async () => {
+  const tee = product('Test <b>Tee</b>');
+  const stockS = variant(tee, 'S', 'Blue').stock;
+  // 1. A dress is put aside for a new client, with a R50 cash deposit
+  await addItem(tee, 'S', 'Blue');
+  await startLayby();
+  $('details.lbf-new').open = true;
+  type('#ncName', 'Rumaanah Test'); type('#ncPhone', '082 111 2222'); type('#ncEmail', 'client@example.test');
+  type('#lbfAmount', '50');
+  click('[data-action="lbf-save"]'); await tick(400);
+  const c = P.state.customers.find(x => x.name === 'Rumaanah Test');
+  ok(c, 'client created');
+  const lb = P.state.laybys.find(l => l.customerId === c.id);
+  eq([lb.items.length, lb.total, P.lbPaid(lb), lb.status], [1, 23000, 5000, 'open'], 'lay-by with deposit');
+  eq(variant(product('Test <b>Tee</b>'), 'S', 'Blue').stock, stockS - 1, 'item put aside: stock down');
+  ok(receiptText().includes('LAY-BY PAYMENT RECEIPT') && receiptText().includes('BALANCE DUE') && receiptText().includes('R180.00'), 'slip shows what is still owed');
+  closeModal(); await tick();
+
+  // 2. The client comes back and adds another item to the SAME lay-by (from her profile)
+  await openClient(c.id);
+  click(`[data-action="cust-sell"][data-id="${c.id}"]`); await tick();
+  eq([P.ui.view, P.ui.cart.customerId], ['sell', c.id], 'selling to this client');
+  await addItem(product('Test <b>Tee</b>'), 'M', 'Blue');
+  await startLayby();
+  click(`[data-action="lbf-target"][data-v="${lb.id}"]`); await tick();
+  click('[data-action="lbf-save"]'); await tick(400);
+  eq([lb.items.length, lb.total, P.lbBalance(lb)], [2, 46000, 41000], 'second item added to the same lay-by');
+  closeModal(); await tick();
+
+  // 3. A card payment; then it goes overdue (still payable)
+  await openClient(c.id);
+  click(`[data-action="lb-pay"][data-id="${lb.id}"]`); await tick();
+  type('#lbpAmount', '100'); click('[data-action="lbp-method"][data-m="card"]');
+  click('[data-action="lbp-save"]'); await tick(300);
+  eq(P.lbBalance(lb), 31000, 'card payment taken');
+  closeModal();
+  lb.dueDate = '2000-01-01';
+  ok(P.lbOverdue(lb), 'past the pay-by date = overdue');
+  await nav('customers');
+  ok($('#custList').textContent.includes('overdue'), 'overdue shown in the clients list');
+  const st = P.statementText(c);
+  ok(st.includes('R50.00') && st.includes('R100.00') && st.includes('R310.00') && st.includes('OVERDUE'), 'statement lists payments, balance and overdue');
+  w.showDoc(`stmt:${c.id}`); await tick();
+  eq($('#emailTo').value, 'client@example.test', 'client email filled in');
+  ok(w.mailtoUrl(`stmt:${c.id}`).startsWith('mailto:client%40example.test?subject=Statement'), 'email opens addressed to the client');
+  closeModal();
+
+  // 4. Pays the rest in cash (overdue doesn't block it), collects → tax invoice with every payment
+  await openClient(c.id);
+  click(`[data-action="lb-pay"][data-id="${lb.id}"]`); await tick();
+  eq($('#lbpAmount').value, '310.00', 'balance suggested');
+  click('[data-action="lbp-save"]'); await tick(300);
+  eq(P.lbState(lb), 'ready', 'paid in full');
+  closeModal();
+  lb.dueDate = '2099-01-01';
+  await openClient(c.id);
+  click(`[data-action="lb-collect"][data-id="${lb.id}"]`); await confirmYes();
+  const sale = P.state.sales.find(s => s.laybyId === lb.id);
+  ok(sale, 'tax invoice created');
+  eq([sale.payment, sale.total, sale.customerId, lb.status], ['layby', 46000, c.id, 'completed'], 'collected');
+  ok(receiptText().includes('Paid by lay-by') && ['R50.00', 'R100.00', 'R310.00'].every(x => receiptText().includes(x)), 'invoice lists all payments made');
+  eq(variant(product('Test <b>Tee</b>'), 'S', 'Blue').stock, stockS - 1, 'collecting does not take stock off twice');
+  closeModal();
+  const sh = P.computeShift(P.state.meta.lastCashupAt, new Date().toISOString());
+  eq([sh.laybyCash, sh.laybyCard], [36000, 10000], 'lay-by payments in the cash-up');
+});
+
+test('Lay-by cancel: refund minus a fee, or store credit (then used); items go back into stock', async () => {
+  const c = P.state.customers.find(x => x.name === 'Rumaanah Test');
+  const mk = async amount => {
+    const v = teeVariantWithMostStock();
+    P.ui.cart.customerId = c.id;
+    await addItem(product('Test <b>Tee</b>'), v.size, v.colour);
+    await startLayby();
+    type('#lbfAmount', amount);
+    click('[data-action="lbf-save"]'); await tick(400);
+    closeModal();
+    return { lb: P.state.laybys[P.state.laybys.length - 1], v, stock: variant(product('Test <b>Tee</b>'), v.size, v.colour).stock };
+  };
+  // Refund minus R20 fee, in cash
+  const a = await mk('100');
+  await openClient(c.id);
+  click(`[data-action="lb-cancel"][data-id="${a.lb.id}"]`); await tick();
+  type('#lbcFee', '20');
+  click('[data-action="lbc-save"]'); await tick(300);
+  eq([a.lb.status, a.lb.cancel.refund, a.lb.cancel.fee, a.lb.cancel.method], ['cancelled', 8000, 2000, 'cash'], 'refund minus fee');
+  eq(variant(product('Test <b>Tee</b>'), a.v.size, a.v.colour).stock, a.stock + 1, 'item back in stock');
+  ok(receiptText().includes('LAY-BY CANCELLED') && receiptText().includes('R80.00'), 'cancellation slip');
+  closeModal();
+  eq(P.computeShift(P.state.meta.lastCashupAt, new Date().toISOString()).laybyRefundCash, 8000, 'cash refund comes off the expected cash');
+  // Store credit, then used on a new lay-by
+  const b = await mk('100');
+  await openClient(c.id);
+  click(`[data-action="lb-cancel"][data-id="${b.lb.id}"]`); await tick();
+  click('[data-action="lbc-mode"][data-v="credit"]'); await tick();
+  click('[data-action="lbc-save"]'); await tick(300);
+  eq(c.credit, 10000, 'R100 store credit');
+  closeModal();
+  const v = teeVariantWithMostStock();
+  P.ui.cart.customerId = c.id;
+  await addItem(product('Test <b>Tee</b>'), v.size, v.colour);
+  await startLayby();
+  type('#lbfAmount', '60'); click('[data-action="lbf-method"][data-m="credit"]');
+  click('[data-action="lbf-save"]'); await tick(400);
+  const used = P.state.laybys[P.state.laybys.length - 1];
+  eq([c.credit, used.payments[0].method, used.payments[0].amount], [4000, 'credit', 6000], 'credit used as a payment');
+  closeModal();
+  await openClient(c.id);
+  click(`[data-action="lb-cancel"][data-id="${used.id}"]`); await tick();
+  click('[data-action="lbc-mode"][data-v="credit"]'); await tick();
+  click('[data-action="lbc-save"]'); await tick(300);
+  eq(c.credit, 10000, 'credit returned when cancelled again');
+  closeModal();
+});
+
 test('Only one tab at a time; the other can take over', async () => {
   const main = document.getElementById('app'), second = document.getElementById('app2');
   await loadApp(second);
@@ -633,7 +760,7 @@ test('Admin: add a cashier who can only sell and see sales; edit, protect the la
   await signIn('thandi', '1111');
   ok($('#signin').hidden, 'cashier signed in');
   const visible = [...d.querySelectorAll('.app-nav button')].filter(b => !b.hidden).map(b => b.dataset.view);
-  eq(visible, ['sell', 'sales'], 'cashier sees only Sell and Sales');
+  eq(visible, ['sell', 'sales', 'customers'], 'cashier sees only Sell, Sales and Clients');
   ok($('#discountRow').hidden, 'no discount box');
   P.actions.nav({ dataset: { view: 'reports' } }); await tick();
   eq(P.ui.view, 'sell', 'reports blocked');
@@ -853,6 +980,7 @@ test('Cloud sync: two tills share sales, stock and settings; a wiped device gets
   eq(P.state.settings.storeName, shopName, 'shop name kept');
   use(document.getElementById('app2')); await synced();
   eq([P.state.products.length, P.state.sales.length > 0, P.state.settings.storeName], [8, true, shopName], 'B got the demo data');
+  eq([P.state.customers.length, P.state.laybys.length], [3, 2], 'B got the demo clients and lay-bys too');
   const v8 = P.state.products[0].variants[0];
   eq(v8.stock, (await P.DB.getAll('movements')).filter(m => m.variantId === v8.id).reduce((a, m) => a + m.change, 0), 'demo stock matches its movements');
 

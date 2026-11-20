@@ -47,6 +47,14 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - **Scan** button on the Sell screen uses the phone/tablet camera. Android/Chrome use the device's built-in reader; iPhone/iPad use the app's own reader (EAN-13, UPC-A, EAN-8 tag barcodes and Code 128 SKU labels, read with a check digit and two agreeing lines).
   - Each size/colour can store the **barcode printed on its tag** (Stock → tap the size → Barcode → Scan). USB/Bluetooth scanners work too (they type the code + Enter).
   - Optional **product photo**, shrunk to a 160 × 160 picture (about 3–10 KB) and shown small on the till, cart, picker and stock list.
+- **Clients and lay-bys**
+  - **Clients** screen: search, overdue first, totals owed. Each client has a profile with their details, notes, store credit, lay-bys and purchases.
+  - **Lay-by** button in the cart: choose or create the client, set the months to pay (default in Settings, 3), and take any deposit (no minimum) by cash, card, EFT or store credit. Items come off stock straight away.
+  - Add more items to an existing open lay-by later. Take any number of payments. Overdue lay-bys are marked red but can still be paid.
+  - **Collect & invoice** when paid in full creates the tax invoice listing every payment (VAT is counted at collection). Lay-by payments are shown separately in Reports and counted in the cash-up.
+  - **Cancel:** refund (optionally minus a fee), store credit, or the shop keeps the money. Items go back into stock.
+  - **Statements and slips:** WhatsApp, **Email** (opens the email app, already addressed), print, or an A4 statement with logo (save as PDF to attach).
+- **Shop details on receipts:** name, address, phone, email, website, extra lines (reg. no., bank details), VAT number, and the **shop logo** (printed slips, screen, A4). Product **descriptions** print under each item.
 - **Barcode labels**
   - Stock → **Labels** (all products) or a product's **Labels** button. Choose how many of each size (or "Quantity = stock" / "1 of each"), the sheet (24, 21 or 40 per A4 sheet, or plain paper to cut out) and where to start on a half-used sheet.
   - Each label shows the shop name, product, size/colour, price, a Code 128 barcode of the SKU and the SKU. It scans with the camera or a USB scanner. Print at **100% / Actual size** with **no margins**.
@@ -105,7 +113,7 @@ Then open http://localhost:8000. Offline mode only works over `http://localhost`
 
 With the server running, open **http://localhost:8000/tests.html** and click **Run all tests**, or open `tests.html?auto` to run them straight away.
 
-The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 33 tests should pass (one runs two "devices" against a fake Supabase to test syncing; one reads drawn barcodes that are blurred, noisy and upside down). They cover:
+The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 35 tests should pass (one runs two "devices" against a fake Supabase to test syncing; one reads drawn barcodes that are blurred, noisy and upside down). They cover:
 - sign-in, lock and changing the PIN
 - admin: adding, editing and deleting users, and what a cashier can't do
 - selling and stock

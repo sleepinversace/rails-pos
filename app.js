@@ -107,8 +107,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
    cloud and removes them from the outbox once they have arrived.
    ======================================================================== */
 
-const STORES = ['kv', 'products', 'sales', 'movements', 'cashups', 'outbox'];
-const SYNC_STORES = ['products', 'sales', 'movements', 'cashups'];
+const STORES = ['kv', 'products', 'sales', 'movements', 'cashups', 'customers', 'laybys', 'outbox'];
+const SYNC_STORES = ['products', 'sales', 'movements', 'cashups', 'customers', 'laybys'];
 const SYNC_KV = ['settings', 'auth']; // shared by all devices (meta, cart and cloud login stay per device)
 
 /** "sales:s123" for an op that must be sent to the cloud, else null. */
@@ -125,7 +125,7 @@ const DB = (() => {
     if (dbPromise) return dbPromise;
     dbPromise = new Promise((resolve, reject) => {
       if (!('indexedDB' in window)) return reject(new Error('This browser cannot store data (IndexedDB missing).'));
-      const req = indexedDB.open(DB_NAME, 3);
+      const req = indexedDB.open(DB_NAME, 4);
       req.onupgradeneeded = e => {
         const db = req.result;
         const tx = req.transaction;
@@ -135,6 +135,8 @@ const DB = (() => {
         if (!db.objectStoreNames.contains('movements')) db.createObjectStore('movements', { keyPath: 'id' }).createIndex('productId', 'productId');
         if (!db.objectStoreNames.contains('cashups')) db.createObjectStore('cashups', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('outbox')) db.createObjectStore('outbox', { keyPath: 'key' }); // v3: cloud sync queue
+        if (!db.objectStoreNames.contains('customers')) db.createObjectStore('customers', { keyPath: 'id' }); // v4: customers
+        if (!db.objectStoreNames.contains('laybys')) db.createObjectStore('laybys', { keyPath: 'id' }).createIndex('customerId', 'customerId'); // v4: lay-bys
         // Version 1 kept whole arrays in kv — move them into their own stores.
         if (e.oldVersion === 1) {
           const kv = tx.objectStore('kv');
@@ -218,9 +220,11 @@ async function persistEverything(movements = []) {
     ...state.products.map(p => opPut('products', p)),
     ...state.sales.map(s => opPut('sales', s)),
     ...state.cashups.map(c => opPut('cashups', c)),
+    ...state.customers.map(c => opPut('customers', c)),
+    ...state.laybys.map(l => opPut('laybys', l)),
     ...movements.map(m => opPut('movements', m)),
   ];
-  await DB.write(ops, ['products', 'sales', 'movements', 'cashups']);
+  await DB.write(ops, ['products', 'sales', 'movements', 'cashups', 'customers', 'laybys']);
 }
 
 /* ===== 3. State & loading =============================================== */
@@ -229,6 +233,11 @@ const DEFAULT_SETTINGS = {
   storeName: 'My Clothing Store',
   storeAddress: '',
   storePhone: '',
+  storeEmail: '',
+  storeWebsite: '',
+  storeExtra: '',           // extra receipt lines, e.g. company reg. no. or bank details
+  logo: null,               // small logo picture (data URL) for receipts, statements and the header
+  laybyMonths: 3,           // default lay-by term
   vatRegistered: true,      // false = no VAT on receipts or in reports
   vatNumber: '',
   vatRate: 15,              // percent; prices include VAT
@@ -243,6 +252,7 @@ const DEFAULT_META = {
   nextReceiptNo: 1,
   nextCreditNo: 1,          // credit notes (refunds / exchanges)
   nextZNo: 1,               // cash-up (Z) reports
+  nextLaybyNo: 1,           // lay-by numbers (LB…)
   lastCashupAt: null,       // the current shift started here
   float: 0,                 // cash left in the drawer at the last cash-up
   demo: false,
@@ -260,6 +270,13 @@ const DEFAULT_META = {
   ret:      { id, number, date, method (cash|card|eft|credit), items:[{idx, qty, amount, cost}], amount, vat, cost }
   movement: { id, date, productId, variantId, name, size, colour, sku, change, after, reason, ref }
   cashup:   { id, number, from, to, ...totals, expected, counted, diff, nextFloat }
+  customer: { id, name, phone, email, address, notes, credit (store credit, cents), created }
+  layby:    { id, number, series?, device?, date, dueDate 'YYYY-MM-DD', customerId, customer {name, phone, email},
+              items:[item], subtotal, discount, total, vatRate, store, cashier, notes,
+              payments:[{ id, date, amount, method (cash|card|eft|credit), cashier, device?, series? }],
+              status (open|completed|cancelled), completedAt?, saleId?,
+              cancel?: { date, paid, fee, refund, method (cash|card|eft|credit|kept), cashier, device? } }
+  product.description and item.description: text printed under the item on receipts.
 */
 const state = {
   settings: { ...DEFAULT_SETTINGS },
@@ -267,6 +284,8 @@ const state = {
   products: [],
   sales: [],
   cashups: [],
+  customers: [],
+  laybys: [],
 };
 
 /** UI-only state. The cart is saved too (see saveCart) so a flat phone doesn't lose it. */
@@ -290,9 +309,9 @@ function emptyCart(payment = 'cash') {
 }
 
 async function loadState() {
-  const [settings, meta, cart, products, sales, cashups] = await Promise.all([
+  const [settings, meta, cart, products, sales, cashups, customers, laybys] = await Promise.all([
     DB.get('kv', 'settings'), DB.get('kv', 'meta'), DB.get('kv', 'cart'),
-    DB.getAll('products'), DB.getAll('sales'), DB.getAll('cashups'),
+    DB.getAll('products'), DB.getAll('sales'), DB.getAll('cashups'), DB.getAll('customers'), DB.getAll('laybys'),
   ]);
   if (!meta) {
     // A brand-new device: start empty; the first-time setup (section 14d)
@@ -300,10 +319,12 @@ async function loadState() {
     ui.firstRun = true;
     state.settings = { ...DEFAULT_SETTINGS };
     state.meta = { ...DEFAULT_META };
-    state.products = []; state.sales = []; state.cashups = [];
+    state.products = []; state.sales = []; state.cashups = []; state.customers = []; state.laybys = [];
     return;
   }
   ui.firstRun = false;
+  state.customers = customers.sort(byName);
+  state.laybys = laybys.sort(byDate);
   state.settings = { ...DEFAULT_SETTINGS, ...settings };
   state.meta = { ...DEFAULT_META, ...meta };
   if (!state.meta.installedAt) { // devices set up before licences existed: trial starts now
@@ -318,6 +339,7 @@ async function loadState() {
 
 /** Bring older sale records up to the current shape. */
 const byDate = (a, b) => a.date.localeCompare(b.date) || a.number - b.number;
+const byName = (a, b) => a.name.localeCompare(b.name);
 
 function normalizeSale(s) {
   s.returns ||= [];
@@ -394,8 +416,39 @@ function loadDemoData() {
   }
   state.sales.sort((a, b) => a.date.localeCompare(b.date));
   state.sales.forEach((s, i) => { s.number = i + 1; });
+
+  // Sample customers with lay-bys: one on track, one overdue, one with store credit.
+  state.products[3].description = 'Knee-length wrap dress, soft viscose, tie waist.';
+  const dayIso = n => { const d = addDays(startOfDay(), n); d.setHours(11); return d.toISOString(); };
+  const mkCust = (name, phone, email, credit = 0) => ({ id: uid('c'), name, phone, email, address: '', notes: '', credit, created: Date.now() });
+  state.customers = [
+    mkCust('Fatima Adams', '082 555 0101', 'fatima@example.com'),
+    mkCust('Zanele Dlamini', '073 555 0202', ''),
+    mkCust('Ayesha Khan', '061 555 0303', 'ayesha@example.com', 15000),
+  ];
+  const mkLayby = (no, cust, startDay, picks, pays) => {
+    const items = picks.map(([pi, vi]) => {
+      const p = state.products[pi], v = p.variants[vi];
+      v.stock = Math.max(0, v.stock - 1); // put aside for the customer
+      return saleItem(p, v, 1);
+    });
+    const total = sum(items, it => it.unitPrice * it.qty);
+    const start = dayIso(startDay);
+    const due = addDays(new Date(start), 0); due.setMonth(due.getMonth() + 3);
+    return {
+      id: uid('lb'), number: no, date: start, dueDate: toDateInput(due), customerId: cust.id,
+      customer: { name: cust.name, phone: cust.phone, email: cust.email },
+      items, subtotal: total, discount: 0, total, vatRate: 15, store: null, cashier: '', notes: '',
+      payments: pays.map(([d, amt, method]) => ({ id: uid('pay'), date: dayIso(d), amount: amt * 100, method, cashier: '' })),
+      status: 'open',
+    };
+  };
+  state.laybys = [
+    mkLayby(1, state.customers[0], -40, [[3, 0], [5, 1]], [[-40, 300, 'cash'], [-10, 250, 'eft']]),
+    mkLayby(2, state.customers[1], -125, [[1, 2]], [[-125, 100, 'cash']]),
+  ];
   state.meta = {
-    ...DEFAULT_META, demo: true, nextReceiptNo: state.sales.length + 1,
+    ...DEFAULT_META, demo: true, nextReceiptNo: state.sales.length + 1, nextLaybyNo: 3,
     lastCashupAt: startOfDay().toISOString(), float: 50000,
   };
   ui.cart = emptyCart();
@@ -455,13 +508,17 @@ function saleItem(product, variant, qty) {
     productId: product.id, variantId: variant.id, name: product.name,
     size: variant.size, colour: variant.colour, sku: variant.sku,
     qty, unitPrice: priceOf(product, variant), unitCost: costOf(product, variant),
+    ...(product.description ? { description: product.description } : {}),
   };
 }
 
-/** Store details are copied onto each sale so old receipts never change. */
+/** Store details are copied onto each sale so old receipts never change. (The logo is not copied — it is large.) */
 function storeSnapshot() {
   const s = state.settings;
-  return { name: s.storeName, address: s.storeAddress, phone: s.storePhone, vatRegistered: !!s.vatRegistered, vatNumber: s.vatNumber };
+  return {
+    name: s.storeName, address: s.storeAddress, phone: s.storePhone, email: s.storeEmail, website: s.storeWebsite,
+    extra: s.storeExtra, vatRegistered: !!s.vatRegistered, vatNumber: s.vatNumber,
+  };
 }
 
 /** A stock movement record (audit trail). Call AFTER changing variant.stock. */
@@ -565,6 +622,11 @@ async function checkout() {
   }
   if (t.cash && (!Number.isFinite(t.tendered) || t.tendered < t.due)) return toast('Cash tendered is less than the amount due', true);
 
+  // A client chosen for this sale: their name goes on the invoice (and their address, if we have it).
+  const client = ui.cart.customerId ? findCustomer(ui.cart.customerId) : null;
+  if (client && !ui.cart.customer && (client.address || t.total <= FULL_TAX_INVOICE_OVER)) {
+    ui.cart.customer = { name: client.name, address: client.address || '', vatNumber: '' };
+  }
   // Big sales by a VAT vendor need a full tax invoice with the buyer's details.
   if (state.settings.vatRegistered && t.total > FULL_TAX_INVOICE_OVER && !ui.cart.customer) return openCustomerForm();
 
@@ -597,6 +659,7 @@ async function checkout() {
     returns: [],
     status: 'completed',
     cashier: ui.user?.name || '', // who was signed in
+    ...(client ? { customerId: client.id } : {}),
     ...deviceStamp(),             // which till (cloud sync): series letter + device id
   };
 
@@ -867,7 +930,7 @@ async function saveReceive(productId) {
   toast(`Received ${total} item${total === 1 ? '' : 's'}`);
 }
 
-const REASON_LABEL = { sale: 'Sold', return: 'Returned', adjust: 'Adjusted', count: 'Stock count', receive: 'Received', new: 'New product', opening: 'Opening stock' };
+const REASON_LABEL = { sale: 'Sold', return: 'Returned', adjust: 'Adjusted', count: 'Stock count', receive: 'Received', new: 'New product', opening: 'Opening stock', layby: 'Lay-by (put aside)', 'layby-cancel': 'Lay-by cancelled' };
 
 async function openHistory(productId) {
   const p = findProduct(productId);
@@ -1057,6 +1120,11 @@ function computeShift(fromIso, toIso) {
   const float = state.meta.float || 0;
   const gross = sum(sales, s => s.total);
   const refunds = sum(rets, x => x.ret.amount);
+  // Lay-by money taken / paid back on this till during the shift
+  const lbPays = state.laybys.flatMap(l => l.payments).filter(p => inShift(p.date) && mine(p));
+  const lbPaid = m => sum(lbPays.filter(p => p.method === m), p => p.amount);
+  const lbRefundCash = sum(state.laybys.filter(l => l.cancel && l.cancel.method === 'cash' && inShift(l.cancel.date) && mine(l.cancel)), l => l.cancel.refund);
+  const laybyCash = lbPaid('cash');
   return {
     from: fromIso, to: toIso, float,
     salesCount: sales.length, refundCount: rets.length,
@@ -1065,7 +1133,8 @@ function computeShift(fromIso, toIso) {
     cashSales, card: byMethod('card'), eft: byMethod('eft'),
     cardRefunds: refundBy('card'), eftRefunds: refundBy('eft'),
     creditUsed: sum(sales, s => s.creditUsed),
-    cashOut, expected: float + cashSales - cashOut,
+    laybyCount: lbPays.length, laybyCash, laybyCard: lbPaid('card'), laybyEft: lbPaid('eft'), laybyRefundCash: lbRefundCash,
+    cashOut, expected: float + cashSales + laybyCash - cashOut - lbRefundCash,
   };
 }
 
@@ -1080,8 +1149,10 @@ function openCashup() {
         <span>Opening float</span><span class="money">${money(sh.float)}</span>
         <span>+ Cash sales</span><span class="money">${money(sh.cashSales)}</span>
         <span>− Cash refunds</span><span class="money">${money(sh.cashOut)}</span>
+        ${sh.laybyCash || sh.laybyRefundCash ? `<span>+ Lay-by payments (cash)</span><span class="money">${money(sh.laybyCash)}</span>` : ''}
+        ${sh.laybyRefundCash ? `<span>− Lay-by refunds (cash)</span><span class="money">${money(sh.laybyRefundCash)}</span>` : ''}
         <span class="grand">Expected cash</span><span class="grand money">${money(sh.expected)}</span>
-        <span class="muted">Card / EFT (not in drawer)</span><span class="muted money">${money(sh.card - sh.cardRefunds)} / ${money(sh.eft - sh.eftRefunds)}</span>
+        <span class="muted">Card / EFT (not in drawer)</span><span class="muted money">${money(sh.card - sh.cardRefunds + (sh.laybyCard || 0))} / ${money(sh.eft - sh.eftRefunds + (sh.laybyEft || 0))}</span>
       </div>
       <label class="field" style="margin-top:14px"><span>Cash counted in the drawer (R)</span><input class="input" id="cuCounted" inputmode="decimal" autofocus></label>
       <div id="cuDiff" class="small" aria-live="polite"></div>
@@ -1119,7 +1190,7 @@ async function saveCashup() {
 
 /* ===== 11. Documents (receipts, credit notes, Z-reports) ================ */
 
-const PAY_LABEL = { cash: 'Cash', card: 'Card', eft: 'EFT', credit: 'Exchange credit' };
+const PAY_LABEL = { cash: 'Cash', card: 'Card', eft: 'EFT', credit: 'Exchange credit', layby: 'Lay-by', storecredit: 'Store credit' };
 const W = 32; // characters per line (fits 58mm printers & WhatsApp monospace)
 
 function lr(left, right) {
@@ -1139,9 +1210,23 @@ function headerLines(store, title) {
   wrap(st.name).forEach(l => out.push(center(l)));
   String(st.address || '').split('\n').filter(Boolean).forEach(a => wrap(a).forEach(l => out.push(center(l))));
   if (st.phone) out.push(center(`Tel ${st.phone}`));
+  if (st.email) wrap(st.email).forEach(l => out.push(center(l)));
+  if (st.website) wrap(st.website).forEach(l => out.push(center(l)));
+  String(st.extra || '').split('\n').filter(Boolean).forEach(a => wrap(a).forEach(l => out.push(center(l))));
   if (st.vatRegistered && st.vatNumber) out.push(center(`VAT No. ${st.vatNumber}`));
   out.push('');
   out.push(center(title));
+  return out;
+}
+
+/** An item line block: name (size/colour), its description, qty × price. */
+function itemLines(it, right = money(it.unitPrice * it.qty)) {
+  const out = wrap(`${it.name} (${it.size}/${it.colour})`);
+  if (it.description) {
+    const w = W - 2; // indented under the name
+    (String(it.description).match(new RegExp(`.{1,${w}}(\\s|$)|.{1,${w}}`, 'g')) || []).forEach(l => out.push('  ' + l.trim()));
+  }
+  out.push(lr(`  ${it.qty} x ${money(it.unitPrice)}`, right));
   return out;
 }
 const footerLines = () => String(state.settings.receiptFooter || '').split('\n').flatMap(f => wrap(f).map(center));
@@ -1159,10 +1244,7 @@ function receiptText(sale) {
     if (sale.customer.vatNumber) out.push('Customer VAT No. ' + sale.customer.vatNumber);
   }
   out.push(LINE);
-  for (const it of sale.items) {
-    wrap(`${it.name} (${it.size}/${it.colour})`).forEach(l => out.push(l));
-    out.push(lr(`  ${it.qty} x ${money(it.unitPrice)}`, money(it.unitPrice * it.qty)));
-  }
+  for (const it of sale.items) out.push(...itemLines(it));
   out.push(LINE);
   if (sale.discount) {
     out.push(lr('Subtotal', money(sale.subtotal)));
@@ -1174,7 +1256,12 @@ function receiptText(sale) {
     out.push(lr(`VAT @ ${sale.vatRate}% (incl.)`, money(sale.vat)));
   }
   if (sale.creditUsed) out.push(lr(`Credit ${sale.creditRef || ''}`.trim(), '-' + money(sale.creditUsed)));
-  if (sale.paid || !sale.creditUsed) {
+  if (sale.payment === 'layby') {
+    // Lay-by collected: list every payment that was made
+    out.push(LINE, `Paid by lay-by ${sale.laybyRef || ''}`.trim());
+    (sale.laybyPayments || []).forEach(p => out.push(lr(`  ${fmtDate(p.date)} ${PAY_LABEL[p.method === 'credit' ? 'storecredit' : p.method] || p.method}`, money(p.amount))));
+    out.push(lr('Total paid', money(sum(sale.laybyPayments || [], p => p.amount))));
+  } else if (sale.paid || !sale.creditUsed) {
     out.push(lr(`Paid: ${PAY_LABEL[sale.payment] || sale.payment}`, money(sale.payment === 'cash' ? sale.tendered : sale.paid)));
     if (sale.payment === 'cash') out.push(lr('Change', money(sale.change)));
   }
@@ -1198,8 +1285,7 @@ function creditNoteText(sale, ret) {
   out.push(LINE);
   for (const ri of ret.items) {
     const it = sale.items[ri.idx];
-    wrap(`${it.name} (${it.size}/${it.colour})`).forEach(l => out.push(l));
-    out.push(lr(`  ${ri.qty} returned`, '-' + money(ri.amount)));
+    out.push(...wrap(`${it.name} (${it.size}/${it.colour})`), lr(`  ${ri.qty} returned`, '-' + money(ri.amount)));
   }
   out.push(LINE, lr('TOTAL CREDIT', money(ret.amount)));
   if (registered) out.push(lr(`VAT @ ${sale.vatRate}% (incl.)`, money(ret.vat)));
@@ -1221,10 +1307,16 @@ function zText(z) {
   out.push(lr('Card (net)', money(z.card - z.cardRefunds)));
   out.push(lr('EFT (net)', money(z.eft - z.eftRefunds)));
   if (z.creditUsed) out.push(lr('Exchange credit used', money(z.creditUsed)));
+  if (z.laybyCount) {
+    out.push(LINE, `Lay-by payments (${z.laybyCount})`);
+    out.push(lr('  Cash', money(z.laybyCash)), lr('  Card', money(z.laybyCard)), lr('  EFT', money(z.laybyEft)));
+  }
   out.push(LINE);
   out.push(lr('Opening float', money(z.float)));
   out.push(lr('+ Cash sales', money(z.cashSales)));
+  if (z.laybyCash) out.push(lr('+ Lay-by cash', money(z.laybyCash)));
   out.push(lr('- Cash refunds', money(z.cashOut)));
+  if (z.laybyRefundCash) out.push(lr('- Lay-by refunds', money(z.laybyRefundCash)));
   out.push(lr('Expected cash', money(z.expected)));
   out.push(lr('Counted cash', money(z.counted)));
   out.push(lr(z.diff === 0 ? 'Balanced' : z.diff > 0 ? 'OVER' : 'SHORT', money(Math.abs(z.diff))));
@@ -1235,13 +1327,21 @@ function zText(z) {
 /** A "doc ref" names any printable document: sale:<id>, ret:<saleId>:<retId>, z:<id>. */
 function resolveDoc(ref) {
   const [kind, a, b] = String(ref).split(':');
-  if (kind === 'sale') { const s = state.sales.find(x => x.id === a); return s && { kind, sale: s, text: receiptText(s), title: `${s.vatRate ? 'Tax invoice' : 'Receipt'} #${saleNo(s)}` }; }
+  if (kind === 'sale') { const s = state.sales.find(x => x.id === a); const c = s && state.customers.find(x => x.id === s.customerId);
+    return s && { kind, sale: s, text: receiptText(s), title: `${s.vatRate ? 'Tax invoice' : 'Receipt'} #${saleNo(s)}`, customerId: s.customerId, phone: c?.phone, email: c?.email }; }
   if (kind === 'ret') {
     const s = state.sales.find(x => x.id === a); const r = s?.returns.find(x => x.id === b);
     return r && { kind, sale: s, ret: r, text: creditNoteText(s, r), title: `${s.vatRate ? 'Credit note' : 'Refund slip'} ${retNo(r)}` };
   }
   if (kind === 'z') { const z = state.cashups.find(x => x.id === a); return z && { kind, z, text: zText(z), title: `Z-report #${zNo(z)}` }; }
+  if (kind === 'lb' || kind === 'lbpay' || kind === 'stmt') return resolveCustomerDoc(kind, a, b);
   return null;
+}
+
+/** Shop logo as an <img> (only our own small data-URL pictures). */
+function logoHtml(cls = 'doc-logo') {
+  const src = photoSrc({ photo: state.settings.logo });
+  return src ? `<img class="${cls}" src="${src}" alt="${esc(state.settings.storeName)} logo">` : '';
 }
 
 /** "082 123 4567" -> "27821234567" for wa.me. */
@@ -1254,7 +1354,7 @@ function waNumber(input) {
 function shareWhatsApp(ref) {
   const doc = resolveDoc(ref);
   if (!doc) return;
-  const num = waNumber($('#waPhone')?.value);
+  const num = waNumber($('#waPhone')?.value || doc.phone);
   // Triple backticks make WhatsApp show the text in monospace so columns line up.
   window.open(`https://wa.me/${num}?text=${encodeURIComponent('```\n' + doc.text + '\n```')}`, '_blank', 'noopener');
 }
@@ -1277,9 +1377,23 @@ function printDoc(ref) {
   if (!doc) return;
   // PLUG-IN: Bluetooth / ESC-POS printer — send doc.text to the printer here
   // (Web Bluetooth or a vendor SDK) instead of the browser print dialog.
-  $('#printArea').textContent = doc.text;
+  $('#printArea').innerHTML = `${logoHtml('slip-logo')}<pre>${esc(doc.text)}</pre>`;
   setPrintMode('slip');
   window.print();
+}
+
+/** Email a document with the device's email app (statements, lay-by slips, receipts). */
+function mailtoUrl(ref) {
+  const doc = resolveDoc(ref);
+  if (!doc) return '';
+  const to = ($('#emailTo')?.value || doc.email || '').trim();
+  const subject = `${doc.title} · ${state.settings.storeName}`;
+  return `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(doc.text)}`;
+}
+function emailDoc(ref) {
+  // PLUG-IN: automatic email — send through an email service (e.g. Resend) instead of opening the email app.
+  const url = mailtoUrl(ref);
+  if (url) location.href = url;
 }
 
 function showDoc(ref, { justSold = false } = {}) {
@@ -1292,16 +1406,23 @@ function showDoc(ref, { justSold = false } = {}) {
     body: `
       ${justSold && s.payment === 'cash' ? `<div class="banner info"><p>Change due: <strong class="money">${money(s.change)}</strong></p></div>` : ''}
       ${justSold && s.creditChange ? `<div class="banner info"><p>Pay out unused credit in cash: <strong class="money">${money(s.creditChange)}</strong></p></div>` : ''}
-      <pre class="receipt" tabindex="0" aria-label="${esc(doc.title)}">${esc(doc.text)}</pre>
+      <div class="doc-paper">${logoHtml()}<pre class="receipt" tabindex="0" aria-label="${esc(doc.title)}">${esc(doc.text)}</pre></div>
       ${doc.kind === 'ret' ? `<p class="small"><button class="link" data-action="open-doc" data-doc="sale:${esc(s.id)}">View original invoice #${saleNo(s)}</button></p>` : ''}
       ${doc.kind === 'sale' && s.returns.length ? `<p class="small">${s.returns.map(r => `<button class="link" data-action="open-doc" data-doc="ret:${esc(s.id)}:${esc(r.id)}">Credit note ${retNo(r)}</button>`).join(' · ')}</p>` : ''}
-      ${doc.kind !== 'z' ? `<label class="field" style="margin-top:12px"><span>Customer WhatsApp number (optional)</span>
-        <input id="waPhone" class="input" type="tel" inputmode="tel" placeholder="082 123 4567"></label>` : ''}`,
+      ${doc.kind !== 'z' ? `<div class="grid-2" style="margin-top:12px">
+        <label class="field"><span>Customer WhatsApp (optional)</span>
+          <input id="waPhone" class="input" type="tel" inputmode="tel" placeholder="082 123 4567" value="${esc(doc.phone || '')}"></label>
+        <label class="field"><span>Customer email (optional)</span>
+          <input id="emailTo" class="input" type="email" inputmode="email" placeholder="name@example.com" value="${esc(doc.email || '')}"></label>
+      </div>` : ''}`,
     foot: `
       <button class="btn primary" data-action="doc-wa" data-doc="${esc(ref)}">WhatsApp</button>
+      ${doc.kind !== 'z' ? `<button class="btn" data-action="doc-email" data-doc="${esc(ref)}">Email</button>` : ''}
       <button class="btn" data-action="doc-copy" data-doc="${esc(ref)}">Copy</button>
       <button class="btn" data-action="doc-print" data-doc="${esc(ref)}">Print</button>
+      ${doc.kind === 'stmt' ? `<button class="btn" data-action="stmt-a4" data-id="${esc(doc.customer.id)}">Print A4</button>` : ''}
       ${canReturn ? `<button class="btn danger" data-action="open-return" data-id="${esc(s.id)}">Return / exchange</button>` : ''}
+      ${doc.customerId && can('customers') ? `<button class="btn" data-action="open-customer" data-id="${esc(doc.customerId)}">Customer</button>` : ''}
       <button class="btn" data-action="close-modal">${justSold ? 'New sale' : 'Close'}</button>`,
   });
 }
@@ -1447,6 +1568,7 @@ function renderAll() {
   renderSell();
   renderCart();
   if (ui.view === 'admin') renderAdmin();
+  if (ui.view === 'customers') renderCustomers();
   if (ui.view === 'stock') renderStock();
   if (ui.view === 'sales') renderSales();
   if (ui.view === 'reports') renderReports();
@@ -1571,8 +1693,12 @@ function onSellSearchEnter() {
 function renderCart() {
   const t = cartTotals();
   const cr = ui.cart.credit;
-  $('#cartCredit').innerHTML = cr ? `<div class="credit-bar"><span>Exchange credit <strong>${esc(cr.label)}</strong>: <strong class="money">${money(cr.amount)}</strong></span>
-    <button class="btn sm ghost" data-action="cancel-credit">Cancel</button></div>` : '';
+  const cc = ui.cart.customerId ? findCustomer(ui.cart.customerId) : null;
+  if (ui.cart.customerId && !cc) ui.cart.customerId = null;
+  $('#cartCredit').innerHTML = (cr ? `<div class="credit-bar"><span>Exchange credit <strong>${esc(cr.label)}</strong>: <strong class="money">${money(cr.amount)}</strong></span>
+    <button class="btn sm ghost" data-action="cancel-credit">Cancel</button></div>` : '')
+    + (cc ? `<div class="cust-chip cart-cust"><span>Client: <strong>${esc(cc.name)}</strong>${customerLaybys(cc.id).some(l => l.status === 'open') ? ' <span class="muted small">· has a lay-by</span>' : ''}</span>
+      <button class="btn ghost sm" data-action="cart-cust-clear" aria-label="Remove client from this sale">✕</button></div>` : '');
   $('#cartItems').innerHTML = t.lines.length ? t.lines.map(l => `
     <div class="cart-line">
       <div class="cl-name">${thumbHtml(l.product, 'sm')}<div><div><strong>${esc(l.product.name)}</strong></div>
@@ -1632,6 +1758,12 @@ function renderTotals(t = cartTotals()) {
   $('#chargeBtn').textContent = paused ? 'Selling paused (subscription)' : !t.lines.length ? 'Charge'
     : t.due === 0 ? 'Complete exchange'
     : `Charge ${money(t.due)} · ${PAY_LABEL[ui.cart.payment]}`;
+  // Lay-by: put the cart aside for a client instead of charging now
+  const lbBtn = $('#laybyBtn');
+  if (lbBtn) {
+    lbBtn.hidden = !can('customers') || !!t.credit;
+    lbBtn.disabled = paused || !t.lines.length;
+  }
   $('#cartBarCount').textContent = t.count ? `${t.count} item${t.count === 1 ? '' : 's'}${t.credit ? ' · exchange' : ''}` : (t.credit ? 'Exchange credit' : 'Cart empty');
   $('#cartBarTotal').textContent = money(t.credit ? t.due : t.total);
 }
@@ -1691,6 +1823,7 @@ function productForm(p) {
       <label class="field"><span>Price${state.settings.vatRegistered ? ' incl. VAT' : ''} (R)</span><input class="input" id="fPrice" inputmode="decimal" value="${p ? centsToPlain(p.price) : ''}"></label>
       <label class="field"><span>Cost (R)</span><input class="input" id="fCost" inputmode="decimal" value="${p ? centsToPlain(p.cost) : ''}"></label>
     </div>
+    <label class="field"><span>Description (printed on receipts, e.g. fabric, style, length)</span><textarea class="plain" id="fDesc" rows="2" maxlength="200">${esc(p?.description || "")}</textarea></label>
     <div class="field"><span>Photo (optional, kept small)</span>
       <div class="photo-row">
         <span id="fPhotoPrev"></span>
@@ -1710,7 +1843,7 @@ function readProductForm() {
   if (!name) { toast('Enter a product name', true); return null; }
   if (!Number.isFinite(price) || price <= 0) { toast('Enter a valid price', true); return null; }
   if (!Number.isFinite(cost) || cost < 0) { toast('Enter a valid cost', true); return null; }
-  return { name, category, price, cost, photo: ui.formPhoto || null };
+  return { name, category, price, cost, photo: ui.formPhoto || null, description: ($("#fDesc")?.value || "").trim() };
 }
 
 function openAddProduct() {
@@ -1752,6 +1885,7 @@ async function saveNewProduct() {
   const stockByKey = Object.fromEntries($$('#variantGrid input[data-key]').map(i => [i.dataset.key, i.value]));
   const product = { id: uid('p'), ...base, created: Date.now(), variants: [] };
   if (!product.photo) delete product.photo;
+  if (!product.description) delete product.description;
   for (const colour of colours) for (const size of sizes) {
     product.variants.push({
       id: uid('v'), size, colour,
@@ -1786,6 +1920,7 @@ async function saveEditProduct(id) {
   if (!base) return;
   Object.assign(p, base);
   if (!p.photo) delete p.photo;
+  if (!p.description) delete p.description;
   await persist([opPut('products', p)]);
   closeModal();
   renderAll();
@@ -1942,7 +2077,7 @@ function renderReports() {
 
   const r = buildReport(range);
   const prev = previousRevenue(range);
-  const methods = ['cash', 'card', 'eft', 'credit'].filter(k => k !== 'credit' || r.byPayment.credit.sales || r.byPayment.credit.refunds);
+  const methods = ['cash', 'card', 'eft', 'credit', 'layby'].filter(k => ['cash', 'card', 'eft'].includes(k) || r.byPayment[k]?.sales || r.byPayment[k]?.refunds);
   const payTotal = Math.max(1, sum(methods, k => Math.max(0, r.byPayment[k].sales - r.byPayment[k].refunds)));
   const vatOn = r.vat !== 0 || effectiveRate() > 0;
   const pct = n => `${Math.round(n)}%`;
@@ -1994,8 +2129,10 @@ function renderReports() {
             <span class="small pay-amt"><span class="money" data-k="pay-${k}">${money(net)}${b.refunds ? ` <span class="muted">(−${money(b.refunds)})</span>` : ''}</span>
               <span class="muted pay-pct">${pct(Math.max(0, net) / payTotal * 100)}</span></span></div>`;
         }).join('')}
-        <p class="small muted" style="margin:6px 0 0">Net of refunds. Cash refunds include unused exchange credit paid out.</p>
+        <p class="small muted" style="margin:6px 0 0">Net of refunds. Cash refunds include unused exchange credit paid out. “Lay-by” = lay-bys collected (invoiced) in this period.</p>
         </div>
+
+        ${laybyReportCard(range)}
 
         <div class="section-title">By category</div>
         <div class="card">${r.categories.length ? `<table class="list-table">${r.categories.map(c => `
@@ -2049,9 +2186,11 @@ function openPrintMenu() {
 /** Store details + title block at the top of every A4 page set. */
 function a4Header(title, subtitle) {
   const st = state.settings;
+  const bits = [String(st.storeAddress || '').replace(/\n/g, ' · '), st.storePhone, st.storeEmail, st.storeWebsite,
+    String(st.storeExtra || '').replace(/\n/g, ' · '), effectiveRate() > 0 && st.vatNumber ? `VAT No. ${st.vatNumber}` : ''].filter(Boolean);
   return `<header class="a4-head">
-    <div><div class="a4-store">${esc(st.storeName)}</div>
-      <div class="a4-addr">${esc(st.storeAddress || '').replace(/\n/g, ' · ')}${st.storePhone ? ` · ${esc(st.storePhone)}` : ''}${effectiveRate() > 0 && st.vatNumber ? ` · VAT No. ${esc(st.vatNumber)}` : ''}</div></div>
+    <div class="a4-brand">${logoHtml('a4-logo')}<div><div class="a4-store">${esc(st.storeName)}</div>
+      <div class="a4-addr">${bits.map(esc).join(' · ')}</div></div></div>
     <div class="a4-title"><h1>${esc(title)}</h1><div>${esc(subtitle)}</div></div>
   </header>`;
 }
@@ -2061,7 +2200,7 @@ const m4 = (cents, cls = '') => `<span class="m ${cents < 0 || cls === 'neg' ? '
 function a4Summary(range) {
   const r = buildReport(range);
   const vatOn = r.vat !== 0 || effectiveRate() > 0;
-  const methods = ['cash', 'card', 'eft', 'credit'].filter(k => k !== 'credit' || r.byPayment.credit.sales || r.byPayment.credit.refunds);
+  const methods = ['cash', 'card', 'eft', 'credit', 'layby'].filter(k => ['cash', 'card', 'eft'].includes(k) || r.byPayment[k]?.sales || r.byPayment[k]?.refunds);
   const dayRows = r.series.unit === 'day'
     ? r.series.points
     : [{ label: range.label, amount: r.revenue, count: r.count }];
@@ -2197,8 +2336,26 @@ async function renderSettings() {
     <div class="card">
       <label class="field"><span>Store name</span><input class="input" data-setting="storeName" value="${esc(st.storeName)}"></label>
       <label class="field"><span>Address</span><textarea class="plain" data-setting="storeAddress" rows="2">${esc(st.storeAddress)}</textarea></label>
-      <label class="field"><span>Phone</span><input class="input" type="tel" data-setting="storePhone" value="${esc(st.storePhone)}"></label>
-      <label class="field" style="margin-bottom:0"><span>Receipt footer</span><textarea class="plain" data-setting="receiptFooter" rows="3">${esc(st.receiptFooter)}</textarea></label>
+      <div class="grid-2">
+        <label class="field"><span>Phone</span><input class="input" type="tel" data-setting="storePhone" value="${esc(st.storePhone)}"></label>
+        <label class="field"><span>Email</span><input class="input" type="email" data-setting="storeEmail" value="${esc(st.storeEmail)}"></label>
+      </div>
+      <label class="field"><span>Website / Instagram</span><input class="input" data-setting="storeWebsite" value="${esc(st.storeWebsite)}" placeholder="e.g. www.myshop.co.za or @myshop"></label>
+      <label class="field"><span>Extra lines (company reg. no., bank details…)</span><textarea class="plain" data-setting="storeExtra" rows="2">${esc(st.storeExtra)}</textarea></label>
+      <label class="field"><span>Receipt footer</span><textarea class="plain" data-setting="receiptFooter" rows="3">${esc(st.receiptFooter)}</textarea></label>
+      <div class="field" style="margin-bottom:0"><span>Logo (on receipts, slips and statements)</span>
+        <div class="photo-row">
+          ${logoHtml('settings-logo') || '<span class="thumb lg empty-thumb" aria-hidden="true"><svg class="ico-sm"><use href="#i-camera"/></svg></span>'}
+          <label class="btn sm" tabindex="0" role="button" data-file-trigger>${st.logo ? 'Change logo' : 'Add logo'}<input type="file" id="logoFile" accept="image/*" hidden></label>
+          ${st.logo ? '<button type="button" class="btn sm ghost" data-action="logo-remove">Remove</button>' : ''}
+        </div>
+      </div>
+    </div>
+    <div class="section-title">Lay-bys</div>
+    <div class="card">
+      <label class="field" style="margin-bottom:0"><span>Months to pay a lay-by (default for new lay-bys)</span>
+        <input class="input" inputmode="numeric" data-setting="laybyMonths" value="${esc(st.laybyMonths)}"></label>
+      <p class="small muted" style="margin:6px 0 0">Overdue lay-bys are marked in red but can still be paid. Statements can be sent from the client's profile.</p>
     </div>
     <div class="section-title">VAT</div>
     <div class="card">
@@ -2290,6 +2447,11 @@ async function onSettingChange(input) {
     value = parseInt(value, 10);
     if (!Number.isFinite(value) || value < 0) return toast('Threshold must be 0 or more', true);
   }
+  if (key === 'laybyMonths') {
+    value = parseInt(value, 10);
+    if (!(value >= 1 && value <= 36)) return toast('Months must be 1 to 36', true);
+  }
+  if (key === 'storeEmail' && value && !/^\S+@\S+\.\S+$/.test(value.trim())) return toast('That email address doesn\'t look right', true);
   if (key === 'vatNumber') {
     value = String(value).replace(/\s/g, '');
     if (value && !/^4\d{9}$/.test(value)) toast('Note: SA VAT numbers are 10 digits starting with 4', true);
@@ -2310,7 +2472,7 @@ async function backupJson() {
   return JSON.stringify({
     app: 'rails-pos', version: 2, exportedAt: new Date().toISOString(),
     settings: state.settings, meta: state.meta, products: state.products, sales: state.sales,
-    cashups: state.cashups, movements: await DB.getAll('movements'),
+    cashups: state.cashups, customers: state.customers, laybys: state.laybys, movements: await DB.getAll('movements'),
   });
 }
 
@@ -2362,11 +2524,14 @@ async function restoreFromText(text) {
   state.products = data.products;
   state.sales = data.sales.map(normalizeSale);
   state.cashups = data.cashups || [];
+  state.customers = (data.customers || []).sort(byName);
+  state.laybys = (data.laybys || []).sort(byDate);
   state.meta = { ...DEFAULT_META, ...data.meta };
   // Never reuse a number that already exists.
   state.meta.nextReceiptNo = Math.max(state.meta.nextReceiptNo, ...state.sales.map(s => s.number + 1));
   state.meta.nextCreditNo = Math.max(state.meta.nextCreditNo, ...state.sales.flatMap(s => s.returns.map(r => r.number + 1)));
   state.meta.nextZNo = Math.max(state.meta.nextZNo, ...state.cashups.map(z => z.number + 1));
+  state.meta.nextLaybyNo = Math.max(state.meta.nextLaybyNo || 1, ...state.laybys.map(l => l.number + 1));
   state.sales.sort(byDate);
   ui.cart = emptyCart();
   await persistEverything(data.movements || []);
@@ -2415,6 +2580,8 @@ async function startFresh() {
   state.products = [];
   state.sales = [];
   state.cashups = [];
+  state.customers = [];
+  state.laybys = [];
   state.meta = { ...DEFAULT_META };
   ui.cart = emptyCart();
   await persistEverything();
@@ -2475,6 +2642,7 @@ const PERMISSIONS = [
   ['stock', 'Stock', 'Add and edit products, change stock, receive deliveries'],
   ['reports', 'Reports and cash-up', 'See takings and profit, do the cash-up'],
   ['settings', 'Settings and backups', 'Store details, VAT, backup, restore, start fresh'],
+  ['customers', 'Clients and lay-bys', 'Client profiles, lay-bys, payments and statements'],
   ['admin', 'Admin', 'Add, change and delete users and what they may do'],
 ];
 const ALL_PERMS = PERMISSIONS.map(p => p[0]);
@@ -2482,11 +2650,11 @@ const ALL_PERMS = PERMISSIONS.map(p => p[0]);
 const ROLES = {
   owner: { label: 'Owner', perms: ALL_PERMS },
   manager: { label: 'Manager', perms: ALL_PERMS.filter(p => p !== 'admin') },
-  cashier: { label: 'Cashier', perms: ['sales'] },
+  cashier: { label: 'Cashier', perms: ['sales', 'customers'] },
   custom: { label: 'Custom', perms: null },
 };
 /* Which permission each screen needs (Sell needs none). */
-const VIEW_PERMS = { stock: 'stock', sales: 'sales', reports: 'reports', settings: 'settings', admin: 'admin' };
+const VIEW_PERMS = { stock: 'stock', sales: 'sales', customers: 'customers', reports: 'reports', settings: 'settings', admin: 'admin' };
 
 // There is no built-in account: a new device runs the first-time setup
 // (section 14d), where the shop owner chooses their own name and PIN.
@@ -2512,6 +2680,12 @@ async function loadAuth() {
   const auth = (await DB.get('kv', 'auth')) || { users: [] };
   auth.users ||= [];
   let changed = false;
+  // v2 (lay-bys): owners, managers and cashiers get the new "Clients and lay-bys" permission.
+  if ((auth.permsVersion || 1) < 2 && auth.users.length) {
+    for (const u of auth.users) if (['owner', 'manager', 'cashier'].includes(u.role) && Array.isArray(u.perms) && !u.perms.includes('customers')) u.perms.push('customers');
+    auth.permsVersion = 2;
+    changed = true;
+  }
   // Accounts from the first sign-in version had no id or permissions.
   for (const u of auth.users) {
     if (!u.id) { u.id = 'u-' + normUser(u.name || u.username); changed = true; }
@@ -2930,7 +3104,7 @@ async function applyRemote(rows) {
   const pending = new Set((await DB.getAll('outbox')).map(o => o.key));
   const latest = new Map();
   rows.forEach(r => latest.set(`${r.kind}:${r.id}`, r));
-  const order = { kv: 0, products: 1, cashups: 2, sales: 3, movements: 4 };
+  const order = { kv: 0, products: 1, customers: 2, cashups: 3, sales: 4, laybys: 5, movements: 6 };
   const list = [...latest.values()].sort((a, b) => order[a.kind] - order[b.kind]);
   const ops = [];
   const restock = new Set();
@@ -2959,7 +3133,7 @@ async function applyRemote(rows) {
       continue;
     }
 
-    const arr = r.kind === 'products' ? state.products : r.kind === 'sales' ? state.sales : state.cashups;
+    const arr = { products: state.products, sales: state.sales, cashups: state.cashups, customers: state.customers, laybys: state.laybys }[r.kind];
     if (!arr || !SYNC_STORES.includes(r.kind)) continue;
     const i = arr.findIndex(x => x.id === r.id);
     if (r.deleted || !r.data) {
@@ -2985,6 +3159,8 @@ async function applyRemote(rows) {
   if (changed) {
     state.sales.sort(byDate);
     state.cashups.sort((a, b) => (a.to || '').localeCompare(b.to || ''));
+    state.customers.sort(byName);
+    state.laybys.sort(byDate);
   }
   if (authChanged) await refreshCurrentUser();
   return changed;
@@ -3163,7 +3339,7 @@ async function createCloudShop(mode) {
     if (mode === 'empty') {
       const theme = state.settings.theme;
       if (state.meta.demo) state.settings = { ...DEFAULT_SETTINGS, theme };
-      state.products = []; state.sales = []; state.cashups = [];
+      state.products = []; state.sales = []; state.cashups = []; state.customers = []; state.laybys = [];
       state.meta = { ...DEFAULT_META };
       ui.cart = emptyCart();
       await persistEverything();
@@ -3502,7 +3678,7 @@ async function finishSetup(mode) {
   } else if (mode === 'new') {
     const theme = state.settings.theme;
     state.settings = { ...DEFAULT_SETTINGS, storeName: shop, theme };
-    state.products = []; state.sales = []; state.cashups = [];
+    state.products = []; state.sales = []; state.cashups = []; state.customers = []; state.laybys = [];
     state.meta = { ...DEFAULT_META };
     ui.cart = emptyCart();
   }
@@ -3511,7 +3687,7 @@ async function finishSetup(mode) {
     await persistEverything();
     restoreCart(ui.cart);
   }
-  await saveAuth({ users: [user] });
+  await saveAuth({ users: [user], permsVersion: 2 });
   ui.firstRun = false;
   writeSession(user.id);
   setUser(user);
@@ -4084,6 +4260,621 @@ function printLabels() {
   setTimeout(() => window.print(), 50);
 }
 
+/* ===== 14f. Clients & lay-bys ===========================================
+   Clients (customers) have a profile with their lay-bys, purchases and any
+   store credit. A lay-by puts items aside (stock comes off straight away),
+   records any number of payments in cash / card / EFT / store credit, and
+   is "collected" when paid in full: that creates the tax invoice (VAT is due
+   when the goods are handed over) listing every payment made.
+   Overdue = past the pay-by date; it is flagged but payments still work.
+   Cancelling: the shop decides each time — refund (optionally minus a fee),
+   store credit, or keep the money; the items go back into stock.
+   Statements go out by WhatsApp, email (opens the email app), or print.
+   ======================================================================== */
+
+const lbNo = l => 'LB' + docNo(l.number, l.series);
+const lbPaid = l => sum(l.payments, p => p.amount);
+const lbBalance = l => l.total - lbPaid(l);
+const lbOverdue = l => l.status === 'open' && lbBalance(l) > 0 && toDateInput(new Date()) > l.dueDate;
+const findCustomer = id => state.customers.find(c => c.id === id);
+const findLayby = id => state.laybys.find(l => l.id === id);
+const customerLaybys = id => state.laybys.filter(l => l.customerId === id);
+const LB_LABEL = { open: 'Open', overdue: 'Overdue', ready: 'Paid · ready to collect', completed: 'Collected', cancelled: 'Cancelled' };
+const payLabel = m => (m === 'credit' ? 'Store credit' : PAY_LABEL[m] || m);
+const dueDateText = l => fmtLong(fromDateInput(l.dueDate));
+
+function lbState(l) {
+  if (l.status === 'completed' || l.status === 'cancelled') return l.status;
+  if (lbBalance(l) <= 0) return 'ready';
+  return lbOverdue(l) ? 'overdue' : 'open';
+}
+
+/* ----- Clients screen ----- */
+
+function renderCustomers() {
+  const box = $('#customersBody');
+  if (!box) return;
+  if (ui.custId) {
+    const c = findCustomer(ui.custId);
+    if (c) return renderCustomerProfile(c);
+    ui.custId = null;
+  }
+  if (!$('#custList')) {
+    box.innerHTML = `
+      <div class="toolbar">
+        <input id="custSearch" type="search" placeholder="Search name, phone or email…" aria-label="Search clients" value="${esc(ui.custQuery || '')}">
+        <button class="btn primary" data-action="cust-new">+ Client</button>
+      </div>
+      <div id="custChips" class="chips" role="group" aria-label="Show"></div>
+      <div id="custKpis" class="kpis lb-kpis"></div>
+      <div id="custList"></div>`;
+  }
+  paintCustomerList();
+}
+
+function paintCustomerList() {
+  const q = (ui.custQuery || '').trim().toLowerCase();
+  const digits = q.replace(/\D/g, '');
+  const f = ui.custFilter || 'all';
+  const open = state.laybys.filter(l => l.status === 'open');
+  const overdue = open.filter(lbOverdue);
+  $('#custChips').innerHTML = [['all', 'All clients'], ['open', 'Open lay-bys'], ['overdue', `Overdue${overdue.length ? ` (${overdue.length})` : ''}`]]
+    .map(([k, l]) => `<button class="chip ${f === k ? 'on' : ''}" aria-pressed="${f === k}" data-action="cust-filter" data-f="${k}">${l}</button>`).join('');
+  $('#custKpis').innerHTML = `
+    <div class="kpi"><div class="label">Open lay-bys</div><div class="value num">${open.length}</div></div>
+    <div class="kpi"><div class="label">Still to be paid</div><div class="value money">${money(sum(open, lbBalance))}</div></div>
+    <div class="kpi"><div class="label">Overdue</div><div class="value num ${overdue.length ? 'err-text' : ''}">${overdue.length}</div>
+      <div class="sub">${overdue.length ? money(sum(overdue, lbBalance)) + ' owed' : 'none'}</div></div>`;
+  const rows = state.customers
+    .filter(c => !q || c.name.toLowerCase().includes(q) || (digits && String(c.phone || '').replace(/\D/g, '').includes(digits)) || String(c.email || '').toLowerCase().includes(q))
+    .map(c => { const lbs = customerLaybys(c.id).filter(l => l.status === 'open'); return { c, open: lbs, overdue: lbs.filter(lbOverdue), owed: sum(lbs, lbBalance) }; })
+    .filter(x => f === 'all' || (f === 'open' && x.open.length) || (f === 'overdue' && x.overdue.length))
+    .sort((a, b) => b.overdue.length - a.overdue.length || b.open.length - a.open.length || a.c.name.localeCompare(b.c.name));
+  $('#custList').innerHTML = rows.length ? rows.map(x => `
+    <button class="cust-row ${x.overdue.length ? 'overdue' : ''}" data-action="open-customer" data-id="${esc(x.c.id)}">
+      <span class="cust-main"><strong>${esc(x.c.name)}</strong>
+        <span class="small muted">${esc(x.c.phone || '')}${x.c.email ? ` · ${esc(x.c.email)}` : ''}</span></span>
+      <span class="cust-side">${x.open.length
+        ? `<span class="money ${x.overdue.length ? 'neg' : ''}">${money(x.owed)}</span><span class="small muted">${x.open.length} lay-by${x.open.length === 1 ? '' : 's'}${x.overdue.length ? ' · <span class="err-text">overdue</span>' : ''}</span>`
+        : `<span class="small muted">${x.c.credit ? `Credit ${money(x.c.credit)}` : 'No open lay-by'}</span>`}</span>
+    </button>`).join('')
+    : `<div class="empty">${state.customers.length ? 'No clients match.' : 'No clients yet. Tap “+ Client”, or start a lay-by from the till.'}</div>`;
+}
+
+function renderCustomerProfile(c) {
+  const lbs = customerLaybys(c.id).slice().sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || b.date.localeCompare(a.date));
+  const sales = state.sales.filter(s => s.customerId === c.id).slice().reverse();
+  const owed = sum(lbs.filter(l => l.status === 'open'), lbBalance);
+  const tel = String(c.phone || '').replace(/[^\d+]/g, '');
+  $('#customersBody').innerHTML = `
+    <button class="btn ghost sm" data-action="cust-back">‹ All clients</button>
+    <div class="card cust-card">
+      <div class="cust-head">
+        <div class="grow">
+          <h2>${esc(c.name)}</h2>
+          <div class="small muted">${c.phone ? `<a class="link" href="tel:${esc(tel)}">${esc(c.phone)}</a>` : 'No phone'}${c.email ? ` · ${esc(c.email)}` : ''}</div>
+          ${c.address ? `<div class="small muted">${esc(c.address)}</div>` : ''}
+          ${c.notes ? `<div class="small" style="margin-top:4px">${esc(c.notes)}</div>` : ''}
+        </div>
+        <div class="row gap-s wrap">
+          <button class="btn sm" data-action="cust-edit" data-id="${esc(c.id)}">Edit</button>
+          <button class="btn sm" data-action="open-doc" data-doc="stmt:${esc(c.id)}">Statement</button>
+          <button class="btn sm primary" data-action="cust-sell" data-id="${esc(c.id)}">New lay-by / sale</button>
+        </div>
+      </div>
+      <div class="cust-stats">
+        <span>Owes <strong class="money ${lbs.some(lbOverdue) ? 'neg' : ''}">${money(owed)}</strong></span>
+        <span>Store credit <strong class="money">${money(c.credit || 0)}</strong></span>
+        <span>${lbs.length} lay-by${lbs.length === 1 ? '' : 's'} · ${sales.length} purchase${sales.length === 1 ? '' : 's'}</span>
+      </div>
+    </div>
+    <div class="section-title">Lay-bys</div>
+    ${lbs.length ? lbs.map(laybyCard).join('') : '<div class="empty">No lay-bys yet. Tap “New lay-by / sale”, add the items, then tap Lay-by.</div>'}
+    <div class="section-title">Purchases</div>
+    ${sales.length ? sales.map(saleRow).join('') : '<div class="empty">No purchases yet.</div>'}`;
+}
+
+function laybyCard(l) {
+  const st = lbState(l);
+  const paid = lbPaid(l), bal = Math.max(0, l.total - paid);
+  return `<div class="card lb-card lb-${st}">
+    <div class="lb-head"><strong>${lbNo(l)}</strong><span class="badge lb-badge-${st}">${LB_LABEL[st]}</span></div>
+    <div class="small muted">Started ${fmtDate(l.date)} · pay by ${dueDateText(l)}${l.completedAt ? ` · collected ${fmtDate(l.completedAt)}` : ''}${l.cancel ? ` · cancelled ${fmtDate(l.cancel.date)}` : ''}</div>
+    <ul class="lb-items">${l.items.map(it => `<li><span>${esc(it.name)} <span class="muted">(${esc(it.size)} / ${esc(it.colour)})${it.qty > 1 ? ` × ${it.qty}` : ''}</span></span><span class="money">${money(it.unitPrice * it.qty)}</span></li>`).join('')}</ul>
+    <div class="lb-sums">
+      <span>Total <b class="money">${money(l.total)}</b></span>
+      <span>Paid <b class="money">${money(paid)}</b></span>
+      ${l.status === 'open' ? `<span>Balance <b class="money ${st === 'overdue' ? 'neg' : ''}">${money(bal)}</b></span>` : ''}
+    </div>
+    ${l.payments.length ? `<details class="lb-pays"><summary>${l.payments.length} payment${l.payments.length === 1 ? '' : 's'}</summary>
+      ${l.payments.map(p => `<div class="lb-pay"><span>${fmtDate(p.date)} · ${esc(payLabel(p.method))}</span><span class="money">${money(p.amount)}</span></div>`).join('')}</details>` : ''}
+    <div class="row gap-s wrap">
+      ${l.status === 'open' && bal > 0 ? `<button class="btn sm primary" data-action="lb-pay" data-id="${esc(l.id)}">Take payment</button>` : ''}
+      ${l.status === 'open' && bal <= 0 ? `<button class="btn sm primary" data-action="lb-collect" data-id="${esc(l.id)}">Collect &amp; invoice</button>` : ''}
+      <button class="btn sm" data-action="open-doc" data-doc="lb:${esc(l.id)}">Slip</button>
+      ${l.saleId ? `<button class="btn sm" data-action="open-doc" data-doc="sale:${esc(l.saleId)}">Tax invoice</button>` : ''}
+      ${l.status === 'open' ? `<button class="btn sm danger" data-action="lb-cancel" data-id="${esc(l.id)}">Cancel lay-by</button>` : ''}
+    </div>
+  </div>`;
+}
+
+function openCustomer(id) {
+  ui.custId = id;
+  if (ui.view !== 'customers') showView('customers');
+  else { closeModal(); renderCustomers(); window.scrollTo(0, 0); }
+}
+
+/* ----- Client form ----- */
+
+function openCustomerEdit(id = null) {
+  const c = id ? findCustomer(id) : null;
+  openModal({
+    title: c ? `Edit ${c.name}` : 'New client',
+    body: `
+      <label class="field"><span>Name</span><input id="cuName" class="input" value="${esc(c?.name || '')}" autofocus></label>
+      <div class="grid-2">
+        <label class="field"><span>Phone / WhatsApp</span><input id="cuPhone" class="input" type="tel" inputmode="tel" value="${esc(c?.phone || '')}"></label>
+        <label class="field"><span>Email (for statements)</span><input id="cuEmail" class="input" type="email" inputmode="email" value="${esc(c?.email || '')}"></label>
+      </div>
+      <label class="field"><span>Address (needed on tax invoices over ${money(FULL_TAX_INVOICE_OVER)})</span><textarea id="cuAddr" class="plain" rows="2">${esc(c?.address || '')}</textarea></label>
+      <label class="field"><span>Notes (sizes, preferences…)</span><textarea id="cuNotes" class="plain" rows="2">${esc(c?.notes || '')}</textarea></label>`,
+    foot: `<button class="btn" data-action="close-modal">Cancel</button><button class="btn primary" data-action="cust-save" data-id="${esc(id || '')}">${c ? 'Save' : 'Add client'}</button>`,
+  });
+}
+
+async function saveCustomer(id) {
+  const name = $('#cuName').value.trim().replace(/\s+/g, ' ');
+  if (!name) return toast('Enter the client\'s name', true);
+  const email = $('#cuEmail').value.trim();
+  if (email && !/^\S+@\S+\.\S+$/.test(email)) return toast('That email address doesn\'t look right', true);
+  const c = id ? findCustomer(id) : { id: uid('c'), credit: 0, created: Date.now() };
+  Object.assign(c, { name, phone: $('#cuPhone').value.trim(), email, address: $('#cuAddr').value.trim(), notes: $('#cuNotes').value.trim() });
+  if (!id) { state.customers.push(c); state.customers.sort(byName); }
+  await persist([opPut('customers', c)]);
+  closeModal();
+  toast(id ? 'Client saved' : `${name} added`);
+  openCustomer(c.id);
+}
+
+/* ----- Selling to a client (cart) ----- */
+
+function sellToCustomer(id) {
+  const c = findCustomer(id);
+  if (!c) return;
+  ui.cart.customerId = c.id;
+  saveCart();
+  showView('sell');
+  toast(`Selling to ${c.name}. Add items, then tap Lay-by or Charge.`);
+}
+
+/* ----- Lay-by from the cart: new, or add to an open one ----- */
+
+function openLaybyForm() {
+  const t = cartTotals();
+  if (!t.lines.length) return toast('Add the items to the cart first', true);
+  if (ui.cart.credit) return toast('Finish the exchange first', true);
+  ui.lbf = { customerId: ui.cart.customerId || null, target: 'new', amount: '', method: 'cash', months: state.settings.laybyMonths || 3, notes: '', query: '' };
+  openModal({ title: 'Lay-by', body: '<div id="lbfBody"></div>', foot: '<div id="lbfFoot" class="foot-row"></div>' });
+  renderLaybyForm();
+}
+
+function renderLaybyForm() {
+  const f = ui.lbf;
+  const t = cartTotals();
+  const c = f.customerId ? findCustomer(f.customerId) : null;
+  const open = c ? customerLaybys(c.id).filter(l => l.status === 'open') : [];
+  if (f.target !== 'new' && !open.some(l => l.id === f.target)) f.target = 'new';
+  const target = f.target === 'new' ? null : findLayby(f.target);
+  const total = (target ? target.total : 0) + t.total;
+  const due = total - (target ? lbPaid(target) : 0);
+  const methods = [['cash', 'Cash'], ['card', 'Card'], ['eft', 'EFT'], ...(c?.credit > 0 ? [['credit', `Credit ${money(c.credit)}`]] : [])];
+  if (!methods.some(([m]) => m === f.method)) f.method = 'cash';
+  $('#lbfBody').innerHTML = `
+    ${c ? `<div class="cust-chip"><span>Client: <strong>${esc(c.name)}</strong> <span class="muted">${esc(c.phone || '')}</span></span>
+        <button class="btn ghost sm" data-action="lbf-cust-clear">Change</button></div>`
+      : `<label class="field"><span>Find the client</span><input id="lbfSearch" class="input" placeholder="Name or phone" autocomplete="off" value="${esc(f.query)}"></label>
+        <div id="lbfResults" class="lbf-results"></div>
+        <details class="lbf-new" ${state.customers.length ? '' : 'open'}><summary>New client</summary>
+          <div class="grid-2">
+            <label class="field"><span>Name</span><input id="ncName" class="input"></label>
+            <label class="field"><span>Phone / WhatsApp</span><input id="ncPhone" class="input" type="tel" inputmode="tel"></label>
+          </div>
+          <label class="field"><span>Email (for statements)</span><input id="ncEmail" class="input" type="email" inputmode="email"></label>
+        </details>`}
+    ${open.length ? `<div class="small-label" style="margin-top:10px">Lay-by</div>
+      <div class="opt-group">${[['new', 'Start a new lay-by'], ...open.map(l => [l.id, `Add to ${lbNo(l)} (owes ${money(lbBalance(l))})`])]
+        .map(([k, label]) => `<button class="opt ${f.target === k ? 'on' : ''}" aria-pressed="${f.target === k}" data-action="lbf-target" data-v="${esc(k)}">${esc(label)}</button>`).join('')}</div>` : ''}
+    <div class="lbf-summary">
+      <span>${t.count} item${t.count === 1 ? '' : 's'} now · <b class="money">${money(t.total)}</b></span>
+      ${target ? `<span>New lay-by total <b class="money">${money(total)}</b> · already paid <b class="money">${money(lbPaid(target))}</b></span>` : ''}
+    </div>
+    ${target ? '' : `<label class="field"><span>Months to pay</span><input id="lbfMonths" class="input" inputmode="numeric" value="${esc(f.months)}"></label>`}
+    <label class="field"><span>Paying now (R) — leave empty if nothing</span><input id="lbfAmount" class="input" inputmode="decimal" placeholder="0.00 (owes ${money(due)})" value="${esc(f.amount)}"></label>
+    <div class="seg pay lbf-methods" role="group" aria-label="Payment method">${methods.map(([m, l]) =>
+      `<button data-action="lbf-method" data-m="${m}" data-pay="${m === 'credit' ? 'eft' : m}" class="${f.method === m ? 'on' : ''}" aria-pressed="${f.method === m}">${esc(l)}</button>`).join('')}</div>
+    ${target ? '' : `<label class="field" style="margin-top:10px"><span>Notes (optional)</span><input id="lbfNotes" class="input" value="${esc(f.notes)}" placeholder="e.g. alterations, collection date"></label>`}`;
+  $('#lbfFoot').innerHTML = `<button class="btn" data-action="close-modal">Cancel</button>
+    <button class="btn primary" data-action="lbf-save">${target ? `Add to ${lbNo(target)}` : 'Create lay-by'}</button>`;
+  paintLaybyResults();
+}
+
+function paintLaybyResults() {
+  const box = $('#lbfResults');
+  if (!box) return;
+  const q = (ui.lbf.query || '').trim().toLowerCase();
+  const digits = q.replace(/\D/g, '');
+  const list = q ? state.customers.filter(c => c.name.toLowerCase().includes(q) || (digits && String(c.phone || '').replace(/\D/g, '').includes(digits))).slice(0, 6) : [];
+  box.innerHTML = list.map(c => `<button class="btn sm" data-action="lbf-pick" data-id="${esc(c.id)}">${esc(c.name)} <span class="muted">${esc(c.phone || '')}</span></button>`).join('')
+    || (q ? '<span class="small muted">No client found. Fill in “New client” below.</span>' : '');
+}
+
+async function saveLayby() {
+  const f = ui.lbf;
+  const t = cartTotals();
+  if (!t.lines.length) return toast('The cart is empty', true);
+  let c = f.customerId ? findCustomer(f.customerId) : null;
+  let isNew = false;
+  if (!c) {
+    const name = ($('#ncName')?.value || '').trim().replace(/\s+/g, ' ');
+    if (!name) return toast('Choose the client, or fill in the new client\'s name', true);
+    const email = $('#ncEmail').value.trim();
+    if (email && !/^\S+@\S+\.\S+$/.test(email)) return toast('That email address doesn\'t look right', true);
+    c = { id: uid('c'), name, phone: $('#ncPhone').value.trim(), email, address: '', notes: '', credit: 0, created: Date.now() };
+    isNew = true;
+  }
+  const existing = f.target === 'new' ? null : findLayby(f.target);
+  const amount = String(f.amount).trim() === '' ? 0 : parseMoney(f.amount);
+  if (!Number.isFinite(amount) || amount < 0) return toast('Enter a valid amount', true);
+  const owes = (existing ? existing.total - lbPaid(existing) : 0) + t.total;
+  if (amount > owes) return toast(`That is more than what is owed (${money(owes)})`, true);
+  if (f.method === 'credit' && amount > (c.credit || 0)) return toast(`Only ${money(c.credit || 0)} store credit available`, true);
+  const months = parseInt(f.months, 10);
+  if (!existing && !(months >= 1 && months <= 36)) return toast('Months to pay must be 1 to 36', true);
+
+  const now = new Date().toISOString();
+  const cashier = ui.user?.name || '';
+  if (isNew) { state.customers.push(c); state.customers.sort(byName); }
+  let lb = existing;
+  if (!lb) {
+    const number = state.meta.nextLaybyNo || 1;
+    state.meta.nextLaybyNo = number + 1;
+    const due = new Date();
+    due.setMonth(due.getMonth() + months);
+    lb = {
+      id: uid('lb'), number, ...deviceStamp(), date: now, dueDate: toDateInput(due), customerId: c.id,
+      customer: { name: c.name, phone: c.phone, email: c.email }, items: [], subtotal: 0, discount: 0, total: 0,
+      vatRate: t.rate, store: storeSnapshot(), cashier, notes: String(f.notes || '').trim(), payments: [], status: 'open',
+    };
+    state.laybys.push(lb);
+  }
+  lb.items.push(...t.lines.map(l => ({ ...saleItem(l.product, l.variant, l.qty), addedAt: now })));
+  lb.subtotal += t.subtotal;
+  lb.discount += t.discount;
+  lb.total += t.total;
+  const ops = [];
+  // Items are put aside for the client: they come off stock now.
+  t.lines.forEach(l => {
+    l.variant.stock -= l.qty;
+    ops.push(opPut('movements', movement(l.product, l.variant, -l.qty, 'layby', lbNo(lb))));
+  });
+  [...new Set(t.lines.map(l => l.product))].forEach(p => ops.push(opPut('products', p)));
+  let pay = null;
+  if (amount > 0) {
+    pay = { id: uid('pay'), date: now, amount, method: f.method, cashier, ...deviceStamp() };
+    lb.payments.push(pay);
+    if (f.method === 'credit') c.credit -= amount;
+  }
+  ui.cart = emptyCart(ui.cart.payment);
+  ops.push(opPut('laybys', lb), opPut('customers', c), opKv('meta', state.meta), opKv('cart', ui.cart));
+  await persist(ops);
+  $('#discountValue').value = '';
+  $('#tendered').value = '';
+  closeModal();
+  closeCartSheet();
+  renderAll();
+  toast(existing ? `Added to ${lbNo(lb)}` : `Lay-by ${lbNo(lb)} created for ${c.name}`);
+  showDoc(pay ? `lbpay:${lb.id}:${pay.id}` : `lb:${lb.id}`);
+}
+
+/* ----- Payments, collecting, cancelling ----- */
+
+function openLaybyPayment(id) {
+  const l = findLayby(id);
+  if (!l || l.status !== 'open') return;
+  const c = findCustomer(l.customerId);
+  ui.lbp = { id, method: 'cash' };
+  const methods = [['cash', 'Cash'], ['card', 'Card'], ['eft', 'EFT'], ...(c?.credit > 0 ? [['credit', `Credit ${money(c.credit)}`]] : [])];
+  openModal({
+    title: `Payment · ${lbNo(l)}`,
+    body: `
+      <p style="margin-top:0">${esc(l.customer.name)} · owes <strong class="money">${money(lbBalance(l))}</strong>${lbOverdue(l) ? ` · <span class="err-text">overdue since ${dueDateText(l)}</span>` : ` · pay by ${dueDateText(l)}`}</p>
+      <label class="field"><span>Amount (R)</span><input id="lbpAmount" class="input" inputmode="decimal" value="${centsToPlain(lbBalance(l))}" autofocus></label>
+      <div class="seg pay" role="group" aria-label="Payment method">${methods.map(([m, label]) =>
+        `<button data-action="lbp-method" data-m="${m}" data-pay="${m === 'credit' ? 'eft' : m}" class="${m === 'cash' ? 'on' : ''}" aria-pressed="${m === 'cash'}">${esc(label)}</button>`).join('')}</div>`,
+    foot: `<button class="btn" data-action="close-modal">Cancel</button><button class="btn primary" data-action="lbp-save">Take payment</button>`,
+  });
+  setTimeout(() => $('#lbpAmount')?.select(), 40);
+}
+
+async function saveLaybyPayment() {
+  const l = findLayby(ui.lbp?.id);
+  if (!l || l.status !== 'open') return;
+  const c = findCustomer(l.customerId);
+  const amount = parseMoney($('#lbpAmount').value);
+  const bal = lbBalance(l);
+  if (!Number.isFinite(amount) || amount <= 0) return toast('Enter the amount paid', true);
+  if (amount > bal) return toast(`That is more than the balance (${money(bal)})`, true);
+  const method = ui.lbp.method;
+  if (method === 'credit' && amount > (c?.credit || 0)) return toast(`Only ${money(c?.credit || 0)} store credit available`, true);
+  const pay = { id: uid('pay'), date: new Date().toISOString(), amount, method, cashier: ui.user?.name || '', ...deviceStamp() };
+  l.payments.push(pay);
+  const ops = [opPut('laybys', l)];
+  if (method === 'credit' && c) { c.credit -= amount; ops.push(opPut('customers', c)); }
+  await persist(ops);
+  closeModal();
+  renderAll();
+  toast(lbBalance(l) <= 0 ? `Paid in full! Tap “Collect & invoice” when ${l.customer.name} takes the items.` : `Payment of ${money(amount)} taken`);
+  showDoc(`lbpay:${l.id}:${pay.id}`);
+}
+
+async function collectLayby(id) {
+  const l = findLayby(id);
+  if (!l || l.status !== 'open') return;
+  if (lbBalance(l) > 0) return toast(`Still ${money(lbBalance(l))} to pay`, true);
+  if (!(await confirmBox(`${l.customer.name} is taking the items of ${lbNo(l)}? This closes the lay-by and prints the tax invoice.`, 'Collect'))) return;
+  const c = findCustomer(l.customerId);
+  const rate = l.vatRate ?? effectiveRate();
+  const now = new Date().toISOString();
+  const sale = normalizeSale({
+    id: uid('s'), number: state.meta.nextReceiptNo, date: now, store: storeSnapshot(),
+    customer: { name: l.customer.name, address: c?.address || '', vatNumber: '' }, customerId: l.customerId,
+    items: l.items, subtotal: l.subtotal, discountType: 'R', discountValue: l.discount, discount: l.discount,
+    total: l.total, vatRate: rate, vat: vatFromInclusive(l.total, rate),
+    payment: 'layby', paid: l.total, tendered: l.total, change: 0, creditUsed: 0, creditChange: 0, creditRef: null,
+    returns: [], status: 'completed', cashier: ui.user?.name || '',
+    laybyId: l.id, laybyRef: lbNo(l), laybyPayments: clone(l.payments), ...deviceStamp(),
+  });
+  state.meta.nextReceiptNo += 1;
+  Object.assign(l, { status: 'completed', completedAt: now, saleId: sale.id });
+  state.sales.push(sale);
+  await persist([opPut('sales', sale), opPut('laybys', l), opKv('meta', state.meta)]);
+  renderAll();
+  showDoc(`sale:${sale.id}`);
+}
+
+function openLaybyCancel(id) {
+  const l = findLayby(id);
+  if (!l || l.status !== 'open') return;
+  const paid = lbPaid(l);
+  ui.lbc = { id, mode: paid ? 'refund' : 'kept', method: 'cash' };
+  openModal({ title: `Cancel ${lbNo(l)}`, body: '<div id="lbcBody"></div>', foot: `<button class="btn" data-action="close-modal">Back</button>
+    <button class="btn danger solid" data-action="lbc-save">Cancel lay-by</button>` });
+  renderLaybyCancel();
+}
+
+function renderLaybyCancel() {
+  const l = findLayby(ui.lbc.id);
+  const paid = lbPaid(l);
+  const m = ui.lbc.mode;
+  $('#lbcBody').innerHTML = `
+    <p style="margin-top:0">${l.items.reduce((a, it) => a + it.qty, 0)} item(s) go back into stock. ${esc(l.customer.name)} has paid <strong class="money">${money(paid)}</strong>.</p>
+    ${paid ? `<div class="small-label">What happens to the money paid?</div>
+      <div class="opt-group">${[['refund', 'Refund'], ['credit', 'Store credit'], ['kept', 'Shop keeps it']].map(([k, label]) =>
+        `<button class="opt ${m === k ? 'on' : ''}" aria-pressed="${m === k}" data-action="lbc-mode" data-v="${k}">${label}</button>`).join('')}</div>
+      ${m !== 'kept' ? `<label class="field"><span>Cancellation fee kept by the shop (R, optional)</span><input id="lbcFee" class="input" inputmode="decimal" placeholder="0.00" value="${esc(ui.lbc.fee || '')}"></label>` : ''}
+      ${m === 'refund' ? `<div class="seg pay" role="group" aria-label="Refund method">${['cash', 'card', 'eft'].map(x =>
+        `<button data-action="lbc-method" data-m="${x}" data-pay="${x}" class="${ui.lbc.method === x ? 'on' : ''}" aria-pressed="${ui.lbc.method === x}">${PAY_LABEL[x]}</button>`).join('')}</div>` : ''}
+      <p class="small muted">${m === 'refund' ? 'The refund is paid back now (cash comes out of the drawer).' : m === 'credit' ? 'The money stays as store credit on the client\'s profile, to use on another lay-by.' : 'Nothing is paid back.'}</p>`
+      : '<p class="small muted">Nothing was paid, so there is nothing to refund.</p>'}`;
+}
+
+async function saveLaybyCancel() {
+  const l = findLayby(ui.lbc?.id);
+  if (!l || l.status !== 'open') return;
+  const c = findCustomer(l.customerId);
+  const paid = lbPaid(l);
+  const mode = paid ? ui.lbc.mode : 'kept';
+  const feeTxt = ($('#lbcFee')?.value || '').trim();
+  const fee = mode === 'kept' ? paid : feeTxt === '' ? 0 : parseMoney(feeTxt);
+  if (!Number.isFinite(fee) || fee < 0 || fee > paid) return toast(`The fee must be between R0 and ${money(paid)}`, true);
+  const back = paid - fee;
+  const now = new Date().toISOString();
+  const ops = [];
+  for (const it of l.items) {
+    const f = findVariant(it.variantId);
+    if (!f) continue;
+    f.variant.stock += it.qty;
+    ops.push(opPut('movements', movement(f.product, f.variant, it.qty, 'layby-cancel', lbNo(l))));
+    if (!ops.some(o => o.store === 'products' && o.value === f.product)) ops.push(opPut('products', f.product));
+  }
+  Object.assign(l, {
+    status: 'cancelled',
+    cancel: { date: now, paid, fee, refund: back, method: mode === 'refund' ? ui.lbc.method : mode, cashier: ui.user?.name || '', ...deviceStamp() },
+  });
+  if (mode === 'credit' && c) { c.credit = (c.credit || 0) + back; ops.push(opPut('customers', c)); }
+  ops.push(opPut('laybys', l));
+  await persist(ops);
+  closeModal();
+  renderAll();
+  toast(mode === 'refund' ? `Refund ${money(back)} (${PAY_LABEL[ui.lbc.method]})` : mode === 'credit' ? `${money(back)} added as store credit` : 'Lay-by cancelled');
+  showDoc(`lb:${l.id}`);
+}
+
+/** Reports: lay-by money taken in the period, and what is still owed. */
+function laybyReportCard(range) {
+  if (!state.laybys.length) return '';
+  const inRange = iso => { const d = new Date(iso); return d >= range.from && d < range.to; };
+  const pays = state.laybys.flatMap(l => l.payments).filter(p => inRange(p.date));
+  const by = m => sum(pays.filter(p => p.method === m), p => p.amount);
+  const open = state.laybys.filter(l => l.status === 'open');
+  const overdue = open.filter(lbOverdue);
+  const started = state.laybys.filter(l => inRange(l.date)).length;
+  const refunds = sum(state.laybys.filter(l => l.cancel && inRange(l.cancel.date) && !['kept', 'credit'].includes(l.cancel.method)), l => l.cancel.refund);
+  return `<div class="section-title">Lay-bys</div>
+    <div class="card"><table class="list-table">
+      <tr><td>Payments received (${pays.length})</td><td><span class="money">${money(sum(pays, p => p.amount))}</span></td></tr>
+      <tr><td class="muted small">&nbsp;&nbsp;Cash · Card · EFT${by('credit') ? ' · Credit' : ''}</td><td class="small"><span class="money">${money(by('cash'))}</span> · <span class="money">${money(by('card'))}</span> · <span class="money">${money(by('eft'))}</span>${by('credit') ? ` · <span class="money">${money(by('credit'))}</span>` : ''}</td></tr>
+      ${refunds ? `<tr><td>Refunded on cancelled lay-bys</td><td><span class="money neg">${money(refunds)}</span></td></tr>` : ''}
+      <tr><td>New lay-bys in this period</td><td>${started}</td></tr>
+      <tr><td>Open lay-bys now · still owed</td><td>${open.length} · <span class="money">${money(sum(open, lbBalance))}</span></td></tr>
+      <tr><td>Overdue now</td><td>${overdue.length}${overdue.length ? ` · <span class="money neg">${money(sum(overdue, lbBalance))}</span>` : ''}</td></tr>
+    </table>
+    <p class="small muted" style="margin:6px 0 0">Lay-by payments are deposits: they count as sales (and VAT) only when the lay-by is collected.</p></div>`;
+}
+
+/* ----- Slips and statements ----- */
+
+function laybyText(l, pay = null) {
+  const st = l.store || storeSnapshot();
+  const title = l.status === 'cancelled' ? 'LAY-BY CANCELLED' : pay ? 'LAY-BY PAYMENT RECEIPT' : 'LAY-BY';
+  const out = headerLines(st, title);
+  out.push(center(`No. ${lbNo(l)}`), center(fmtDT(pay ? pay.date : l.date)));
+  out.push(LINE, 'Client: ' + l.customer.name);
+  if (l.customer.phone) out.push('Tel ' + l.customer.phone);
+  out.push(lr('Started', fmtDate(l.date)), lr('Pay by', fmtDate(fromDateInput(l.dueDate).toISOString())));
+  out.push(LINE);
+  for (const it of l.items) out.push(...itemLines(it));
+  out.push(LINE);
+  if (l.discount) out.push(lr('Subtotal', money(l.subtotal)), lr('Discount', '-' + money(l.discount)));
+  out.push(lr('TOTAL', money(l.total)));
+  out.push(LINE, 'Payments made');
+  if (!l.payments.length) out.push('  none yet');
+  l.payments.forEach(p => out.push(lr(`  ${fmtDate(p.date)} ${payLabel(p.method)}${pay && p.id === pay.id ? ' *' : ''}`, money(p.amount))));
+  out.push(lr('Total paid', money(lbPaid(l))));
+  if (l.status === 'open') {
+    out.push(lr('BALANCE DUE', money(Math.max(0, lbBalance(l)))));
+    if (lbOverdue(l)) out.push(center('*** OVERDUE ***'));
+    if (pay) out.push('', lr('Paid today (*)', money(pay.amount)));
+    out.push(LINE, ...wrap('Items stay in the shop until the lay-by is paid in full.').map(center));
+  }
+  if (l.status === 'completed') out.push(LINE, center(`Collected ${fmtDate(l.completedAt)}`));
+  if (l.status === 'cancelled' && l.cancel) {
+    const cx = l.cancel;
+    out.push(LINE, lr('Cancelled', fmtDate(cx.date)));
+    if (cx.fee) out.push(lr('Fee kept', money(cx.fee)));
+    if (cx.method === 'credit') out.push(lr('Store credit', money(cx.refund)));
+    else if (cx.method !== 'kept' && cx.refund) out.push(lr(`Refunded (${PAY_LABEL[cx.method]})`, money(cx.refund)));
+  }
+  out.push(LINE, ...footerLines());
+  return out.join('\n');
+}
+
+function statementText(c) {
+  const out = headerLines(storeSnapshot(), 'STATEMENT');
+  out.push(center(fmtDate(new Date().toISOString())), LINE, 'Client: ' + c.name);
+  if (c.phone) out.push('Tel ' + c.phone);
+  if (c.email) out.push(...wrap(c.email));
+  const since = addDays(new Date(), -183).toISOString();
+  const lbs = customerLaybys(c.id).filter(l => l.status === 'open' || (l.completedAt || l.cancel?.date || l.date) >= since)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (!lbs.length) out.push(LINE, 'No lay-bys in the last 6 months.');
+  for (const l of lbs) {
+    out.push(LINE, lr(lbNo(l), LB_LABEL[lbState(l)].toUpperCase()));
+    out.push(lr('Started', fmtDate(l.date)), lr('Pay by', fmtDate(fromDateInput(l.dueDate).toISOString())));
+    for (const it of l.items) out.push(...itemLines(it));
+    out.push(lr('Total', money(l.total)));
+    l.payments.forEach(p => out.push(lr(`  ${fmtDate(p.date)} ${payLabel(p.method)}`, '-' + money(p.amount))));
+    if (l.status === 'open') out.push(lr('Balance', money(Math.max(0, lbBalance(l)))));
+  }
+  const owed = sum(lbs.filter(l => l.status === 'open'), lbBalance);
+  out.push(LINE, lr('TOTAL OWED', money(Math.max(0, owed))));
+  if (c.credit) out.push(lr('Store credit', money(c.credit)));
+  out.push(LINE, ...footerLines());
+  return out.join('\n');
+}
+
+function resolveCustomerDoc(kind, a, b) {
+  if (kind === 'stmt') {
+    const c = findCustomer(a);
+    return c && { kind, customer: c, customerId: c.id, phone: c.phone, email: c.email, text: statementText(c), title: `Statement · ${c.name}` };
+  }
+  const l = findLayby(a);
+  if (!l) return null;
+  const c = findCustomer(l.customerId);
+  const pay = kind === 'lbpay' ? l.payments.find(p => p.id === b) : null;
+  return {
+    kind, layby: l, customerId: l.customerId, phone: c?.phone || l.customer.phone, email: c?.email || l.customer.email,
+    text: laybyText(l, pay), title: `${pay ? 'Lay-by payment' : 'Lay-by'} ${lbNo(l)}`,
+  };
+}
+
+/** A4 statement with logo (print or save as PDF to attach to an email). */
+function printStatementA4(id) {
+  const c = findCustomer(id);
+  if (!c) return;
+  const since = addDays(new Date(), -183).toISOString();
+  const lbs = customerLaybys(c.id).filter(l => l.status === 'open' || (l.completedAt || l.cancel?.date || l.date) >= since)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const owed = sum(lbs.filter(l => l.status === 'open'), lbBalance);
+  $('#printA4').innerHTML = `${a4Header('Statement', fmtLong(new Date()))}
+    <section class="a4-kpis">
+      <div><span>Client</span><b>${esc(c.name)}</b><small>${esc(c.phone || '')}${c.email ? ` · ${esc(c.email)}` : ''}</small></div>
+      <div><span>Open lay-bys</span><b>${lbs.filter(l => l.status === 'open').length}</b></div>
+      <div><span>Total owed</span>${m4(Math.max(0, owed))}</div>
+      <div><span>Store credit</span>${m4(c.credit || 0)}</div>
+    </section>
+    ${lbs.map(l => `<section><h2>${lbNo(l)} · ${esc(LB_LABEL[lbState(l)])}</h2>
+      <p class="a4-note">Started ${fmtDate(l.date)} · pay by ${esc(dueDateText(l))}</p>
+      <table>
+        <tr><th>Item</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th></tr>
+        ${l.items.map(it => `<tr><td>${esc(it.name)} (${esc(it.size)} / ${esc(it.colour)})${it.description ? `<br><small>${esc(it.description)}</small>` : ''}</td>
+          <td class="r">${it.qty}</td><td class="r">${m4(it.unitPrice)}</td><td class="r">${m4(it.unitPrice * it.qty)}</td></tr>`).join('')}
+        ${l.discount ? `<tr><td colspan="3">Discount</td><td class="r">${m4(-l.discount)}</td></tr>` : ''}
+        <tr class="tot"><td colspan="3">Total</td><td class="r">${m4(l.total)}</td></tr>
+        ${l.payments.map(p => `<tr><td colspan="3">Payment ${fmtDate(p.date)} · ${esc(payLabel(p.method))}</td><td class="r">${m4(-p.amount)}</td></tr>`).join('')}
+        ${l.status === 'open' ? `<tr class="tot"><td colspan="3">Balance${lbOverdue(l) ? ' (overdue)' : ''}</td><td class="r">${m4(Math.max(0, lbBalance(l)))}</td></tr>` : ''}
+      </table></section>`).join('') || '<p>No lay-bys in the last 6 months.</p>'}
+    ${a4Foot()}`;
+  setPrintMode('a4');
+  setTimeout(() => window.print(), 50);
+}
+
+/* ----- Shop logo ----- */
+
+/** Any picture → a small logo (at most 360 × 160 px), PNG if small enough, else JPEG. */
+async function resizeLogo(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error('That file is not a picture'));
+      i.src = url;
+    });
+    const k = Math.min(1, 360 / img.naturalWidth, 160 / img.naturalHeight);
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.naturalWidth * k));
+    c.height = Math.max(1, Math.round(img.naturalHeight * k));
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    let out = c.toDataURL('image/png');
+    if (out.length > 60000) {
+      const w = document.createElement('canvas');
+      w.width = c.width; w.height = c.height;
+      const g = w.getContext('2d');
+      g.fillStyle = '#ffffff'; g.fillRect(0, 0, w.width, w.height); g.drawImage(c, 0, 0);
+      out = w.toDataURL('image/jpeg', 0.85);
+    }
+    return out;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function onLogoPicked(input) {
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  try {
+    state.settings.logo = await resizeLogo(file);
+    await persist([opKv('settings', state.settings)]);
+    renderSettings();
+    toast('Logo saved — it now shows on receipts and statements');
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
 /* ===== 15. One tab at a time ============================================
    Each tab keeps the data in memory, so two open tabs could overwrite each
    other's work. A Web Lock makes sure only one tab is "active"; any other
@@ -4176,7 +4967,7 @@ async function applyUpdate() {
 
 /** All clicks go through here. Elements declare data-action="name". */
 const actions = {
-  nav: el => showView(el.dataset.view),
+  nav: el => { if (el.dataset.view === 'customers') ui.custId = null; showView(el.dataset.view); },
   cat: el => { ui.category = el.dataset.cat; renderSell(); },
   pick: el => openPicker(el.dataset.id),
   'pk-size': el => { ui.picker.size = ui.picker.size === el.dataset.v ? null : el.dataset.v; renderPicker(); },
@@ -4284,6 +5075,31 @@ const actions = {
   'photo-remove': () => { ui.formPhoto = null; paintPhotoPreview(); },
   'setup-go': el => { ui.setupStep = el.dataset.step; renderSetup(); },
   'setup-back': () => { ui.setupStep = 'welcome'; renderSetup(); },
+  'open-customer': el => openCustomer(el.dataset.id),
+  'cust-back': () => { ui.custId = null; renderCustomers(); window.scrollTo(0, 0); },
+  'cust-new': () => openCustomerEdit(),
+  'cust-edit': el => openCustomerEdit(el.dataset.id),
+  'cust-save': el => saveCustomer(el.dataset.id || null),
+  'cust-filter': el => { ui.custFilter = el.dataset.f; paintCustomerList(); },
+  'cust-sell': el => sellToCustomer(el.dataset.id),
+  'cart-cust-clear': () => { ui.cart.customerId = null; saveCart(); renderCart(); },
+  'layby-start': () => openLaybyForm(),
+  'lbf-pick': el => { ui.lbf.customerId = el.dataset.id; renderLaybyForm(); },
+  'lbf-cust-clear': () => { ui.lbf.customerId = null; ui.lbf.target = 'new'; renderLaybyForm(); },
+  'lbf-target': el => { ui.lbf.target = el.dataset.v; renderLaybyForm(); },
+  'lbf-method': el => { ui.lbf.method = el.dataset.m; setPressed('[data-action="lbf-method"]', b => b.dataset.m === ui.lbf.method); },
+  'lbf-save': () => saveLayby(),
+  'lb-pay': el => openLaybyPayment(el.dataset.id),
+  'lbp-method': el => { ui.lbp.method = el.dataset.m; setPressed('[data-action="lbp-method"]', b => b.dataset.m === ui.lbp.method); },
+  'lbp-save': () => saveLaybyPayment(),
+  'lb-collect': el => collectLayby(el.dataset.id),
+  'lb-cancel': el => openLaybyCancel(el.dataset.id),
+  'lbc-mode': el => { ui.lbc.fee = $('#lbcFee')?.value || ui.lbc.fee; ui.lbc.mode = el.dataset.v; renderLaybyCancel(); },
+  'lbc-method': el => { ui.lbc.method = el.dataset.m; setPressed('[data-action="lbc-method"]', b => b.dataset.m === ui.lbc.method); },
+  'lbc-save': () => saveLaybyCancel(),
+  'doc-email': el => emailDoc(el.dataset.doc),
+  'stmt-a4': el => printStatementA4(el.dataset.id),
+  'logo-remove': async () => { state.settings.logo = null; await persist([opKv('settings', state.settings)]); renderSettings(); toast('Logo removed'); },
   labels: el => openLabels(el.dataset.id || null),
   'lb-fill': el => fillLabels(el.dataset.mode),
   'lb-print': () => printLabels(),
@@ -4302,6 +5118,10 @@ const ACTION_PERMS = {
   'cloud-signin': 'settings', 'cloud-signup': 'settings', 'cloud-disconnect': 'settings', 'cloud-create': 'settings', 'cloud-join': 'settings',
   'go-settings': 'settings',
   labels: 'stock', 'lb-fill': 'stock', 'lb-print': 'stock',
+  'open-customer': 'customers', 'cust-new': 'customers', 'cust-edit': 'customers', 'cust-save': 'customers', 'cust-sell': 'customers',
+  'layby-start': 'customers', 'lbf-save': 'customers', 'lb-pay': 'customers', 'lbp-save': 'customers',
+  'lb-collect': 'customers', 'lb-cancel': 'customers', 'lbc-save': 'customers', 'stmt-a4': 'customers',
+  'logo-remove': 'settings',
 };
 function allowed(perm) {
   if (!perm || can(perm)) return true;
@@ -4339,6 +5159,7 @@ function bindEvents() {
     if (t.id === 'restoreFile' && t.files[0] && allowed('settings')) { t.files[0].text().then(restoreFromText); t.value = ''; }
     if (t.id === 'uRole' || (t.dataset.perm && t.closest('#modal'))) onUserFormChange(t);
     if (t.id === 'fPhoto') onPhotoPicked(t);
+    if (t.id === 'logoFile' && allowed('settings')) onLogoPicked(t);
     if (t.closest?.('#labelsBody')) onLabelsChange(t);
     if ((t.id === 'rFrom' || t.id === 'rTo') && t.value) {
       ui.customFrom = $('#rFrom').value; ui.customTo = $('#rTo').value;
@@ -4350,6 +5171,12 @@ function bindEvents() {
     if (e.target.id === 'fSizes' || e.target.id === 'fColours') renderVariantGrid();
     if (e.target.id === 'cuCounted') paintCashupDiff();
     if (e.target.dataset?.lbq !== undefined) onLabelsChange(e.target); // label counts update as you type
+    const id = e.target.id;
+    if (id === 'custSearch') { ui.custQuery = e.target.value; paintCustomerList(); }
+    if (ui.lbf && id === 'lbfSearch') { ui.lbf.query = e.target.value; paintLaybyResults(); }
+    if (ui.lbf && id === 'lbfAmount') ui.lbf.amount = e.target.value;
+    if (ui.lbf && id === 'lbfMonths') ui.lbf.months = e.target.value;
+    if (ui.lbf && id === 'lbfNotes') ui.lbf.notes = e.target.value;
   });
 
   document.addEventListener('keydown', e => {
@@ -4433,6 +5260,7 @@ async function boot() {
 
 // Handle for tests / debugging in the console.
 window.__pos = { state, ui, DB, actions, buildReport, computeShift, receiptText, creditNoteText, zText, cartTotals, flushAllAdjust, checkLogin,
-  Cloud, CLOUD, syncNow, applyRemote, Barcode, findByCode, resizePhoto, licence, sellingAllowed };
+  Cloud, CLOUD, syncNow, applyRemote, Barcode, findByCode, resizePhoto, licence, sellingAllowed,
+  lbBalance, lbPaid, lbOverdue, lbState, laybyText, statementText };
 
 boot();

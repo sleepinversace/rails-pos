@@ -35,7 +35,7 @@ create sequence if not exists public.records_seq;
 
 create table if not exists public.records (
   shop_id    uuid not null references public.shops(id) on delete cascade,
-  kind       text not null check (kind in ('products', 'sales', 'movements', 'cashups', 'kv')),
+  kind       text not null,
   id         text not null,
   data       jsonb,
   deleted    boolean not null default false,
@@ -45,6 +45,11 @@ create table if not exists public.records (
   primary key (shop_id, kind, id)
 );
 create index if not exists records_shop_seq on public.records (shop_id, seq);
+
+-- Record types the app may store (v2 adds clients and lay-bys). Safe to run again.
+alter table public.records drop constraint if exists records_kind_check;
+alter table public.records add constraint records_kind_check
+  check (kind in ('products', 'sales', 'movements', 'cashups', 'kv', 'customers', 'laybys'));
 
 -- Every insert / update gets the next seq number and a fresh timestamp.
 create or replace function public.records_stamp() returns trigger
