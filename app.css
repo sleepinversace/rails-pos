@@ -397,6 +397,27 @@ input:disabled { opacity: .5; }
 .blocker-box p { margin: 0 0 8px; font-size: 17px; }
 .blocker-box p.small { font-size: 14px; }
 
+/* ----- Sign-in screen (below the one-tab blocker) ----- */
+.signin {
+  position: fixed; inset: 0; z-index: 90; background: var(--bg);
+  display: flex; align-items: center; justify-content: center; padding: 24px 16px; overflow-y: auto;
+}
+.signin-box {
+  width: 100%; max-width: 340px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); padding: 28px 24px 24px;
+}
+.signin-box img { display: block; margin: 0 auto 10px; border-radius: 14px; }
+.signin-box h1 { margin: 0; font-size: 22px; text-align: center; }
+.signin-box > p.muted { margin: 4px 0 20px; text-align: center; }
+.signin-box .field { display: block; }
+.signin-box .input { width: 100%; }
+.pin-input { letter-spacing: .5em; font-size: 20px; }
+.pin-input::placeholder { letter-spacing: normal; font-size: 15px; }
+#siError { min-height: 1.4em; margin: 0 0 12px; }
+.header-right { display: flex; align-items: center; gap: 8px; flex: none; }
+.lock-btn { display: inline-flex; align-items: center; gap: 6px; }
+.lock-btn .ico { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }

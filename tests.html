@@ -106,6 +106,30 @@ const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - 
 
 /* =================== TESTS =================== */
 
+const OWNER = { user: 'Amish', pin: '2033' }; // the default owner account
+async function signIn(user, pin) {
+  $('#siUser').value = user; $('#siPin').value = pin;
+  $('#siGo').click();
+  await waitFor(() => !$('#siGo').disabled && ($('#signin').hidden || $('#siError').textContent), 4000, 'sign-in result');
+}
+
+test('Sign-in: covers the till; username is not case-sensitive; wrong PIN is refused', async () => {
+  ok(!$('#signin').hidden, 'sign-in screen shown on first open');
+  ok($('.app-nav').inert, 'till is locked behind it');
+  await signIn('amish', '1234');
+  ok(!$('#signin').hidden && $('#siError').textContent.includes('Wrong'), 'wrong PIN refused');
+  await signIn('nobody', OWNER.pin);
+  ok(!$('#signin').hidden, 'unknown user refused');
+  await signIn('  aMiSh ', '12');
+  ok($('#siError').textContent.includes('4 digits'), 'short PIN rejected');
+  await signIn('  aMiSh ', OWNER.pin);
+  ok($('#signin').hidden, 'signed in with mixed-case username');
+  eq($('#userLabel').textContent, 'Amish', 'name in header');
+  ok(!$('.app-nav').inert, 'till usable');
+  const auth = await P.DB.get('kv', 'auth');
+  ok(!JSON.stringify(auth).includes(OWNER.pin), 'PIN is not stored in plain text');
+});
+
 test('First run loads 8 demo products and sample sales', async () => {
   eq(P.state.products.length, 8, 'products');
   ok(P.state.sales.length > 0, 'has demo sales');
@@ -384,6 +408,26 @@ test('Accessibility: focus is kept in dialogs; nav has aria-current; colours hav
   ok(!fails.length, 'Low contrast: ' + fails.join('; '));
 });
 
+test('Sign-in: reload keeps you in, Lock asks again, PIN can be changed, sales record the cashier', async () => {
+  ok(P.state.sales.every(s => s.cashier === 'Amish'), 'sales stamped with cashier');
+  await loadApp();
+  ok($('#signin').hidden, 'still signed in after reload');
+  await nav('settings'); await tick(100);
+  click('[data-action="change-pin"]'); await tick();
+  type('#pinOld', OWNER.pin); type('#pinNew', '9876'); type('#pinNew2', '9876');
+  click('[data-action="pin-save"]'); await waitFor(() => $('#modal').hidden, 3000, 'PIN change');
+  click('#lockBtn'); await tick(100);
+  ok(!$('#signin').hidden, 'locked');
+  await signIn('AMISH', OWNER.pin);
+  ok(!$('#signin').hidden, 'old PIN no longer works');
+  await signIn('AMISH', '9876');
+  ok($('#signin').hidden, 'new PIN works');
+  // Put the owner PIN back for the remaining tests.
+  click('[data-action="change-pin"]'); await tick();
+  type('#pinOld', '9876'); type('#pinNew', OWNER.pin); type('#pinNew2', OWNER.pin);
+  click('[data-action="pin-save"]'); await waitFor(() => $('#modal').hidden, 3000, 'PIN change back');
+});
+
 test('Upgrade: data saved by version 1 is migrated', async () => {
   await blank(document.getElementById('app'));
   await deleteDb();
@@ -416,6 +460,7 @@ async function runAll() {
   await blank(document.getElementById('app2'));
   await blank(document.getElementById('app'));
   await deleteDb();
+  sessionStorage.removeItem(TEST_DB + '-signed-in'); // start signed out
   await loadApp();
   let pass = 0;
   const failures = [];

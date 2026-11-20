@@ -33,6 +33,13 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
 - **Safety in use**
   - Only one tab can be open at a time, so two copies can't overwrite each other.
   - When a new version is downloaded, the app shows "A new version is ready" and switches over only when you tap Reload.
+- **Sign-in**
+  - The till is covered by a sign-in screen: username (not case-sensitive) and a 4-digit PIN.
+  - You stay signed in when the page reloads or updates; closing the app or tapping the lock button in the header asks again.
+  - Five wrong PINs in a row pause sign-in for 30 seconds. The PIN can be changed under **Settings, then Account**.
+  - PINs are stored only as PBKDF2 hashes, separately from shop data, so backups, restores and Start fresh never touch them.
+  - Each sale records who was signed in ("Served by" on the receipt).
+  - This keeps staff and customers out of the till. It is not copy protection: a licence check needs a server (see *What to build next*).
 - **Usable by everyone**
   - Light and dark mode.
   - Keyboard and screen-reader friendly dialogs.
@@ -71,7 +78,8 @@ Then open http://localhost:8000. Offline mode only works over `http://localhost`
 
 With the server running, open **http://localhost:8000/tests.html** and click **Run all tests**, or open `tests.html?auto` to run them straight away.
 
-The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 23 tests should pass. They cover:
+The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 25 tests should pass. They cover:
+- sign-in, lock and changing the PIN
 - selling and stock
 - partial returns, exchanges and cancelled exchanges
 - report numbers
@@ -125,7 +133,8 @@ Search `app.js` and `sw.js` for `PLUG-IN:`.
 | Cloud sync | `DB.write()` in `app.js` (queue ops in an outbox), and a `sync` event in `sw.js` |
 | Card terminal (Yoco / SumUp / iKhokha) | `checkout()`: call the terminal before saving |
 | Bluetooth / ESC-POS printer | `printDoc()` |
-| User accounts / cashiers | `checkout()`: add `cashierId` to the sale |
+| Licence check / cloud accounts | `checkLogin()` in section 14b of `app.js` |
+| More cashiers | `DEFAULT_AUTH` / the `auth` record: add users (sales already store `cashier`) |
 | Multiple branches | `DEFAULT_SETTINGS`: add `storeId` and stamp it on sales |
 
 ## Tax notes (check with your accountant)
@@ -143,7 +152,8 @@ Search `app.js` and `sw.js` for `PLUG-IN:`.
 
 ## What to build next
 
-1. **Cloud backup and sync** (Google Drive or a small server). This is the biggest remaining data-safety gap.
+1. **Licence check**: a small server that confirms the shop's subscription when online, so the app can't simply be copied.
+2. **Cloud backup and sync** (Google Drive or a small server). This is the biggest remaining data-safety gap.
 2. **Bluetooth thermal printer (ESC-POS)** and a cash drawer kick.
 3. **Barcode labels** for SKUs, and the camera as a scanner.
 4. **Card machine integration** (Yoco, SumUp, iKhokha).

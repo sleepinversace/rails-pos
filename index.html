@@ -22,6 +22,7 @@
     <symbol id="i-sales" viewBox="0 0 24 24"><path d="M6 2.5h12v19l-3-2-3 2-3-2-3 2Z"/><path d="M9 8h6M9 12h6M9 16h3"/></symbol>
     <symbol id="i-reports" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
     <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
   </svg>
 
   <!-- ===== Header ===== -->
@@ -30,7 +31,10 @@
       <img src="icon-192.png" alt="" width="28" height="28">
       <span id="storeNameLabel">Rails POS</span>
     </div>
-    <span id="netStatus" class="net" role="status">Online</span>
+    <div class="header-right">
+      <span id="netStatus" class="net" role="status">Online</span>
+      <button id="lockBtn" class="btn ghost sm lock-btn" data-action="lock" hidden><svg class="ico" aria-hidden="true"><use href="#i-lock"/></svg><span id="userLabel"></span></button>
+    </div>
   </header>
 
   <!-- ===== Navigation: bottom bar on phones, left rail on tablets ===== -->
@@ -135,6 +139,21 @@
   <div id="backdrop" class="backdrop" data-action="backdrop" hidden></div>
   <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" hidden></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- Sign-in screen: covers the till until a username + 4-digit PIN is entered -->
+  <div id="signin" class="signin" role="dialog" aria-modal="true" aria-labelledby="siTitle" hidden>
+    <form id="signinForm" class="signin-box" novalidate>
+      <img src="icon-192.png" alt="" width="64" height="64">
+      <h1 id="siTitle">Rails POS</h1>
+      <p class="muted">Sign in to open the till</p>
+      <label class="field"><span>Username</span>
+        <input id="siUser" class="input" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="next"></label>
+      <label class="field"><span>PIN</span>
+        <input id="siPin" class="input pin-input" type="password" inputmode="numeric" maxlength="4" autocomplete="current-password" enterkeyhint="go" placeholder="4 digits"></label>
+      <p id="siError" class="err-text small" role="alert"></p>
+      <button id="siGo" class="btn primary block lg" type="submit">Sign in</button>
+    </form>
+  </div>
 
   <!-- Shown when the app is open in another tab (only one tab may write data) -->
   <div id="blocker" class="blocker" role="alertdialog" aria-labelledby="blockerMsg" hidden>

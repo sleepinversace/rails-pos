@@ -548,7 +548,7 @@ async function checkout() {
     creditRef: ui.cart.credit?.label || null,
     returns: [],
     status: 'completed',
-    // PLUG-IN: user accounts — add cashierId here.
+    cashier: ui.user?.name || '', // who was signed in
   };
 
   const ops = [];
@@ -999,6 +999,7 @@ function receiptText(sale) {
   const registered = st.vatRegistered && sale.vatRate > 0;
   const out = headerLines(st, registered ? 'TAX INVOICE' : 'RECEIPT');
   out.push(center(`No. ${fmtNo(sale.number)}`), center(fmtDT(sale.date)));
+  if (sale.cashier) out.push(center('Served by ' + sale.cashier));
   if (sale.customer) {
     out.push(LINE, 'Customer: ' + sale.customer.name);
     String(sale.customer.address || '').split('\n').filter(Boolean).forEach(a => wrap(a).forEach(l => out.push(l)));
@@ -1224,8 +1225,9 @@ function closeCartSheet() {
 
 /** Keep keyboard / screen-reader focus inside whatever is on top (blocker, modal, cart sheet). */
 function updateInert() {
-  const blocked = !$('#blocker').hidden;
+  const blocked = !$('#blocker').hidden || !$('#signin').hidden;
   const modal = !$('#modal').hidden;
+  $('#signin').inert = !$('#blocker').hidden;
   const sheet = $('#cartPanel').classList.contains('open') && !isWide();
   const back = blocked || modal || sheet;
   $('.app-header').inert = back;
@@ -1804,7 +1806,15 @@ async function renderSettings() {
     </div>
     </div>
     <div>
-    <div class="section-title" style="margin-top:0">Data safety</div>
+    <div class="section-title" style="margin-top:0">Account</div>
+    <div class="card">
+      <p style="margin-top:0">Signed in as <strong>${esc(ui.user?.name || '—')}</strong>${ui.user?.role === 'owner' ? ' (owner)' : ''}. Your username is not case-sensitive.</p>
+      <div class="row gap-s wrap">
+        <button class="btn" data-action="change-pin">Change PIN</button>
+        <button class="btn" data-action="lock">Lock till</button>
+      </div>
+    </div>
+    <div class="section-title">Data safety</div>
     <div class="card">
       <p style="margin-top:0">Your data is stored <strong>only on this device</strong>. Back up at least once a week and keep the file somewhere else (email it to yourself, Google Drive, WhatsApp to yourself).</p>
       <p class="small ${backupOverdue() ? 'warn-text' : 'muted'}"><strong>Last backup:</strong> ${last ? `${fmtDate(last)} (${daysAgo(last)} days ago)` : 'never'}</p>
@@ -1992,6 +2002,168 @@ async function loadDemo() {
   toast('Demo data loaded');
 }
 
+/* ===== 14b. Sign-in ======================================================
+   The till is covered by a sign-in screen until a username and a 4-digit
+   PIN are entered. Usernames are not case-sensitive ("Amish" = "amish").
+
+   Accounts are kept in IndexedDB (kv 'auth'), apart from the shop data, so
+   Start fresh, Restore and Load demo never touch them, and backups never
+   contain them. PINs are stored only as PBKDF2 hashes.
+
+   Staying signed in lasts for this browser tab (sessionStorage): a reload or
+   an update keeps you in; closing the app or tapping Lock asks again.
+
+   Honest limit: this keeps staff and customers out of the till. It is NOT
+   licence protection — the code runs on the customer's device.
+   PLUG-IN: licence check / cloud accounts — verify the account with a
+   server in checkLogin() when online, and cache the result for offline use.
+   ======================================================================== */
+
+const PIN_ITERATIONS = 100000;
+const SESSION_KEY = DB_NAME + '-signed-in';
+const MAX_TRIES = 5;          // wrong PINs in a row before a pause
+const LOCKOUT_MS = 30 * 1000; // length of that pause
+// The owner account created on first run (PIN stored as a hash only).
+const DEFAULT_AUTH = {
+  users: [{
+    username: 'amish', name: 'Amish', role: 'owner',
+    salt: 'DTcSYbvG4OYR8B5sHx9K0Q==', hash: 'zMlfNbdHmzdX1/zOgfOfG1N0mOQBaWlTbg3lN6KwEXY=',
+  }],
+};
+const signinState = { failures: 0, lockedUntil: 0 };
+
+const normUser = s => String(s ?? '').trim().toLowerCase();
+const toB64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+
+async function hashPin(pin, saltB64) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: fromB64(saltB64), iterations: PIN_ITERATIONS }, key, 256);
+  return toB64(bits);
+}
+
+/** The accounts record; creates the default owner on first run. */
+async function loadAuth() {
+  let auth = await DB.get('kv', 'auth');
+  if (!auth?.users?.length) {
+    auth = structuredClone(DEFAULT_AUTH);
+    await DB.write([opKv('auth', auth)]);
+  }
+  return auth;
+}
+
+/** Returns the matching user, or null. */
+async function checkLogin(username, pin) {
+  const auth = await loadAuth();
+  const user = auth.users.find(u => u.username === normUser(username));
+  // Hash even for an unknown name, so both kinds of mistake take equally long.
+  const hash = await hashPin(pin, user?.salt || DEFAULT_AUTH.users[0].salt);
+  return user && hash === user.hash ? user : null;
+}
+
+function readSession() { try { return sessionStorage.getItem(SESSION_KEY); } catch { return null; } }
+function writeSession(username) {
+  try { if (username) sessionStorage.setItem(SESSION_KEY, username); else sessionStorage.removeItem(SESSION_KEY); } catch { /* private mode */ }
+}
+function setUser(u) {
+  ui.user = u ? { username: u.username, name: u.name, role: u.role } : null;
+  $('#userLabel').textContent = u ? u.name : '';
+  $('#lockBtn').hidden = !u;
+  $('#lockBtn').setAttribute('aria-label', u ? `Lock the till (signed in as ${u.name})` : 'Lock');
+}
+
+/** Still signed in from earlier in this tab (e.g. after a reload)? */
+async function resumeSession() {
+  const name = readSession();
+  if (!name) return false;
+  const user = (await loadAuth()).users.find(u => u.username === name);
+  if (user) setUser(user);
+  return !!user;
+}
+
+function showSignIn(message = '') {
+  setUser(null);
+  $('#siError').textContent = message;
+  $('#siPin').value = '';
+  $('#signin').hidden = false;
+  updateInert();
+  ($('#siUser').value ? $('#siPin') : $('#siUser')).focus();
+}
+
+async function submitSignIn() {
+  const err = $('#siError');
+  const wait = Math.ceil((signinState.lockedUntil - Date.now()) / 1000);
+  if (wait > 0) { err.textContent = `Too many wrong tries. Try again in ${wait} seconds.`; return; }
+  const username = $('#siUser').value;
+  const pin = $('#siPin').value.trim();
+  if (!normUser(username)) { err.textContent = 'Enter your username'; $('#siUser').focus(); return; }
+  if (!/^\d{4}$/.test(pin)) { err.textContent = 'Your PIN is 4 digits'; $('#siPin').focus(); return; }
+
+  $('#siGo').disabled = true;
+  let user = null;
+  try { user = await checkLogin(username, pin); }
+  catch (e) { console.error(e); err.textContent = 'Could not check the PIN: ' + e.message; return; }
+  finally { $('#siGo').disabled = false; }
+
+  if (!user) {
+    signinState.failures += 1;
+    if (signinState.failures >= MAX_TRIES) {
+      signinState.failures = 0;
+      signinState.lockedUntil = Date.now() + LOCKOUT_MS;
+      err.textContent = `Too many wrong tries. Try again in ${LOCKOUT_MS / 1000} seconds.`;
+    } else {
+      err.textContent = 'Wrong username or PIN';
+    }
+    $('#siPin').value = '';
+    $('#siPin').focus();
+    return;
+  }
+  signinState.failures = 0;
+  writeSession(user.username);
+  setUser(user);
+  $('#siPin').value = '';
+  err.textContent = '';
+  $('#signin').hidden = true;
+  updateInert();
+  if (ui.appActive) renderAll();
+  if (isWide()) $('#sellSearch').focus();
+}
+
+/** Lock button: save anything pending, then cover the till again. */
+async function lockTill() {
+  if (ui.appActive) { await flushAllAdjust(); await saveCart(true); }
+  closeModal();
+  closeCartSheet();
+  writeSession(null);
+  showSignIn();
+}
+
+function openChangePin() {
+  openModal({
+    title: 'Change PIN',
+    body: `
+      <label class="field"><span>Current PIN</span><input id="pinOld" class="input pin-input" type="password" inputmode="numeric" maxlength="4" autocomplete="current-password"></label>
+      <label class="field"><span>New PIN (4 digits)</span><input id="pinNew" class="input pin-input" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password"></label>
+      <label class="field"><span>New PIN again</span><input id="pinNew2" class="input pin-input" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password"></label>`,
+    foot: `<button class="btn" data-action="close-modal">Cancel</button><button class="btn primary" data-action="pin-save">Change PIN</button>`,
+  });
+}
+
+async function saveNewPin() {
+  const oldPin = $('#pinOld').value.trim(), newPin = $('#pinNew').value.trim(), again = $('#pinNew2').value.trim();
+  if (!ui.user) return;
+  if (!/^\d{4}$/.test(newPin)) return toast('The new PIN must be exactly 4 digits', true);
+  if (newPin !== again) return toast('The two new PINs are not the same', true);
+  if (!(await checkLogin(ui.user.username, oldPin))) return toast('The current PIN is wrong', true);
+  const auth = await loadAuth();
+  const user = auth.users.find(u => u.username === ui.user.username);
+  user.salt = toB64(crypto.getRandomValues(new Uint8Array(16)));
+  user.hash = await hashPin(newPin, user.salt);
+  await DB.write([opKv('auth', auth)]);
+  closeModal();
+  toast('PIN changed');
+}
+
 /* ===== 15. One tab at a time ============================================
    Each tab keeps the data in memory, so two open tabs could overwrite each
    other's work. A Web Lock makes sure only one tab is "active"; any other
@@ -2042,7 +2214,10 @@ async function takeOver() {
   $('#blockerMsg').textContent = 'Switching…';
   channel?.postMessage({ type: 'takeover' });
   await acquireTabLock(false);
+  let signedIn = !!ui.user;
+  if (!signedIn) { try { signedIn = await resumeSession(); } catch (err) { console.error(err); } }
   await startApp();
+  if (!signedIn) showSignIn(); // each tab must sign in for itself
 }
 
 /* ===== 16. Service worker =============================================== */
@@ -2167,6 +2342,9 @@ const actions = {
   'load-demo': () => loadDemo(),
   'apply-update': () => applyUpdate(),
   takeover: () => takeOver(),
+  lock: () => lockTill(),
+  'change-pin': () => openChangePin(),
+  'pin-save': () => saveNewPin(),
 };
 
 function bindEvents() {
@@ -2177,6 +2355,11 @@ function bindEvents() {
     if (fn) { e.preventDefault(); fn(el, e); }
   });
 
+  $('#signinForm').addEventListener('submit', e => { e.preventDefault(); submitSignIn(); });
+  // PIN boxes accept digits only
+  document.addEventListener('input', e => {
+    if (e.target.classList?.contains('pin-input')) e.target.value = e.target.value.replace(/\D/g, '').slice(0, 4);
+  });
   $('#sellSearch').addEventListener('input', renderSell);
   $('#sellSearch').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); onSellSearchEnter(); } });
   $('#stockSearch').addEventListener('input', renderStock);
@@ -2207,7 +2390,7 @@ function bindEvents() {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-file-trigger]')) { e.preventDefault(); $('#restoreFile').click(); }
     // Keep Tab inside the modal / sheet (backup for browsers without `inert`)
     if (e.key === 'Tab') {
-      const box = !$('#blocker').hidden ? $('#blocker') : !$('#modal').hidden ? $('#modal')
+      const box = !$('#blocker').hidden ? $('#blocker') : !$('#signin').hidden ? $('#signin') : !$('#modal').hidden ? $('#modal')
         : ($('#cartPanel').classList.contains('open') && !isWide()) ? $('#cartPanel') : null;
       if (!box) return;
       const items = $$(FOCUSABLE, box).filter(x => x.offsetParent !== null);
@@ -2264,10 +2447,13 @@ async function boot() {
     showBlocker('Rails POS is already open in another tab or window.');
     return;
   }
+  let signedIn = false;
+  try { signedIn = await resumeSession(); } catch (err) { console.error(err); }
   await startApp();
+  if (!signedIn) showSignIn();
 }
 
 // Handle for tests / debugging in the console.
-window.__pos = { state, ui, DB, actions, buildReport, computeShift, receiptText, creditNoteText, zText, cartTotals, flushAllAdjust };
+window.__pos = { state, ui, DB, actions, buildReport, computeShift, receiptText, creditNoteText, zText, cartTotals, flushAllAdjust, checkLogin };
 
 boot();
