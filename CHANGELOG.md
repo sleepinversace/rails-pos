@@ -17,6 +17,13 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v21 — 2026-11-20 · Record (backdated) payments; deactivate / reactivate shops
+- ✨ Admin page: **Record payment**, with paid-on date (can be in the past, not the future), months (1, 2, 3, 6, 12), amount, method (EFT / cash / card / other) and note. The paid-until date runs from the payment date, or from the current end date if that is later.
+- ✨ **Payment history** per shop, **total paid**, last payment date, and **"Paid this month"** across all shops.
+- ✨ **Deactivate / Reactivate** a shop, with an optional reason the shop sees. Deactivated shops pause selling on all their devices at the next sync (data kept; reports, backups and settings still work) and see a "Contact on WhatsApp" button. Shops can't change this themselves.
+- 🔧 All changes, including payments and (de)activation, appear under Recent changes (audit log).
+- 🗄️ SQL: `shops.deactivated` / `deactivated_reason`, `vendor_payments` table, `vendor_record_payment`, `vendor_shop_payments` and `vendor_set_active` functions. `vendor_list_shops` returns more columns. Re-run `cloud/supabase-setup.sql`.
+
 ## v20 — 2026-11-20 · Admin sign-in with password only
 - 🔒 🔧 The supplier admin page no longer uses an authenticator app (owner's choice): sign in with the admin **email and password** only. Only logins listed in `vendor_admins` can use it; every change is still logged; the page still forgets the login when the tab closes and signs out after 15 minutes idle. Use a long (12+ characters), unique password.
 - 🗄️ SQL: `vendor_check()` no longer requires two-step verification. Re-run `cloud/supabase-setup.sql`.

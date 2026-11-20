@@ -1755,7 +1755,7 @@ function renderTotals(t = cartTotals()) {
   const paused = !sellingAllowed();
   const blocked = paused || !t.lines.length || (t.cash && (!Number.isFinite(t.tendered) || t.change < 0));
   $('#chargeBtn').disabled = blocked;
-  $('#chargeBtn').textContent = paused ? 'Selling paused (subscription)' : !t.lines.length ? 'Charge'
+  $('#chargeBtn').textContent = paused ? 'Selling paused (see the message above)' : !t.lines.length ? 'Charge'
     : t.due === 0 ? 'Complete exchange'
     : `Charge ${money(t.due)} · ${PAY_LABEL[ui.cart.payment]}`;
   // Lay-by: put the cart aside for a client instead of charging now
@@ -3222,11 +3222,15 @@ async function syncNow() {
   Cloud.busy = true;
   setCloudStatus('syncing');
   try {
-    const [shop] = await cloudApi(`/rest/v1/shops?select=id,name,generation,active_until&id=eq.${encodeURIComponent(Cloud.conf.shopId)}`);
+    const [shop] = await cloudApi(`/rest/v1/shops?select=*&id=eq.${encodeURIComponent(Cloud.conf.shopId)}`);
     if (!shop) throw new Error('This shop was not found in the cloud. Sign in with the shop\'s email.');
     Cloud.conf.shopName = shop.name;
     // Subscription: remember the paid-until date (works offline until the next check)
     const until = shop.active_until ?? null;
+    const off = shop.deactivated === true;
+    if (off !== !!Cloud.conf.deactivated || (shop.deactivated_reason || '') !== (Cloud.conf.deactivatedReason || '')) {
+      Cloud.conf.deactivated = off; Cloud.conf.deactivatedReason = shop.deactivated_reason || ''; Cloud.licenceChanged = true;
+    }
     if (until !== Cloud.conf.activeUntil) { Cloud.conf.activeUntil = until; Cloud.licenceChanged = true; }
     Cloud.conf.licenceCheckedAt = new Date().toISOString();
     await flushAllAdjust();
@@ -3538,6 +3542,8 @@ function licence() {
   const today = startOfDay();
   const daysTo = d => Math.round((startOfDay(d) - today) / DAY_MS);
   if (cloudOn()) {
+    // Deactivated by the supplier: overrides everything (data stays; selling pauses)
+    if (Cloud.conf.deactivated) return { state: 'deactivated', text: `Account deactivated by ${SUPPLIER.name}${Cloud.conf.deactivatedReason ? ` (${Cloud.conf.deactivatedReason})` : ''}` };
     const until = Cloud.conf.activeUntil;
     if (until == null) return { state: 'active', text: 'Active, no end date' };
     const end = fromDateInput(until);
@@ -3556,7 +3562,7 @@ function licence() {
   if (left > 0) return { state: 'trial', end, left, text: `Free trial: ${left} day${left === 1 ? '' : 's'} left` };
   return { state: 'trial-over', end, text: 'Free trial ended' };
 }
-const sellingAllowed = () => !['expired', 'trial-over'].includes(licence().state);
+const sellingAllowed = () => !['expired', 'trial-over', 'deactivated'].includes(licence().state);
 
 /** Banner shown on every screen when the subscription needs attention. */
 function licenceBanner() {
@@ -3565,6 +3571,9 @@ function licenceBanner() {
     ? `<a class="btn sm primary" href="https://wa.me/${esc(SUPPLIER.whatsapp)}?text=${encodeURIComponent(`Hi, I'd like to renew Rails POS for ${state.settings.storeName}`)}" target="_blank" rel="noopener">Renew on WhatsApp</a>` : '';
   const connect = !cloudOn() && cloudReady() && can('settings') ? '<button class="btn sm primary" data-action="go-settings">Connect shop account</button>' : '';
   const check = cloudOn() ? '<button class="btn sm" data-action="cloud-sync">Check again</button>' : '';
+  if (l.state === 'deactivated') {
+    return `<div class="banner licence-stop"><p><strong>Selling is paused.</strong> This shop's Rails POS account has been deactivated${Cloud.conf.deactivatedReason ? ` (${esc(Cloud.conf.deactivatedReason)})` : ''}. Contact ${esc(SUPPLIER.name)} to reactivate it. Your data is safe: reports, backups and settings still work.</p>${renew.replace('Renew on WhatsApp', 'Contact on WhatsApp')}${check}</div>`;
+  }
   if (l.state === 'expired' || l.state === 'trial-over') {
     return `<div class="banner licence-stop"><p><strong>Selling is paused.</strong> ${l.state === 'trial-over'
       ? 'The free trial on this device has ended. Connect your shop account (Settings → Cloud sync) to carry on.'

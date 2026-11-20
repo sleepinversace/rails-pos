@@ -140,6 +140,24 @@ revoke execute on function public.claim_device(uuid), public.reset_shop(uuid) fr
 -- =========================================================================
 
 alter table public.shops add column if not exists plan text not null default 'trial'; -- trial | paid
+-- Deactivated by the supplier: selling pauses on all the shop's devices (data kept). Shops can't change it.
+alter table public.shops add column if not exists deactivated boolean not null default false;
+alter table public.shops add column if not exists deactivated_reason text;
+
+-- Subscription payments recorded by the supplier (can be backdated).
+create table if not exists public.vendor_payments (
+  id           bigserial primary key,
+  shop_id      uuid references public.shops(id) on delete cascade,
+  paid_on      date not null,
+  amount_cents int  not null default 0,
+  months       int  not null,
+  method       text,
+  note         text,
+  admin_id     uuid,
+  created_at   timestamptz not null default now()
+);
+alter table public.vendor_payments enable row level security;
+revoke all on public.vendor_payments from anon, authenticated;
 
 create table if not exists public.vendor_admins (
   user_id  uuid primary key references auth.users(id) on delete cascade,
@@ -175,9 +193,12 @@ begin
     'aal', coalesce(auth.jwt() ->> 'aal', ''));
 end $$;
 
+drop function if exists public.vendor_list_shops(); -- its columns changed in v21
 create or replace function public.vendor_list_shops()
 returns table (shop_id uuid, shop_name text, email text, plan text, active_until date,
-               created_at timestamptz, last_seen timestamptz, tills int, records bigint)
+               created_at timestamptz, last_seen timestamptz, tills int, records bigint,
+               deactivated boolean, deactivated_reason text,
+               paid_total bigint, paid_this_month bigint, last_payment date)
 language plpgsql security definer set search_path = public as $$
 begin
   perform public.vendor_check();
@@ -185,9 +206,65 @@ begin
     select s.id, s.name, u.email::text, s.plan, s.active_until, s.created_at,
            (select max(r.updated_at) from public.records r where r.shop_id = s.id),
            greatest(s.next_device - 1, 0),
-           (select count(*) from public.records r where r.shop_id = s.id)
+           (select count(*) from public.records r where r.shop_id = s.id),
+           s.deactivated, s.deactivated_reason,
+           (select coalesce(sum(p.amount_cents), 0) from public.vendor_payments p where p.shop_id = s.id)::bigint,
+           (select coalesce(sum(p.amount_cents), 0) from public.vendor_payments p
+             where p.shop_id = s.id and date_trunc('month', p.paid_on) = date_trunc('month', current_date))::bigint,
+           (select max(p.paid_on) from public.vendor_payments p where p.shop_id = s.id)
     from public.shops s join auth.users u on u.id = s.owner
     order by s.created_at;
+end $$;
+
+-- Record a subscription payment (may be backdated). The paid-until date runs
+-- from the payment date, or from the current end date if that is later.
+create or replace function public.vendor_record_payment(p_shop uuid, p_paid_on date, p_months int,
+  p_amount_cents int, p_method text default 'EFT', p_note text default '')
+returns date
+language plpgsql security definer set search_path = public as $$
+declare old date; new_date date;
+begin
+  perform public.vendor_check();
+  if p_paid_on is null or p_paid_on > current_date then raise exception 'The payment date can''t be in the future'; end if;
+  if p_months is null or p_months < 1 or p_months > 24 then raise exception 'Months must be 1 to 24'; end if;
+  if p_amount_cents is null or p_amount_cents < 0 then raise exception 'Enter the amount paid'; end if;
+  select active_until into old from public.shops where id = p_shop for update;
+  if not found then raise exception 'Shop not found'; end if;
+  new_date := (greatest(coalesce(old, p_paid_on), p_paid_on) + make_interval(months => p_months))::date;
+  update public.shops set active_until = new_date, plan = 'paid' where id = p_shop;
+  insert into public.vendor_payments (shop_id, paid_on, amount_cents, months, method, note, admin_id)
+    values (p_shop, p_paid_on, p_amount_cents, p_months, left(coalesce(p_method, ''), 20), left(coalesce(p_note, ''), 200), auth.uid());
+  insert into public.vendor_audit (admin_id, shop_id, action, old_until, new_until)
+    values (auth.uid(), p_shop, left('Payment R' || to_char(p_amount_cents / 100.0, 'FM999999990.00') || ' on ' || p_paid_on
+      || ' (' || p_months || ' mo)', 60), old, new_date);
+  return new_date;
+end $$;
+
+create or replace function public.vendor_shop_payments(p_shop uuid)
+returns table (paid_on date, amount_cents int, months int, method text, note text, created_at timestamptz)
+language plpgsql security definer set search_path = public as $$
+begin
+  perform public.vendor_check();
+  return query select p.paid_on, p.amount_cents, p.months, p.method, p.note, p.created_at
+    from public.vendor_payments p where p.shop_id = p_shop order by p.paid_on desc, p.id desc;
+end $$;
+
+-- Deactivate (selling pauses on all the shop's devices; data kept) or reactivate.
+create or replace function public.vendor_set_active(p_shop uuid, p_active boolean, p_reason text default '')
+returns boolean
+language plpgsql security definer set search_path = public as $$
+declare cur date;
+begin
+  perform public.vendor_check();
+  select active_until into cur from public.shops where id = p_shop for update;
+  if not found then raise exception 'Shop not found'; end if;
+  update public.shops set deactivated = not p_active,
+    deactivated_reason = case when p_active then null else nullif(left(coalesce(p_reason, ''), 200), '') end
+  where id = p_shop;
+  insert into public.vendor_audit (admin_id, shop_id, action, old_until, new_until)
+    values (auth.uid(), p_shop, left(case when p_active then 'Reactivated' else 'Deactivated' ||
+      case when coalesce(p_reason, '') <> '' then ': ' || p_reason else '' end end, 60), cur, cur);
+  return p_active;
 end $$;
 
 -- Set a shop's paid-until date (null = no end date). Marks the shop as paying.
@@ -234,6 +311,10 @@ begin
 end $$;
 
 revoke execute on function public.vendor_check(), public.vendor_whoami(), public.vendor_list_shops(),
-  public.vendor_set_until(uuid, date, text), public.vendor_add_months(uuid, int), public.vendor_audit_log(int) from public, anon;
+  public.vendor_set_until(uuid, date, text), public.vendor_add_months(uuid, int), public.vendor_audit_log(int),
+  public.vendor_record_payment(uuid, date, int, int, text, text), public.vendor_shop_payments(uuid),
+  public.vendor_set_active(uuid, boolean, text) from public, anon;
 grant execute on function public.vendor_whoami(), public.vendor_list_shops(),
-  public.vendor_set_until(uuid, date, text), public.vendor_add_months(uuid, int), public.vendor_audit_log(int) to authenticated;
+  public.vendor_set_until(uuid, date, text), public.vendor_add_months(uuid, int), public.vendor_audit_log(int),
+  public.vendor_record_payment(uuid, date, int, int, text, text), public.vendor_shop_payments(uuid),
+  public.vendor_set_active(uuid, boolean, text) to authenticated;

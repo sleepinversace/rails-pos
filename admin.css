@@ -25,4 +25,12 @@
 .st-ending, .st-grace { background: var(--warn-soft); color: var(--warn); }
 .st-expired { background: var(--danger-soft); color: var(--danger); }
 .audit td { font-size: 13px; }
+.st-off { background: var(--danger-soft); color: var(--danger); }
+.shop-card.is-off { border-left: 4px solid var(--danger); opacity: .9; }
+.pay-form { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0 12px;
+  padding: 12px; border: 1px solid var(--accent); border-radius: 12px; background: var(--accent-soft); }
+.pay-form .field { margin-bottom: 8px; }
+.pay-form .pay-note, .pay-form .pay-hint, .pay-form .row { grid-column: 1 / -1; }
+.pay-history { grid-column: 1 / -1; }
+.pay-history td, .pay-history th { font-size: 13px; }
 @media (max-width: 640px) { .shop-card { grid-template-columns: 1fr; } .shop-actions { justify-content: flex-start; } }

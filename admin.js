@@ -115,8 +115,11 @@ function showLogin(message = '') {
   $('#aEmail').focus();
 }
 
+const randStr = c => 'R' + (Number(c || 0) / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+
 function statusOf(s) {
   const today = isoDay(new Date());
+  if (s.deactivated) return ['off', 'Deactivated · selling paused'];
   if (!s.active_until) return ['noend', 'No end date'];
   const end = new Date(s.active_until + 'T12:00:00');
   const days = Math.round((end - new Date(today + 'T12:00:00')) / 864e5);
@@ -130,14 +133,19 @@ function showDashboard() {
   setHeader();
   const q = query.trim().toLowerCase();
   const list = shops.filter(s => !q || String(s.shop_name).toLowerCase().includes(q) || String(s.email).toLowerCase().includes(q));
-  const counts = { paid: 0, trial: 0, attention: 0 };
-  shops.forEach(s => { const [k] = statusOf(s); if (k === 'paid' || k === 'noend') counts.paid++; else if (k === 'trial') counts.trial++; else counts.attention++; });
+  const counts = { paid: 0, trial: 0, attention: 0, off: 0 };
+  shops.forEach(s => {
+    const [k] = statusOf(s);
+    if (k === 'paid' || k === 'noend') counts.paid++; else if (k === 'trial') counts.trial++; else if (k === 'off') counts.off++; else counts.attention++;
+  });
+  const month = shops.reduce((a, s) => a + Number(s.paid_this_month || 0), 0);
+  const total = shops.reduce((a, s) => a + Number(s.paid_total || 0), 0);
   $('#root').innerHTML = `
     <div class="admin-kpis">
-      <div class="kpi"><div class="label">Shops</div><div class="value num">${shops.length}</div></div>
-      <div class="kpi"><div class="label">Paying</div><div class="value num">${counts.paid}</div></div>
-      <div class="kpi"><div class="label">On trial</div><div class="value num">${counts.trial}</div></div>
+      <div class="kpi"><div class="label">Shops</div><div class="value num">${shops.length}</div><div class="sub">${counts.paid} paying · ${counts.trial} on trial</div></div>
+      <div class="kpi"><div class="label">Paid this month</div><div class="value money">${randStr(month)}</div><div class="sub">all time ${randStr(total)}</div></div>
       <div class="kpi"><div class="label">Need attention</div><div class="value num ${counts.attention ? 'err-text' : ''}">${counts.attention}</div><div class="sub">ending, grace or expired</div></div>
+      <div class="kpi"><div class="label">Deactivated</div><div class="value num">${counts.off}</div></div>
     </div>
     <div class="admin-tools">
       <input id="search" type="search" placeholder="Search shop or email…" value="${esc(query)}" aria-label="Search shops">
@@ -151,24 +159,73 @@ function showDashboard() {
       : '<p class="small muted">No changes yet.</p>'}</div>`;
 }
 
+let openPay = null;      // shop id whose "Record payment" form is open
+const payHistory = {};  // shop id → payments (loaded when opened)
+
 function shopCard(s) {
   const [k, label] = statusOf(s);
   const id = esc(s.shop_id);
-  return `<div class="card shop-card">
+  const hist = payHistory[s.shop_id];
+  return `<div class="card shop-card ${s.deactivated ? 'is-off' : ''}">
     <div>
       <h3>${esc(s.shop_name)}<span class="st st-${k}">${esc(label)}</span></h3>
       <div class="shop-meta">${esc(s.email)} · joined ${esc(fmtDay(String(s.created_at || '').slice(0, 10)))}</div>
       <div class="shop-meta">Paid until <strong>${esc(s.active_until ? fmtDay(s.active_until) : 'no end date')}</strong> · ${s.tills} till${s.tills === 1 ? '' : 's'} · last activity ${esc(fmtWhen(s.last_seen))}</div>
+      <div class="shop-meta">Payments: <strong>${esc(randStr(s.paid_total))}</strong> in total${s.last_payment ? ` · last on ${esc(fmtDay(s.last_payment))}` : ''}
+        · <button class="link" data-act="history" data-id="${id}">${hist ? 'Hide history' : 'Payment history'}</button></div>
+      ${s.deactivated ? `<div class="shop-meta err-text">Deactivated${s.deactivated_reason ? `: ${esc(s.deactivated_reason)}` : ''}</div>` : ''}
     </div>
     <div class="shop-actions">
-      <button class="btn sm primary" data-act="add" data-id="${id}" data-m="1">+1 month</button>
-      <button class="btn sm" data-act="add" data-id="${id}" data-m="3">+3</button>
-      <button class="btn sm" data-act="add" data-id="${id}" data-m="12">+12</button>
+      <button class="btn sm primary" data-act="pay-open" data-id="${id}">Record payment</button>
+      <button class="btn sm" data-act="add" data-id="${id}" data-m="1">+1 month</button>
       <input type="date" data-date="${id}" aria-label="Paid until date for ${esc(s.shop_name)}" value="${esc(s.active_until || '')}">
       <button class="btn sm" data-act="set" data-id="${id}">Set date</button>
       <button class="btn sm" data-act="noend" data-id="${id}">No end date</button>
+      ${s.deactivated
+        ? `<button class="btn sm primary" data-act="reactivate" data-id="${id}">Reactivate</button>`
+        : `<button class="btn sm danger" data-act="deactivate" data-id="${id}">Deactivate</button>`}
     </div>
+    ${openPay === s.shop_id ? payForm(s) : ''}
+    ${hist ? `<div class="pay-history">${hist.length ? `<table class="list-table"><tr><th>Paid on</th><th>Amount</th><th>Months</th><th>Method</th><th>Note</th></tr>
+      ${hist.map(p => `<tr><td>${esc(fmtDay(p.paid_on))}</td><td>${esc(randStr(p.amount_cents))}</td><td>${esc(p.months)}</td><td>${esc(p.method || '')}</td><td>${esc(p.note || '')}</td></tr>`).join('')}</table>`
+      : '<p class="small muted">No payments recorded yet.</p>'}</div>` : ''}
   </div>`;
+}
+
+/** Inline form: record a subscription payment, which may be backdated. */
+function payForm(s) {
+  const id = esc(s.shop_id);
+  const today = isoDay(new Date());
+  return `<form class="pay-form" data-pay-form="${id}" novalidate>
+    <label class="field"><span>Paid on (can be in the past)</span><input type="date" name="paid_on" class="input" value="${today}" max="${today}"></label>
+    <label class="field"><span>Months paid for</span><select name="months">${[1, 2, 3, 6, 12].map(m => `<option value="${m}">${m} month${m > 1 ? 's' : ''}</option>`).join('')}</select></label>
+    <label class="field"><span>Amount (R)</span><input name="amount" class="input" inputmode="decimal" placeholder="e.g. 149.00"></label>
+    <label class="field"><span>Method</span><select name="method"><option>EFT</option><option>Cash</option><option>Card</option><option>Other</option></select></label>
+    <label class="field pay-note"><span>Note (optional)</span><input name="note" class="input" maxlength="200" placeholder="e.g. invoice number"></label>
+    <p class="small muted pay-hint">The paid-until date runs from the payment date, or from the current end date if that is later.</p>
+    <div class="row gap-s"><button class="btn primary" type="submit">Save payment</button><button class="btn" type="button" data-act="pay-close">Cancel</button></div>
+  </form>`;
+}
+
+async function savePayment(form) {
+  const id = form.dataset.payForm;
+  const f = new FormData(form);
+  const paidOn = String(f.get('paid_on') || '');
+  const months = Number(f.get('months'));
+  const amountTxt = String(f.get('amount') || '').replace(/[R\s]/gi, '').replace(',', '.');
+  const amount = Math.round(Number(amountTxt) * 100);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(paidOn)) return toast('Choose the date it was paid', true);
+  if (paidOn > isoDay(new Date())) return toast('The payment date can\'t be in the future', true);
+  if (!amountTxt || !Number.isFinite(amount) || amount < 0) return toast('Enter the amount paid', true);
+  if (!confirm(`Record ${randStr(amount)} paid on ${fmtDay(paidOn)} for ${months} month${months > 1 ? 's' : ''} for ${shopName(id)}?`)) return;
+  const until = await rpc('vendor_record_payment', {
+    p_shop: id, p_paid_on: paidOn, p_months: months, p_amount_cents: amount,
+    p_method: String(f.get('method') || ''), p_note: String(f.get('note') || '').trim(),
+  });
+  openPay = null;
+  if (payHistory[id]) payHistory[id] = await rpc('vendor_shop_payments', { p_shop: id });
+  await loadData();
+  toast(`Payment saved. ${shopName(id)} is paid until ${fmtDay(until)}`);
 }
 
 async function loadData() {
@@ -215,6 +272,26 @@ async function act(el) {
       await loadData();
       return toast('Saved: no end date');
     }
+    if (a === 'pay-open') { openPay = openPay === id ? null : id; showDashboard(); return document.querySelector('[name="amount"]')?.focus(); }
+    if (a === 'pay-close') { openPay = null; return showDashboard(); }
+    if (a === 'history') {
+      if (payHistory[id]) delete payHistory[id];
+      else payHistory[id] = await rpc('vendor_shop_payments', { p_shop: id });
+      return showDashboard();
+    }
+    if (a === 'deactivate') {
+      const reason = prompt(`Deactivate ${shopName(id)}?\n\nSelling pauses on all their devices (their data is kept, and you can reactivate any time).\n\nReason (optional, they will see it):`, '');
+      if (reason === null) return;
+      await rpc('vendor_set_active', { p_shop: id, p_active: false, p_reason: reason.trim() });
+      await loadData();
+      return toast(`${shopName(id)} deactivated. Their devices pause selling at the next sync.`);
+    }
+    if (a === 'reactivate') {
+      if (!confirm(`Reactivate ${shopName(id)}? Selling works again at their next sync.`)) return;
+      await rpc('vendor_set_active', { p_shop: id, p_active: true, p_reason: '' });
+      await loadData();
+      return toast(`${shopName(id)} reactivated`);
+    }
   } catch (e) {
     handleError(e);
   }
@@ -246,6 +323,7 @@ document.addEventListener('submit', async e => {
       setSession(d);
       await continueSignIn();
     }
+    if (e.target.dataset.payForm) await savePayment(e.target);
   } catch (err) {
     if ($('#err')) setErr(err.message); else handleError(err);
   } finally {
