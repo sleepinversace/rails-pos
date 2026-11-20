@@ -429,7 +429,7 @@ test('Accessibility: focus is kept in dialogs; nav has aria-current; colours hav
     d.documentElement.dataset.theme = theme;
     const css = n => w.getComputedStyle(d.documentElement).getPropertyValue(n).trim();
     const pairs = [['--text', '--bg'], ['--muted', '--bg'], ['--muted', '--surface'], ['--muted', '--surface-2'], ['--accent-ink', '--accent'],
-      ['--accent', '--surface'], ['--warn', '--warn-soft'], ['--danger', '--danger-soft'], ['--danger', '--surface'], ['--ok', '--ok-soft'], ['--money', '--surface'], ['--money', '--bg']];
+      ['--accent-text', '--surface'], ['--pay-ink', '--pay-cash'], ['--pay-ink', '--pay-card'], ['--pay-eft-ink', '--pay-eft'], ['--text', '--surface'], ['--warn', '--warn-soft'], ['--danger', '--danger-soft'], ['--danger', '--surface'], ['--ok', '--ok-soft'], ['--money', '--surface'], ['--money', '--bg']];
     for (const [fg, bg] of pairs) { const c = contrast(css(fg), css(bg)); if (c < 4.5) fails.push(`${theme} ${fg} on ${bg}: ${c.toFixed(2)}`); }
   }
   delete d.documentElement.dataset.theme;

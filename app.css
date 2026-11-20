@@ -1,97 +1,92 @@
 /* =========================================================================
    Rails POS — styles
    Mobile-first. Tablet layout kicks in at 860px (nav rail + side cart).
-   Colours are tokens on :root so light/dark mode only swaps values.
+   Colours are tokens on :root so the two looks only swap values.
    ========================================================================= */
 
-/* Navy & coral. --brand is the navy used for the header and sign-in screen;
-   --accent is the coral for buttons, the active tab and highlights. */
+/* NEON (default): near-black background with glowing neon yellow, green,
+   cyan and pink. --accent is neon yellow (buttons, active tab, highlights),
+   --accent-text is the same colour where it is used as text.
+   Cash / Card / EFT each have their own neon colour (--pay-*). */
 :root {
-  --bg: #f1f3f8;
-  --surface: #ffffff;
-  --surface-2: #e8ecf3;
-  --text: #1a2238;
-  --muted: #5a6478;
-  --border: #dde2ec;
-  --brand: #1e2a44;
+  --bg: #07080f;
+  --surface: #10121f;
+  --surface-2: #191c2f;
+  --text: #f3f5ff;
+  --muted: #a6acc8;
+  --border: #2b3052;
+  --brand: #05060c;
   --brand-ink: #ffffff;
-  --brand-muted: #b9c3d8;
-  --accent: #c0442f;
-  --accent-hover: #a83a27;
-  --accent-ink: #ffffff;
-  --accent-soft: #fde9e4;
-  --danger: #b42318;
-  --danger-soft: #fde7e4;
-  --warn: #9a5b05;
-  --warn-soft: #fcefd2;
-  --ok: #157a3c;
-  --ok-soft: #dcf3e3;
-  --money: #0f7a3c;      /* rand amounts in reports */
-  --money-bar: #22a05a;  /* chart bars */
-  --shadow-sm: 0 1px 2px rgba(20,30,55,.06);
-  --shadow: 0 1px 3px rgba(20,30,55,.08), 0 10px 28px rgba(20,30,55,.10);
+  --brand-muted: #a6acc8;
+  --accent: #ffe500;
+  --accent-hover: #fff27a;
+  --accent-ink: #141200;
+  --accent-text: #ffe500;
+  --accent-soft: #2a2708;
+  --neon: #22e6ff;        /* cyan: outlines of buttons and tiles */
+  --neon-pink: #ff3df2;
+  --danger: #ff4d6d;
+  --danger-soft: #3a0f1d;
+  --warn: #ff7af0;
+  --warn-soft: #33102f;
+  --ok: #39ff88;
+  --ok-soft: #0b2a18;
+  --money: #39ff88;       /* rand amounts in reports */
+  --money-bar: #20e57a;   /* chart bars */
+  --pay-cash: #39ff88;
+  --pay-card: #22e6ff;
+  --pay-eft: #ff3df2;
+  --pay-ink: #05060c;     /* text on a lit-up payment button */
+  --pay-eft-ink: #05060c;
+  --g1: 65%;              /* inner glow strength */
+  --g2: 30%;              /* outer glow strength */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.5);
+  --shadow: 0 1px 3px rgba(0,0,0,.5), 0 10px 28px rgba(0,0,0,.55);
   --radius: 14px;
   --header-h: 52px;
   --nav-h: 62px;
   --cartbar-h: 58px;
   --safe-b: env(safe-area-inset-bottom, 0px);
-  color-scheme: light;
+  color-scheme: dark;
 }
 
-/* Dark tokens: follow the system unless the user forced light in Settings */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0d1322;
-    --surface: #161e33;
-    --surface-2: #1f2840;
-    --text: #e8ecf5;
-    --muted: #9ba5bc;
-    --border: #2a3450;
-    --brand: #111a2e;
-    --brand-ink: #ffffff;
-    --brand-muted: #9ba5bc;
-    --accent: #ff7a5c;
-    --accent-hover: #ff8f75;
-    --accent-ink: #2a0d06;
-    --accent-soft: #3a2224;
-    --danger: #f87171;
-    --danger-soft: #3d1a17;
-    --warn: #fbbf24;
-    --warn-soft: #3a2d0e;
-    --ok: #4ade80;
-    --ok-soft: #12321e;
-    --money: #4ade80;
-    --money-bar: #2fb66a;
-    --shadow-sm: 0 1px 2px rgba(0,0,0,.35);
-    --shadow: 0 1px 3px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.4);
-    color-scheme: dark;
-  }
-}
-:root[data-theme="dark"] {
-  --bg: #0d1322;
-  --surface: #161e33;
-  --surface-2: #1f2840;
-  --text: #e8ecf5;
-  --muted: #9ba5bc;
-  --border: #2a3450;
-  --brand: #111a2e;
+/* LIGHT (Settings → Appearance → Light): for bright sunlight. Same neon
+   colours, darker where they are used as text so they stay readable. */
+:root[data-theme="light"] {
+  --bg: #f3f4fa;
+  --surface: #ffffff;
+  --surface-2: #e9ebf5;
+  --text: #0d0f1c;
+  --muted: #555b78;
+  --border: #d3d7ea;
+  --brand: #0b0d18;
   --brand-ink: #ffffff;
-  --brand-muted: #9ba5bc;
-  --accent: #ff7a5c;
-  --accent-hover: #ff8f75;
-  --accent-ink: #2a0d06;
-  --accent-soft: #3a2224;
-  --danger: #f87171;
-  --danger-soft: #3d1a17;
-  --warn: #fbbf24;
-  --warn-soft: #3a2d0e;
-  --ok: #4ade80;
-  --ok-soft: #12321e;
-  --money: #4ade80;
-  --money-bar: #2fb66a;
-  --shadow-sm: 0 1px 2px rgba(0,0,0,.35);
-  --shadow: 0 1px 3px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.4);
-  color-scheme: dark;
+  --brand-muted: #a6acc8;
+  --accent: #ffd60a;
+  --accent-hover: #ffe14d;
+  --accent-ink: #161300;
+  --accent-text: #7a5f00;
+  --accent-soft: #fff6c2;
+  --neon: #00b8d9;
+  --neon-pink: #e000c4;
+  --danger: #c8102e;
+  --danger-soft: #fde6ea;
+  --warn: #a3008f;
+  --warn-soft: #fbe3f7;
+  --ok: #0a7d3e;
+  --ok-soft: #d9f7e5;
+  --money: #0a7d3e;
+  --money-bar: #12c060;
+  --pay-cash: #00c565;
+  --pay-card: #00b8d9;
+  --pay-eft: #c400ab;
+  --pay-ink: #05060c;
+  --pay-eft-ink: #ffffff;
+  --g1: 40%;
+  --g2: 14%;
+  --shadow-sm: 0 1px 2px rgba(13,15,28,.07);
+  --shadow: 0 1px 3px rgba(13,15,28,.08), 0 10px 28px rgba(13,15,28,.10);
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -156,14 +151,14 @@ h3 { font-size: 15px; }
 }
 .app-nav .ico { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .app-nav button { position: relative; transition: color .15s; }
-.app-nav button.active { color: var(--accent); }
-/* Small coral bar marks the open screen */
+.app-nav button.active { color: var(--accent-text); }
+/* Small glowing bar marks the open screen */
 .app-nav button.active::after {
   content: ""; position: absolute; top: 0; left: 30%; right: 30%; height: 3px;
   border-radius: 0 0 3px 3px; background: var(--accent);
 }
 .app-nav button:hover { color: var(--text); }
-.app-nav button.active:hover { color: var(--accent); }
+.app-nav button.active:hover { color: var(--accent-text); }
 
 /* ----- Main ----- */
 .app-main {
@@ -233,7 +228,7 @@ label.field > span { display: block; font-size: 13px; font-weight: 600; color: v
   flex: 1; border: 0; background: transparent; border-radius: 8px;
   padding: 8px 6px; font-weight: 600; color: var(--muted); min-height: 38px;
 }
-.seg button.on { background: var(--surface); color: var(--accent); box-shadow: 0 1px 3px rgba(20,30,55,.14); }
+.seg button.on { background: var(--surface); color: var(--accent-text); box-shadow: 0 1px 3px rgba(20,30,55,.14); }
 .seg.sm button { min-height: 30px; padding: 4px 10px; }
 .seg.range { max-width: 420px; margin-bottom: 12px; }
 
@@ -256,7 +251,7 @@ label.field > span { display: block; font-size: 13px; font-weight: 600; color: v
   box-shadow: var(--shadow-sm); position: relative; overflow: hidden;
   transition: border-color .15s, box-shadow .15s, transform .15s;
 }
-/* Coral edge on the left of each product tile */
+/* Glowing edge on the left of each product tile */
 .product-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); opacity: .85; }
 .product-card:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); box-shadow: var(--shadow); transform: translateY(-1px); }
 .product-card:active { background: var(--surface-2); transform: none; }
@@ -448,7 +443,7 @@ label.field > span { display: block; font-size: 13px; font-weight: 600; color: v
 textarea.plain { font-family: inherit; font-size: 15px; min-height: 60px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .wrap { flex-wrap: wrap; }
-.link { border: 0; background: none; padding: 4px 0; color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; min-height: 32px; }
+.link { border: 0; background: none; padding: 4px 0; color: var(--accent-text); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; min-height: 32px; }
 .foot-row { display: flex; gap: 8px; width: 100%; flex-wrap: wrap; }
 .foot-row .btn { flex: 1 1 auto; }
 .ok-text { color: var(--ok); font-weight: 700; }
@@ -472,7 +467,7 @@ input:disabled { opacity: .5; }
   display: flex; flex-direction: column; border-radius: 6px;
 }
 .var-label:hover .label strong { text-decoration: underline; }
-.price-tag { color: var(--accent); font-weight: 700; }
+.price-tag { color: var(--accent-text); font-weight: 700; }
 
 .list-table th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 4px 0; }
 .list-table .r, .list-table th.r { text-align: right; }
@@ -526,6 +521,125 @@ input:disabled { opacity: .5; }
 .lock-btn { display: inline-flex; align-items: center; gap: 6px; }
 .lock-btn .ico { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
+/* =====================================================================
+   NEON EFFECTS
+   Glows are coloured box-shadows / text-shadows. --g1 / --g2 set how
+   strong they are (weaker in the Light look).
+   ===================================================================== */
+.app-header {
+  border-bottom: 2px solid transparent;
+  border-image: linear-gradient(90deg, var(--neon), var(--neon-pink), var(--accent)) 1;
+  box-shadow: 0 6px 24px color-mix(in srgb, var(--neon) var(--g2), transparent);
+}
+.brand span { text-shadow: 0 0 12px color-mix(in srgb, var(--neon) var(--g1), transparent); }
+.app-nav { border-top-color: color-mix(in srgb, var(--neon) 35%, var(--border)); }
+.app-nav button.active { text-shadow: 0 0 10px color-mix(in srgb, var(--accent) var(--g1), transparent); }
+.app-nav button.active .ico { filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent) var(--g1), transparent)); }
+.app-nav button.active::after { box-shadow: 0 0 8px var(--accent), 0 0 18px color-mix(in srgb, var(--accent) var(--g2), transparent); }
+
+/* Buttons */
+.btn.primary {
+  box-shadow: 0 0 0 1px var(--accent), 0 0 14px color-mix(in srgb, var(--accent) var(--g1), transparent),
+    0 0 32px color-mix(in srgb, var(--accent) var(--g2), transparent);
+}
+.btn.primary:hover { box-shadow: 0 0 0 1px var(--accent-hover), 0 0 20px color-mix(in srgb, var(--accent) var(--g1), transparent), 0 0 44px color-mix(in srgb, var(--accent) var(--g2), transparent); }
+.btn.primary:disabled { box-shadow: none; }
+.btn.danger { box-shadow: 0 0 10px color-mix(in srgb, var(--danger) var(--g2), transparent); }
+.btn:not(.primary):not(.danger):not(.ghost) { border-color: color-mix(in srgb, var(--neon) 40%, var(--border)); }
+.btn:not(.primary):not(.danger):not(.ghost):hover { border-color: var(--neon); box-shadow: 0 0 12px color-mix(in srgb, var(--neon) var(--g2), transparent); }
+#chargeBtn:not(:disabled) { animation: neon-pulse 2.6s ease-in-out infinite; }
+@keyframes neon-pulse {
+  50% { box-shadow: 0 0 0 1px var(--accent), 0 0 22px color-mix(in srgb, var(--accent) var(--g1), transparent), 0 0 48px color-mix(in srgb, var(--accent) var(--g1), transparent); }
+}
+
+/* Inputs */
+.input, input[type="search"], select, textarea { border-color: color-mix(in srgb, var(--neon) 30%, var(--border)); }
+.input:focus, input[type="search"]:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 16px color-mix(in srgb, var(--accent) var(--g1), transparent);
+}
+#sellSearch { border-width: 1.5px; border-color: var(--neon); box-shadow: 0 0 14px color-mix(in srgb, var(--neon) var(--g2), transparent); }
+#sellSearch:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 18px color-mix(in srgb, var(--accent) var(--g1), transparent); }
+
+/* Segmented buttons (discount R/%, report periods…): each option outlined in neon */
+.seg { background: transparent; gap: 6px; padding: 0; }
+.seg button {
+  border: 1.5px solid color-mix(in srgb, var(--neon) 60%, transparent); color: var(--text);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--neon) var(--g2), transparent);
+}
+.seg button.on {
+  background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 14px color-mix(in srgb, var(--accent) var(--g1), transparent);
+}
+
+/* Cash / Card / EFT: bigger, each in its own neon colour, the chosen one lit up */
+.seg.pay { gap: 8px; }
+.seg.pay button { min-height: 50px; font-size: 16px; font-weight: 800; letter-spacing: .02em; border-width: 2px; }
+.seg.pay button[data-pay="cash"] { --c: var(--pay-cash); --ci: var(--pay-ink); }
+.seg.pay button[data-pay="card"] { --c: var(--pay-card); --ci: var(--pay-ink); }
+.seg.pay button[data-pay="eft"]  { --c: var(--pay-eft);  --ci: var(--pay-eft-ink); }
+.seg.pay button { border-color: var(--c); box-shadow: 0 0 10px color-mix(in srgb, var(--c) var(--g2), transparent), inset 0 0 10px color-mix(in srgb, var(--c) var(--g2), transparent); }
+.seg.pay button.on {
+  background: var(--c); color: var(--ci); border-color: var(--c);
+  box-shadow: 0 0 0 1px var(--c), 0 0 18px color-mix(in srgb, var(--c) var(--g1), transparent), 0 0 40px color-mix(in srgb, var(--c) var(--g2), transparent);
+}
+.quick-cash button { border-color: var(--pay-cash) !important; box-shadow: 0 0 8px color-mix(in srgb, var(--pay-cash) var(--g2), transparent); }
+
+/* Category chips */
+.chip { border-color: color-mix(in srgb, var(--neon) 55%, var(--border)); box-shadow: 0 0 8px color-mix(in srgb, var(--neon) var(--g2), transparent); }
+.chip.on { box-shadow: 0 0 0 1px var(--accent), 0 0 14px color-mix(in srgb, var(--accent) var(--g1), transparent); }
+
+/* Product tiles */
+.product-card { border-color: color-mix(in srgb, var(--neon) 28%, var(--border)); }
+.product-card::before { box-shadow: 0 0 10px var(--accent), 0 0 18px color-mix(in srgb, var(--accent) var(--g2), transparent); opacity: 1; }
+.product-card:hover {
+  border-color: var(--neon); transform: translateY(-1px);
+  box-shadow: 0 0 0 1px var(--neon), 0 0 18px color-mix(in srgb, var(--neon) var(--g2), transparent);
+}
+.product-card .price { color: var(--money); }
+
+/* Size / colour picker options */
+.opt { border-color: color-mix(in srgb, var(--neon) 50%, var(--border)); }
+.opt.on {
+  background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 14px color-mix(in srgb, var(--accent) var(--g1), transparent);
+}
+
+/* Cart */
+.cart-panel { border-top: 1.5px solid var(--neon); box-shadow: 0 -6px 30px color-mix(in srgb, var(--neon) var(--g2), transparent); }
+.stepper { border-color: color-mix(in srgb, var(--neon) 55%, var(--border)); }
+.totals .grand { color: var(--money); text-shadow: 0 0 12px color-mix(in srgb, var(--money) var(--g2), transparent); }
+.cart-bar { border: 1.5px solid var(--accent); box-shadow: 0 0 18px color-mix(in srgb, var(--accent) var(--g2), transparent), var(--shadow); }
+.cart-bar strong { color: var(--money); }
+.cart-bar-go { box-shadow: 0 0 12px color-mix(in srgb, var(--accent) var(--g1), transparent); }
+
+/* Cards, banners, dialogs */
+.card, .kpi, .sale-row { border-color: color-mix(in srgb, var(--neon) 22%, var(--border)); }
+.banner { border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); }
+.banner.info { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.modal { border: 1px solid color-mix(in srgb, var(--neon) 45%, var(--border)); box-shadow: var(--shadow), 0 0 34px color-mix(in srgb, var(--neon) var(--g2), transparent); }
+.list-table tr:first-child .rank { box-shadow: 0 0 10px color-mix(in srgb, var(--accent) var(--g1), transparent); }
+
+/* Reports: glowing green money */
+#view-reports .money { text-shadow: 0 0 10px color-mix(in srgb, var(--money) var(--g2), transparent); }
+#view-reports .kpi { box-shadow: 0 -4px 16px -6px color-mix(in srgb, var(--money) var(--g1), transparent); }
+#view-reports .bar-fill, .chart-bar.best { box-shadow: 0 0 10px color-mix(in srgb, var(--money-bar) var(--g1), transparent); }
+
+/* Sign-in */
+.signin {
+  background:
+    radial-gradient(700px 420px at 90% -5%, color-mix(in srgb, var(--neon-pink) 30%, transparent), transparent 60%),
+    radial-gradient(700px 420px at 0% 105%, color-mix(in srgb, var(--neon) 26%, transparent), transparent 60%),
+    var(--brand);
+}
+.signin-box { border-color: var(--neon); box-shadow: 0 0 0 1px var(--neon), 0 0 30px color-mix(in srgb, var(--neon) var(--g1), transparent), 0 0 70px color-mix(in srgb, var(--neon-pink) var(--g2), transparent); }
+.signin-box h1 { text-shadow: 0 0 14px color-mix(in srgb, var(--accent) var(--g1), transparent); }
+
+/* Light look: no text glow (it blurs dark text) */
+:root[data-theme="light"] .app-nav button.active,
+:root[data-theme="light"] #view-reports .money,
+:root[data-theme="light"] .totals .grand { text-shadow: none; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
@@ -553,7 +667,8 @@ input:disabled { opacity: .5; }
   .cart-panel {
     top: calc(var(--header-h) + 16px); right: 20px; bottom: 16px; left: auto;
     width: 360px; height: auto; transform: none; visibility: visible;
-    border-radius: var(--radius); border: 1px solid var(--border); box-shadow: none;
+    border-radius: var(--radius); border: 1.5px solid color-mix(in srgb, var(--neon) 70%, var(--border));
+    box-shadow: 0 0 22px color-mix(in srgb, var(--neon) var(--g2), transparent);
     z-index: 20; transition: none; padding-bottom: 0;
   }
   .cart-close { display: none; }

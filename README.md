@@ -49,7 +49,7 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - You can't delete yourself, and there is always at least one user with Admin access.
   - This keeps staff and customers out of the till. It is not copy protection: a licence check needs a server (see *What to build next*).
 - **Usable by everyone**
-  - Light and dark mode.
+  - A neon look (dark background, glowing yellow, green, cyan and pink). Cash, Card and EFT each have their own neon colour. A Light look for bright sunlight is in Settings → Appearance.
   - Keyboard and screen-reader friendly dialogs.
   - Colours checked for WCAG AA contrast.
 

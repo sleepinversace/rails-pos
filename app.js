@@ -2122,7 +2122,7 @@ async function renderSettings() {
         <label class="field"><span>Low-stock threshold</span><input class="input" data-setting="lowStock" inputmode="numeric" value="${esc(st.lowStock)}"></label>
         <label class="field"><span>Appearance</span>
           <select data-setting="theme">
-            ${['auto', 'light', 'dark'].map(t => `<option value="${t}" ${st.theme === t ? 'selected' : ''}>${t === 'auto' ? 'Match device' : t[0].toUpperCase() + t.slice(1)}</option>`).join('')}
+            ${[['auto', 'Neon (default)'], ['light', 'Light (bright sunlight)']].map(([t, l]) => `<option value="${t}" ${(st.theme === 'dark' ? 'auto' : st.theme) === t ? 'selected' : ''}>${l}</option>`).join('')}
           </select></label>
       </div>
     </div>
