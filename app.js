@@ -2636,7 +2636,8 @@ async function renderSettings() {
         <p class="small muted" style="margin:6px 0 0">${cloudOn()
           ? `Shop: ${esc(Cloud.conf.shopName || '')}${Cloud.conf.licenceCheckedAt ? ` · last checked ${fmtDT(Cloud.conf.licenceCheckedAt)}` : ''}. Renewals are done by ${esc(SUPPLIER.name)}; the date updates on the next sync.`
           : `Without a shop account this device has a ${TRIAL_DAYS}-day free trial. Create your shop account under Cloud sync to subscribe (new shops get 30 days free).`}</p>
-        ${SUPPLIER.whatsapp ? `<a class="btn sm" style="margin-top:10px" href="https://wa.me/${esc(SUPPLIER.whatsapp)}?text=${encodeURIComponent(`Hi, I'd like to subscribe / renew Rails POS for ${state.settings.storeName}`)}" target="_blank" rel="noopener">Subscribe or renew on WhatsApp</a>` : ''}`; })()}
+        ${SUPPLIER.whatsapp ? `<a class="btn sm" style="margin-top:10px" href="https://wa.me/${esc(SUPPLIER.whatsapp)}?text=${encodeURIComponent(`Hi, I'd like to subscribe / renew Rails POS for ${state.settings.storeName}`)}" target="_blank" rel="noopener">Subscribe or renew on WhatsApp</a>` : ''}
+        <p class="small" style="margin:10px 0 0"><a class="link" href="legal.html" target="_blank" rel="noopener">Prices, terms and privacy policy</a></p>`; })()}
     </div>
     <div class="section-title">Account</div>
     <div class="card">
@@ -3889,6 +3890,7 @@ function cloudCardHtml() {
       <button class="btn" data-action="cloud-signup">Create shop account</button>
     </div>
     <p class="small muted" style="margin-bottom:0">Use the same shop email and password on every device. It is separate from the 4-digit staff PINs, and only needs entering once per device.</p>
+    <p class="small muted" style="margin-bottom:0">Creating a shop account means you agree to the <a class="link" href="legal.html" target="_blank" rel="noopener">terms, subscription and privacy policy</a>.</p>
   </div>`;
 }
 
@@ -4000,7 +4002,8 @@ function renderSetup() {
         <button type="button" class="btn block lg" data-action="setup-go" data-step="demo">Try it with demo data</button>
         ${cloudReady() ? '<button type="button" class="btn block lg" data-action="setup-go" data-step="cloud">My shop already uses Rails POS</button>' : ''}
       </div>
-      <p class="small muted" style="margin:12px 0 0">Everything is saved on this device. You can turn on cloud sync later in Settings.</p>`;
+      <p class="small muted" style="margin:12px 0 0">Everything is saved on this device. You can turn on cloud sync later in Settings.</p>
+      <p class="small muted" style="margin:6px 0 0">By using Rails POS you agree to the <a class="link" href="legal.html" target="_blank" rel="noopener">terms, prices and privacy policy</a>.</p>`;
   } else if (s === 'new' || s === 'demo') {
     html = `${head(s === 'new' ? 'Set up your shop' : 'Try Rails POS', s === 'new' ? 'You can add the address, VAT number and more in Settings later.' : 'Sample products and sales, so you can try everything. Start fresh from Settings when you are ready.')}
       <label class="field"><span>Shop name</span><input id="suShop" class="input" maxlength="40" value="${s === 'demo' ? 'Demo Boutique' : ''}" autocomplete="organization"></label>

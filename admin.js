@@ -22,6 +22,30 @@ const TEST_MODE = new URLSearchParams(location.search).has('test');
 const IDLE_MS = 15 * 60 * 1000;
 const SESSION_KEY = 'rails-pos-admin-session';
 
+/* Prices in cents (set by the owner on 2026-11-21). Change them here. */
+const PRICES = { monthly: 38000, device: 5000, setup: 150000 };
+// Your details printed on invoices and receipts (trading name, contact, bank details).
+// Kept only in this browser — never in the code, because the code is public.
+const INVOICE_KEY = 'rails-pos-admin-invoice';
+const INVOICE_DEFAULTS = { name: 'Rails POS', contact: 'WhatsApp 073 314 2884', bank: '', footer: 'Thank you for using Rails POS.' };
+function invoiceDetails() {
+  try { return { ...INVOICE_DEFAULTS, ...JSON.parse(localStorage.getItem(INVOICE_KEY) || '{}') }; } catch { return { ...INVOICE_DEFAULTS }; }
+}
+
+/* Billing: R380 a month for the first device, R50 for each extra device.
+   Devices = the number the supplier set for the shop, or else the devices
+   that synced in the last 30 days (at least 1). */
+const devicesUsed = s => Math.max(1, Number(s.devices_30d ?? s.tills ?? 1) || 1);
+const devicesBilled = s => Number(s.billed_devices) || devicesUsed(s);
+const feeOf = s => PRICES.monthly + PRICES.device * (devicesBilled(s) - 1);
+/** Whole months between two YYYY-MM-DD dates (at least 1). */
+function monthsBetween(from, to) {
+  const a = new Date(from + 'T12:00:00'), b = new Date(to + 'T12:00:00');
+  return Math.max(1, Math.round((b - a) / (30.44 * 864e5)));
+}
+const addMonths = (iso, n) => { const d = new Date(iso + 'T12:00:00'); d.setMonth(d.getMonth() + n); return isoDay(d); };
+const addDays = (iso, n) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return isoDay(d); };
+
 const $ = (s, root = document) => root.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pad = n => String(n).padStart(2, '0');
@@ -140,10 +164,13 @@ function showDashboard() {
   });
   const month = shops.reduce((a, s) => a + Number(s.paid_this_month || 0), 0);
   const total = shops.reduce((a, s) => a + Number(s.paid_total || 0), 0);
+  const paying = shops.filter(s => !s.deactivated && s.plan === 'paid');
+  const expected = paying.reduce((a, s) => a + feeOf(s), 0);
   $('#root').innerHTML = `
     <div class="admin-kpis">
       <div class="kpi"><div class="label">Shops</div><div class="value num">${shops.length}</div><div class="sub">${counts.paid} paying · ${counts.trial} on trial</div></div>
       <div class="kpi"><div class="label">Paid this month</div><div class="value money">${randStr(month)}</div><div class="sub">all time ${randStr(total)}</div></div>
+      <div class="kpi"><div class="label">Monthly fees</div><div class="value money" data-k="expected">${randStr(expected)}</div><div class="sub">${paying.length} paying shop${paying.length === 1 ? '' : 's'}</div></div>
       <div class="kpi"><div class="label">Need attention</div><div class="value num ${counts.attention ? 'err-text' : ''}">${counts.attention}</div><div class="sub">ending, grace or expired</div></div>
       <div class="kpi"><div class="label">Deactivated</div><div class="value num">${counts.off}</div></div>
     </div>
@@ -156,7 +183,24 @@ function showDashboard() {
     <div class="card audit">${audit.length ? `<table class="list-table">${audit.map(a => `<tr>
         <td>${esc(fmtWhen(a.at))}</td><td>${esc(a.shop_name)}</td><td>${esc(a.action)}</td>
         <td>${esc(fmtDay(a.old_until))} → <strong>${esc(a.new_until ? fmtDay(a.new_until) : 'no end date')}</strong></td></tr>`).join('')}</table>`
-      : '<p class="small muted">No changes yet.</p>'}</div>`;
+      : '<p class="small muted">No changes yet.</p>'}</div>
+    ${invoiceDetailsCard()}`;
+}
+
+/** Your details for invoices and receipts (saved in this browser only). */
+function invoiceDetailsCard() {
+  const d = invoiceDetails();
+  return `<div class="section-title">Your details on invoices &amp; receipts</div>
+    <form class="card inv-details" id="invDetails" novalidate>
+      <div class="grid-2">
+        <label class="field"><span>Name on invoices</span><input name="name" class="input" maxlength="80" value="${esc(d.name)}"></label>
+        <label class="field"><span>Contact</span><input name="contact" class="input" maxlength="120" value="${esc(d.contact)}"></label>
+      </div>
+      <label class="field"><span>Bank details for EFT (bank, account name, number, branch code)</span><textarea name="bank" class="plain" rows="3" maxlength="400">${esc(d.bank)}</textarea></label>
+      <label class="field"><span>Footer line</span><input name="footer" class="input" maxlength="160" value="${esc(d.footer)}"></label>
+      <p class="small muted">Saved in this browser only (the code is public, so your bank details are never put in it). Prices: ${randStr(PRICES.monthly)} a month, ${randStr(PRICES.device)} per extra device, setup ${randStr(PRICES.setup)}.</p>
+      <button class="btn" type="submit">Save my details</button>
+    </form>`;
 }
 
 let openPay = null;      // shop id whose "Record payment" form is open
@@ -171,12 +215,16 @@ function shopCard(s) {
       <h3>${esc(s.shop_name)}<span class="st st-${k}">${esc(label)}</span></h3>
       <div class="shop-meta">${esc(s.email)} · joined ${esc(fmtDay(String(s.created_at || '').slice(0, 10)))}</div>
       <div class="shop-meta">Paid until <strong>${esc(s.active_until ? fmtDay(s.active_until) : 'no end date')}</strong> · ${s.tills} till${s.tills === 1 ? '' : 's'} · last activity ${esc(fmtWhen(s.last_seen))}</div>
+      <div class="shop-meta">Fee <strong data-k="fee-${id}">${esc(randStr(feeOf(s)))}</strong> a month · billed for ${devicesBilled(s)} device${devicesBilled(s) === 1 ? '' : 's'}
+        (${s.billed_devices ? 'set by you' : 'automatic'}; ${devicesUsed(s)} used in the last 30 days)
+        · <button class="link" data-act="devices" data-id="${id}">Change</button></div>
       <div class="shop-meta">Payments: <strong>${esc(randStr(s.paid_total))}</strong> in total${s.last_payment ? ` · last on ${esc(fmtDay(s.last_payment))}` : ''}
         · <button class="link" data-act="history" data-id="${id}">${hist ? 'Hide history' : 'Payment history'}</button></div>
       ${s.deactivated ? `<div class="shop-meta err-text">Deactivated${s.deactivated_reason ? `: ${esc(s.deactivated_reason)}` : ''}</div>` : ''}
     </div>
     <div class="shop-actions">
       <button class="btn sm primary" data-act="pay-open" data-id="${id}">Record payment</button>
+      <button class="btn sm" data-act="inv-open" data-id="${id}">Invoice</button>
       <input type="date" data-date="${id}" aria-label="Paid until date for ${esc(s.shop_name)}" value="${esc(s.active_until || '')}">
       <button class="btn sm" data-act="set" data-id="${id}">Set date</button>
       <button class="btn sm" data-act="noend" data-id="${id}">No end date</button>
@@ -185,8 +233,10 @@ function shopCard(s) {
         : `<button class="btn sm danger" data-act="deactivate" data-id="${id}">Deactivate</button>`}
     </div>
     ${openPay === s.shop_id ? payForm(s) : ''}
-    ${hist ? `<div class="pay-history">${hist.length ? `<table class="list-table"><tr><th>Paid on</th><th>Paid until</th><th>Amount</th><th>Method</th><th>Note</th></tr>
-      ${hist.map(p => `<tr><td>${esc(fmtDay(p.paid_on))}</td><td>${esc(p.paid_until ? fmtDay(p.paid_until) : p.months ? `+${p.months} month${p.months > 1 ? 's' : ''}` : '')}</td><td>${esc(randStr(p.amount_cents))}</td><td>${esc(p.method || '')}</td><td>${esc(p.note || '')}</td></tr>`).join('')}</table>`
+    ${openInv === s.shop_id ? invForm(s) : ''}
+    ${hist ? `<div class="pay-history">${hist.length ? `<table class="list-table"><tr><th>Paid on</th><th>Paid until</th><th>Amount</th><th>Method</th><th>Note</th><th></th></tr>
+      ${hist.map((p, i) => `<tr><td>${esc(fmtDay(p.paid_on))}</td><td>${esc(p.paid_until ? fmtDay(p.paid_until) : p.months ? `+${p.months} month${p.months > 1 ? 's' : ''}` : '')}</td><td>${esc(randStr(p.amount_cents))}</td><td>${esc(p.method || '')}</td><td>${esc(p.note || '')}</td>
+        <td><button class="btn sm" data-act="receipt" data-id="${id}" data-i="${i}">Receipt</button></td></tr>`).join('')}</table>`
       : '<p class="small muted">No payments recorded yet.</p>'}</div>` : ''}
   </div>`;
 }
@@ -201,18 +251,131 @@ function suggestUntil(s) {
   return isoDay(d);
 }
 
+/** Amount for a payment: the monthly fee × the months it covers (+ the setup fee if ticked). */
+function suggestedAmount(s, until, setup) {
+  const today = isoDay(new Date());
+  const from = s.active_until && s.active_until > today ? s.active_until : today;
+  const months = until > from ? monthsBetween(from, until) : 1;
+  return { months, cents: feeOf(s) * months + (setup ? PRICES.setup : 0) };
+}
+
 function payForm(s) {
   const id = esc(s.shop_id);
   const today = isoDay(new Date());
+  const until = suggestUntil(s);
+  const sug = suggestedAmount(s, until, false);
   return `<form class="pay-form" data-pay-form="${id}" novalidate>
     <label class="field"><span>Paid on (can be in the past)</span><input type="date" name="paid_on" class="input" value="${today}" max="${today}"></label>
-    <label class="field"><span>Paid until (you choose)</span><input type="date" name="paid_until" class="input" value="${suggestUntil(s)}" min="${today}"></label>
-    <label class="field"><span>Amount (R)</span><input name="amount" class="input" inputmode="decimal" placeholder="e.g. 149.00"></label>
+    <label class="field"><span>Paid until (you choose)</span><input type="date" name="paid_until" class="input" value="${until}" min="${today}"></label>
+    <label class="field"><span>Amount (R)</span><input name="amount" class="input" inputmode="decimal" value="${(sug.cents / 100).toFixed(2)}"></label>
     <label class="field"><span>Method</span><select name="method"><option>EFT</option><option>Cash</option><option>Card</option><option>Other</option></select></label>
+    <label class="check pay-note"><input type="checkbox" name="setup"><span>Includes the once-off setup fee (${esc(randStr(PRICES.setup))}, with 1 hour training)</span></label>
     <label class="field pay-note"><span>Note (optional)</span><input name="note" class="input" maxlength="200" placeholder="e.g. invoice number"></label>
-    <p class="small muted pay-hint">The shop's subscription will run until the “Paid until” date (it can sell up to and including that day).</p>
+    <p class="small muted pay-hint" data-pay-hint>${payHint(s, sug)}</p>
     <div class="row gap-s"><button class="btn primary" type="submit">Save payment</button><button class="btn" type="button" data-act="pay-close">Cancel</button></div>
   </form>`;
+}
+
+const payHint = (s, sug) => `Suggested: ${sug.months} month${sug.months === 1 ? '' : 's'} × ${randStr(feeOf(s))}${sug.cents > feeOf(s) * sug.months ? ` + setup ${randStr(PRICES.setup)}` : ''} = <strong>${randStr(sug.cents)}</strong>. The shop can sell up to and including the “Paid until” date.`;
+
+/** Keep the suggested amount in step with the dates (until the amount is typed by hand). */
+function onPayFormChange(form, target) {
+  const s = shops.find(x => x.shop_id === form.dataset.payForm);
+  if (!s) return;
+  if (target.name === 'amount') { form.dataset.typed = '1'; return; }
+  const f = new FormData(form);
+  const until = String(f.get('paid_until') || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) return;
+  const sug = suggestedAmount(s, until, !!f.get('setup'));
+  if (!form.dataset.typed) form.querySelector('[name="amount"]').value = (sug.cents / 100).toFixed(2);
+  form.querySelector('[data-pay-hint]').innerHTML = payHint(s, sug);
+}
+
+/* ----- Invoices and receipts (A4, printed from this page) ----- */
+
+let openInv = null; // shop id whose "Invoice" form is open
+
+function invForm(s) {
+  const id = esc(s.shop_id);
+  const firstPaid = !Number(s.paid_total);
+  return `<form class="pay-form" data-inv-form="${id}" novalidate>
+    <label class="field"><span>Months</span><select name="months">${[1, 2, 3, 6, 12].map(m => `<option value="${m}">${m} month${m > 1 ? 's' : ''}</option>`).join('')}</select></label>
+    <label class="field"><span>Due date</span><input type="date" name="due" class="input" value="${esc(s.active_until && s.active_until > isoDay(new Date()) ? s.active_until : isoDay(new Date()))}"></label>
+    <label class="check pay-note"><input type="checkbox" name="setup" ${firstPaid ? 'checked' : ''}><span>Add the once-off setup fee (${esc(randStr(PRICES.setup))}, with 1 hour training)</span></label>
+    <p class="small muted pay-hint">${devicesBilled(s)} device${devicesBilled(s) === 1 ? '' : 's'} · ${esc(randStr(feeOf(s)))} a month. The period starts the day after the current paid-until date (or today).</p>
+    <div class="row gap-s"><button class="btn primary" type="submit">Print invoice</button><button class="btn" type="button" data-act="inv-close">Cancel</button></div>
+  </form>`;
+}
+
+function docHead(title, no, dateIso) {
+  const d = invoiceDetails();
+  return `<header class="inv-head">
+      <div><div class="inv-brand">${esc(d.name)}</div><div class="inv-small">${esc(d.contact)}</div></div>
+      <div class="inv-title"><h1>${esc(title)}</h1><div>No. <b>${esc(no)}</b></div><div>Date: ${esc(fmtDay(dateIso))}</div></div>
+    </header>`;
+}
+function docFoot(extra = '') {
+  const d = invoiceDetails();
+  return `${d.bank ? `<section class="inv-bank"><h2>Banking details (EFT)</h2><pre>${esc(d.bank)}</pre></section>` : ''}
+    ${extra}
+    <p class="inv-small">Not registered for VAT — no VAT is charged. Subscription terms: Rails POS app → Settings → Terms.</p>
+    <p class="inv-foot">${esc(d.footer)}</p>`;
+}
+function billTo(s) {
+  return `<section class="inv-to"><h2>Bill to</h2><b>${esc(s.shop_name)}</b><br>${esc(s.email || '')}</section>`;
+}
+
+function printInvoice(form) {
+  const s = shops.find(x => x.shop_id === form.dataset.invForm);
+  if (!s) return;
+  const f = new FormData(form);
+  const months = Math.max(1, Math.min(12, Number(f.get('months')) || 1));
+  const due = String(f.get('due') || isoDay(new Date()));
+  const today = isoDay(new Date());
+  const start = s.active_until && s.active_until >= today ? addDays(s.active_until, 1) : today;
+  const end = addDays(addMonths(start, months), -1);
+  const dev = devicesBilled(s);
+  const lines = [[`Rails POS subscription — ${months} month${months > 1 ? 's' : ''} (${fmtDay(start)} to ${fmtDay(end)})`, months, PRICES.monthly]];
+  if (dev > 1) lines.push([`Extra device${dev > 2 ? 's' : ''} (${dev - 1}) — ${months} month${months > 1 ? 's' : ''}`, months * (dev - 1), PRICES.device]);
+  if (f.get('setup')) lines.push(['Once-off setup: shop, staff logins and stock loaded, plus 1 hour training', 1, PRICES.setup]);
+  const total = lines.reduce((a, [, q, p]) => a + q * p, 0);
+  const no = `INV-${today.replace(/-/g, '')}-${String(s.shop_id).replace(/[^a-z0-9]/gi, '').slice(0, 4).toUpperCase()}`;
+  printDoc(`${docHead('INVOICE', no, today)}
+    ${billTo(s)}
+    <table class="inv-lines"><tr><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th></tr>
+      ${lines.map(([d, q, p]) => `<tr><td>${esc(d)}</td><td class="r">${q}</td><td class="r">${esc(randStr(p))}</td><td class="r">${esc(randStr(q * p))}</td></tr>`).join('')}
+      <tr class="tot"><td colspan="3">Total due</td><td class="r">${esc(randStr(total))}</td></tr></table>
+    <p><b>Please pay by ${esc(fmtDay(due))}.</b> Use <b>${esc(no)}</b> as the payment reference.</p>
+    ${docFoot()}`);
+}
+
+function printReceipt(id, i) {
+  const s = shops.find(x => x.shop_id === id);
+  const p = payHistory[id]?.[i];
+  if (!s || !p) return;
+  const no = p.id != null ? `RP-${String(p.id).padStart(6, '0')}` : `RP-${String(p.paid_on).replace(/-/g, '')}`;
+  printDoc(`${docHead('PAYMENT RECEIPT', no, p.paid_on)}
+    <section class="inv-to"><h2>Received from</h2><b>${esc(s.shop_name)}</b><br>${esc(s.email || '')}</section>
+    <table class="inv-lines">
+      <tr><td>Amount received</td><td class="r"><b>${esc(randStr(p.amount_cents))}</b></td></tr>
+      <tr><td>Date paid</td><td class="r">${esc(fmtDay(p.paid_on))}</td></tr>
+      <tr><td>Payment method</td><td class="r">${esc(p.method || '')}</td></tr>
+      <tr><td>For</td><td class="r">Rails POS subscription${p.paid_until ? `, paid until ${esc(fmtDay(p.paid_until))}` : ''}</td></tr>
+      ${p.note ? `<tr><td>Note</td><td class="r">${esc(p.note)}</td></tr>` : ''}
+    </table>
+    <p class="inv-paid">PAID — thank you</p>
+    ${docFoot()}`);
+}
+
+/** Put a document in the print area and open the print window (choose a printer or "Save as PDF"). */
+function printDoc(html) {
+  let area = $('#printDoc');
+  if (!area) { area = document.createElement('div'); area.id = 'printDoc'; area.className = 'print-a4 inv'; document.body.append(area); }
+  area.innerHTML = html;
+  document.body.classList.add('printing-a4');
+  const done = () => { document.body.classList.remove('printing-a4'); removeEventListener('afterprint', done); };
+  addEventListener('afterprint', done);
+  window.print();
 }
 
 async function savePayment(form) {
@@ -227,6 +390,9 @@ async function savePayment(form) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) return toast('Choose the paid-until date', true);
   if (until < paidOn) return toast('Paid until must be on or after the payment date', true);
   if (!amountTxt || !Number.isFinite(amount) || amount < 0) return toast('Enter the amount paid', true);
+  let note = String(f.get('note') || '').trim();
+  if (f.get('setup') && !/setup/i.test(note)) note = (note ? note + ' · ' : '') + 'incl. setup fee';
+  f.set('note', note);
   if (!confirm(`Record ${randStr(amount)} paid on ${fmtDay(paidOn)}, paid until ${fmtDay(until)}, for ${shopName(id)}?`)) return;
   await rpc('vendor_record_payment_until', {
     p_shop: id, p_paid_on: paidOn, p_until: until, p_amount_cents: amount,
@@ -275,8 +441,21 @@ async function act(el) {
       await loadData();
       return toast('Saved: no end date');
     }
-    if (a === 'pay-open') { openPay = openPay === id ? null : id; showDashboard(); return document.querySelector('[name="amount"]')?.focus(); }
+    if (a === 'pay-open') { openPay = openPay === id ? null : id; openInv = null; showDashboard(); return document.querySelector('[name="amount"]')?.focus(); }
     if (a === 'pay-close') { openPay = null; return showDashboard(); }
+    if (a === 'inv-open') { openInv = openInv === id ? null : id; openPay = null; return showDashboard(); }
+    if (a === 'inv-close') { openInv = null; return showDashboard(); }
+    if (a === 'receipt') return printReceipt(id, Number(el.dataset.i));
+    if (a === 'devices') {
+      const s = shops.find(x => x.shop_id === id);
+      const v = prompt(`How many devices should ${shopName(id)} be billed for?\n\n${devicesUsed(s)} used in the last 30 days. Leave empty to count automatically.\n(${randStr(PRICES.monthly)} a month for the first device, ${randStr(PRICES.device)} for each extra one.)`, s.billed_devices ? String(s.billed_devices) : '');
+      if (v === null) return;
+      const n = v.trim() === '' ? null : parseInt(v, 10);
+      if (n !== null && !(n >= 1 && n <= 50)) return toast('Enter 1 to 50, or leave it empty', true);
+      await rpc('vendor_set_devices', { p_shop: id, p_devices: n });
+      await loadData();
+      return toast(n ? `${shopName(id)}: billed for ${n} device${n > 1 ? 's' : ''}` : `${shopName(id)}: devices counted automatically`);
+    }
     if (a === 'history') {
       if (payHistory[id]) delete payHistory[id];
       else payHistory[id] = await rpc('vendor_shop_payments', { p_shop: id });
@@ -327,6 +506,12 @@ document.addEventListener('submit', async e => {
       await continueSignIn();
     }
     if (e.target.dataset.payForm) await savePayment(e.target);
+    if (e.target.dataset.invForm) printInvoice(e.target);
+    if (e.target.id === 'invDetails') {
+      const f = new FormData(e.target);
+      const d = Object.fromEntries(['name', 'contact', 'bank', 'footer'].map(k => [k, String(f.get(k) || '').trim()]));
+      try { localStorage.setItem(INVOICE_KEY, JSON.stringify(d)); toast('Saved in this browser'); } catch { toast('Could not save in this browser', true); }
+    }
   } catch (err) {
     if ($('#err')) setErr(err.message); else handleError(err);
   } finally {
@@ -338,6 +523,8 @@ document.addEventListener('click', e => {
   if (el) { e.preventDefault(); act(el); }
 });
 document.addEventListener('input', e => {
+  const pf = e.target.closest?.('[data-pay-form]');
+  if (pf) return onPayFormChange(pf, e.target);
   if (e.target.id === 'search') {
     query = e.target.value;
     const pos = e.target.selectionStart;

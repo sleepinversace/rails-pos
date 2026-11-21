@@ -13,7 +13,7 @@
    the outbox when the connection comes back.
    ========================================================================= */
 
-const CACHE_VERSION = 'rails-pos-v26';
+const CACHE_VERSION = 'rails-pos-v27';
 const APP_SHELL = [
   './',
   './index.html',
@@ -50,7 +50,7 @@ self.addEventListener('fetch', event => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // e.g. wa.me links — let the browser handle them
   if (url.pathname.endsWith('/tests.html')) return; // the test page always comes from the network
-  if (/\/admin\.(html|js|css)$/.test(url.pathname)) return; // supplier admin: never cached, always fresh
+  if (/\/(admin\.(html|js|css)|legal\.html)$/.test(url.pathname)) return; // supplier admin and terms page: never cached, always fresh
 
   event.respondWith((async () => {
     // The test run (index.html?test inside tests.html) always uses the newest files.

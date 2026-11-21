@@ -161,6 +161,9 @@ revoke all on public.vendor_payments from anon, authenticated;
 -- v22: the supplier picks the paid-until date for each payment
 alter table public.vendor_payments add column if not exists paid_until date;
 alter table public.vendor_payments alter column months drop not null;
+-- v27: billing. Devices the shop is billed for (null = count the devices used in the last 30 days).
+-- Shops can't change it (their update grant is only name, generation, next_device).
+alter table public.shops add column if not exists billed_devices int;
 
 create table if not exists public.vendor_admins (
   user_id  uuid primary key references auth.users(id) on delete cascade,
@@ -196,12 +199,13 @@ begin
     'aal', coalesce(auth.jwt() ->> 'aal', ''));
 end $$;
 
-drop function if exists public.vendor_list_shops(); -- its columns changed in v21
+drop function if exists public.vendor_list_shops(); -- its columns changed in v21 and v27
 create or replace function public.vendor_list_shops()
 returns table (shop_id uuid, shop_name text, email text, plan text, active_until date,
                created_at timestamptz, last_seen timestamptz, tills int, records bigint,
                deactivated boolean, deactivated_reason text,
-               paid_total bigint, paid_this_month bigint, last_payment date)
+               paid_total bigint, paid_this_month bigint, last_payment date,
+               devices_30d int, billed_devices int)
 language plpgsql security definer set search_path = public as $$
 begin
   perform public.vendor_check();
@@ -214,7 +218,10 @@ begin
            (select coalesce(sum(p.amount_cents), 0) from public.vendor_payments p where p.shop_id = s.id)::bigint,
            (select coalesce(sum(p.amount_cents), 0) from public.vendor_payments p
              where p.shop_id = s.id and date_trunc('month', p.paid_on) = date_trunc('month', current_date))::bigint,
-           (select max(p.paid_on) from public.vendor_payments p where p.shop_id = s.id)
+           (select max(p.paid_on) from public.vendor_payments p where p.shop_id = s.id),
+           (select count(distinct r.device) from public.records r
+             where r.shop_id = s.id and r.device is not null and r.updated_at > now() - interval '30 days')::int,
+           s.billed_devices
     from public.shops s join auth.users u on u.id = s.owner
     order by s.created_at;
 end $$;
@@ -266,13 +273,13 @@ begin
   return p_until;
 end $$;
 
-drop function if exists public.vendor_shop_payments(uuid); -- its columns changed in v22
+drop function if exists public.vendor_shop_payments(uuid); -- its columns changed in v22 and v27 (id, for receipt numbers)
 create or replace function public.vendor_shop_payments(p_shop uuid)
-returns table (paid_on date, paid_until date, amount_cents int, months int, method text, note text, created_at timestamptz)
+returns table (id bigint, paid_on date, paid_until date, amount_cents int, months int, method text, note text, created_at timestamptz)
 language plpgsql security definer set search_path = public as $$
 begin
   perform public.vendor_check();
-  return query select p.paid_on, p.paid_until, p.amount_cents, p.months, p.method, p.note, p.created_at
+  return query select p.id, p.paid_on, p.paid_until, p.amount_cents, p.months, p.method, p.note, p.created_at
     from public.vendor_payments p where p.shop_id = p_shop order by p.paid_on desc, p.id desc;
 end $$;
 
@@ -326,6 +333,22 @@ begin
   return new_date;
 end $$;
 
+-- v27: set how many devices a shop is billed for (null = automatic: devices used in the last 30 days).
+create or replace function public.vendor_set_devices(p_shop uuid, p_devices int)
+returns int
+language plpgsql security definer set search_path = public as $$
+declare cur date;
+begin
+  perform public.vendor_check();
+  if p_devices is not null and (p_devices < 1 or p_devices > 50) then raise exception 'Devices must be 1 to 50'; end if;
+  select active_until into cur from public.shops where id = p_shop for update;
+  if not found then raise exception 'Shop not found'; end if;
+  update public.shops set billed_devices = p_devices where id = p_shop;
+  insert into public.vendor_audit (admin_id, shop_id, action, old_until, new_until)
+    values (auth.uid(), p_shop, 'Devices billed: ' || coalesce(p_devices::text, 'automatic'), cur, cur);
+  return p_devices;
+end $$;
+
 create or replace function public.vendor_audit_log(p_limit int default 50)
 returns table (at timestamptz, shop_name text, action text, old_until date, new_until date)
 language plpgsql security definer set search_path = public as $$
@@ -341,9 +364,9 @@ revoke execute on function public.vendor_check(), public.vendor_whoami(), public
   public.vendor_set_until(uuid, date, text), public.vendor_add_months(uuid, int), public.vendor_audit_log(int),
   public.vendor_record_payment(uuid, date, int, int, text, text), public.vendor_shop_payments(uuid),
   public.vendor_record_payment_until(uuid, date, date, int, text, text),
-  public.vendor_set_active(uuid, boolean, text) from public, anon;
+  public.vendor_set_active(uuid, boolean, text), public.vendor_set_devices(uuid, int) from public, anon;
 grant execute on function public.vendor_whoami(), public.vendor_list_shops(),
   public.vendor_set_until(uuid, date, text), public.vendor_add_months(uuid, int), public.vendor_audit_log(int),
   public.vendor_record_payment(uuid, date, int, int, text, text), public.vendor_shop_payments(uuid),
   public.vendor_record_payment_until(uuid, date, date, int, text, text),
-  public.vendor_set_active(uuid, boolean, text) to authenticated;
+  public.vendor_set_active(uuid, boolean, text), public.vendor_set_devices(uuid, int) to authenticated;

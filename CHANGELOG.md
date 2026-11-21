@@ -17,6 +17,13 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v27 — 2026-11-21 · Billing on the admin page; terms, subscription and privacy policy
+- ✨ **Admin page billing:** each shop's **monthly fee** (R380 + R50 per extra device). Devices = those used in the last 30 days, or a number you set per shop (**Change**). "Monthly fees" total for paying shops.
+- ✨ **Record payment** suggests the amount (fee × months covered) and can include the once-off **setup fee (R1 500, with 1 hour training)**.
+- ✨ **Invoice** button per shop (1–12 months, optional setup fee, due date) and a **Receipt** for every recorded payment — A4, print or save as PDF. Your trading name, contact and **bank details** are saved in your browser only (never in the public code).
+- ✨ **Terms, subscription and privacy policy** (`legal.html`): prices, trial, late payment, cancelling, terms of use, POPIA privacy policy, operator terms for shops' customer details, and a privacy notice shops can put up. Linked from the setup screen, shop-account sign-up and Settings → Subscription.
+- 🗄️ SQL: `shops.billed_devices`, `vendor_set_devices`, `vendor_list_shops` returns devices used in the last 30 days, `vendor_shop_payments` returns the payment id (receipt numbers). Re-run `cloud/supabase-setup.sql`.
+
 ## v26 — 2026-11-21 · "Email me my data"; supplier number off customer slips
 - ✨ **Settings → Your data → Email me my data:** one zip file with the whole shop as Excel files — `stock.csv` (in the same layout Stock → Import reads), `sales.csv`, `clients.csv`, `laybys.csv`, `layby-payments.csv`, `cashups.csv` — plus `backup.json` (full backup) and a "READ ME". On phones, tablets and Windows the share sheet opens (choose Mail / Gmail / Outlook); otherwise the file is saved and the email app opens to attach it. Counts as a backup.
 - 🔧 Slips and A4 reports now just say **"Powered by Rails POS"**: the supplier's WhatsApp number was removed so shop customers don't call it. (The Renew / Subscribe buttons for shop owners still use it.)

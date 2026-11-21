@@ -824,6 +824,10 @@ test('Email me my data: one zip with Excel files and a full backup; the stock li
   click('[data-action="email-data"]'); await tick(400);
   delete w.navigator.canShare; delete w.navigator.share;
   ok(shared && shared.files[0].name.endsWith('.zip') && shared.files[0].size > 1000, 'zip handed to the share sheet');
+  // Terms, prices and privacy policy: linked from Settings, and the page has the agreed prices
+  ok($('#settingsBody a[href="legal.html"]'), 'Settings links to the terms page');
+  const legal = await (await fetch('legal.html', { cache: 'no-store' })).text();
+  ok(['R380 per month', 'R50 per month', 'R1 500', 'POPIA', 'Information Regulator', 'operator'].every(x => legal.includes(x)), 'terms page has prices, POPIA and operator terms');
 });
 
 test('Only one tab at a time; the other can take over', async () => {
@@ -1016,12 +1020,18 @@ function fakeCloud() {
       const pays = id => db.payments.filter(p => p.shop_id === id);
       if (fn === 'vendor_list_shops') return json(db.shops.map(s => ({ shop_id: s.id, shop_name: s.name, email: owner(s), plan: s.plan || 'trial', active_until: s.active_until,
         created_at: new Date().toISOString(), last_seen: null, tills: s.next_device - 1, records: 0, deactivated: !!s.deactivated, deactivated_reason: s.deactivated_reason || null,
-        paid_total: pays(s.id).reduce((a, p) => a + p.amount_cents, 0), paid_this_month: 0, last_payment: pays(s.id).map(p => p.paid_on).sort().pop() || null })));
+        paid_total: pays(s.id).reduce((a, p) => a + p.amount_cents, 0), paid_this_month: 0, last_payment: pays(s.id).map(p => p.paid_on).sort().pop() || null,
+        devices_30d: s.devices_30d ?? 1, billed_devices: s.billed_devices ?? null })));
       if (fn === 'vendor_audit_log') return json(db.audit.slice().reverse());
       if (fn === 'vendor_shop_payments') return json(pays(body.p_shop).slice().reverse());
       const shop = db.shops.find(s => s.id === body.p_shop);
       if (!shop) return json({ message: 'Shop not found' }, 400);
       const old = shop.active_until;
+      if (fn === 'vendor_set_devices') {
+        shop.billed_devices = body.p_devices;
+        db.audit.push({ at: new Date().toISOString(), shop_name: shop.name, action: 'Devices billed: ' + (body.p_devices ?? 'automatic'), old_until: old, new_until: old });
+        return json(body.p_devices);
+      }
       if (fn === 'vendor_set_active') {
         shop.deactivated = !body.p_active; shop.deactivated_reason = body.p_active ? null : (body.p_reason || null);
         db.audit.push({ at: new Date().toISOString(), shop_name: shop.name, action: body.p_active ? 'Reactivated' : 'Deactivated', old_until: old, new_until: old });
@@ -1031,7 +1041,7 @@ function fakeCloud() {
         if (body.p_paid_on > new Date().toISOString().slice(0, 10)) return json({ message: 'The payment date can\'t be in the future' }, 400);
         if (body.p_until < body.p_paid_on) return json({ message: 'Paid until must be on or after the payment date' }, 400);
         shop.active_until = body.p_until; shop.plan = 'paid';
-        db.payments.push({ shop_id: shop.id, paid_on: body.p_paid_on, paid_until: body.p_until, amount_cents: body.p_amount_cents, months: null, method: body.p_method, note: body.p_note });
+        db.payments.push({ id: db.payments.length + 1, shop_id: shop.id, paid_on: body.p_paid_on, paid_until: body.p_until, amount_cents: body.p_amount_cents, months: null, method: body.p_method, note: body.p_note });
         db.audit.push({ at: new Date().toISOString(), shop_name: shop.name, action: `Payment on ${body.p_paid_on}`, old_until: old, new_until: shop.active_until });
         return json(shop.active_until);
       }
@@ -1232,7 +1242,7 @@ test('Supplier admin page: shop logins refused; admin signs in with password; re
   cloud.users['owner@example.test'] = 'shop-pass-1';
   cloud.users['boss@example.test'] = 'admin-pass-1';
   cloud.admins.add('user-boss@example.test');
-  cloud.shops.push({ id: 'shop-x', owner: 'user-owner@example.test', name: '<img src=x onerror=alert(1)> Bridal', generation: 1, next_device: 3, active_until: '2030-01-15', plan: 'trial' });
+  cloud.shops.push({ id: 'shop-x', owner: 'user-owner@example.test', name: '<img src=x onerror=alert(1)> Bridal', generation: 1, next_device: 3, active_until: '2030-01-15', plan: 'trial', devices_30d: 2 });
   const B = document.getElementById('app2');
   await blank(B);
   sessionStorage.removeItem('rails-pos-admin-session');
@@ -1257,6 +1267,12 @@ test('Supplier admin page: shop logins refused; admin signs in with password; re
   ok(!$('#shopList img') && $('#shopList').innerHTML.includes('&lt;img'), 'shop name shown as text, not run as HTML');
   ok(!$('[data-act="add"]'), 'no "+1 month" button any more');
   const origConfirm = w.confirm; w.confirm = () => true;
+  // Billing: R380 + R50 per extra device (2 devices used in the last 30 days)
+  eq($('[data-k="fee-shop-x"]').textContent, 'R430.00', 'monthly fee from the devices used');
+  const origPrompt0 = w.prompt; w.prompt = () => '3';
+  click('[data-act="devices"][data-id="shop-x"]'); await tick(400);
+  w.prompt = origPrompt0;
+  eq([cloud.shops[0].billed_devices, $('[data-k="fee-shop-x"]').textContent], [3, 'R480.00'], 'devices set by the supplier');
   click('[data-act="noend"][data-id="shop-x"]'); await tick(400);
   eq(cloud.shops[0].active_until, null, 'no end date');
   ok($('.audit').textContent.includes('no end date'), 'change logged');
@@ -1265,6 +1281,11 @@ test('Supplier admin page: shop logins refused; admin signs in with password; re
   click('[data-act="pay-open"][data-id="shop-x"]'); await tick(150);
   const form = $('[data-pay-form="shop-x"]');
   ok(form.querySelector('[name="paid_until"]').value, 'a paid-until date is suggested');
+  eq(form.querySelector('[name="amount"]').value, '480.00', 'amount suggested from the fee');
+  const setupBox = form.querySelector('[name="setup"]');
+  setupBox.checked = true; setupBox.dispatchEvent(new w.Event('input', { bubbles: true }));
+  eq(form.querySelector('[name="amount"]').value, '1980.00', 'setup fee added');
+  setupBox.checked = false; setupBox.dispatchEvent(new w.Event('input', { bubbles: true }));
   form.querySelector('[name="paid_on"]').value = '2026-10-05';
   form.querySelector('[name="paid_until"]').value = '2027-02-28';
   form.querySelector('[name="amount"]').value = '447';
@@ -1274,6 +1295,19 @@ test('Supplier admin page: shop logins refused; admin signs in with password; re
   ok($('#shopList').textContent.includes('R447.00'), 'payment total shown');
   click('[data-act="history"][data-id="shop-x"]'); await tick(300);
   ok($('.pay-history').textContent.includes('Inv 0001') && $('.pay-history').textContent.includes('28 Feb 2027'), 'payment history lists paid-on, paid-until and note');
+  // Your details, a payment receipt and an invoice (printed from the page)
+  const origPrint = w.print; w.print = () => {};
+  $('#invDetails [name="bank"]').value = 'Test Bank · Acc 123';
+  $('#invDetails').requestSubmit(); await tick(150);
+  click('[data-act="receipt"][data-id="shop-x"][data-i="0"]'); await tick(100);
+  const doc = () => $('#printDoc').textContent;
+  ok(doc().includes('PAYMENT RECEIPT') && doc().includes('RP-000001') && doc().includes('R447.00') && doc().includes('Test Bank'), 'receipt printed: ' + doc().slice(0, 80));
+  click('[data-act="inv-open"][data-id="shop-x"]'); await tick(150);
+  $('[data-inv-form="shop-x"] [name="months"]').value = '3';
+  $('[data-inv-form="shop-x"]').requestSubmit(); await tick(150);
+  ok(doc().includes('INVOICE') && doc().includes('R1 440.00') && !$('#printDoc img'), 'invoice: 3 months x R380 + 2 extra devices x R50 = R1 440: ' + doc().slice(0, 200));
+  w.print = origPrint;
+  click('[data-act="inv-close"]'); await tick(100);
   click('[data-act="pay-open"][data-id="shop-x"]'); await tick(150);
   $('[data-pay-form="shop-x"] [name="paid_on"]').value = '2026-11-01';
   $('[data-pay-form="shop-x"] [name="paid_until"]').value = '2026-10-01';
