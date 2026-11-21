@@ -1391,7 +1391,12 @@ function receiptText(sale) {
 }
 
 /** Lines → text; a lone LINE becomes a full-width dashed rule. */
-const finish = out => out.join('\n').split('\n').map(l => (l === LINE ? '-'.repeat(W) : l)).join('\n');
+/** "Powered by Rails POS" at the foot of every slip, so customers and other shops see who made the till. */
+const brandLines = () => {
+  const one = `Powered by Rails POS · ${SUPPLIER.phone}`;
+  return ['', ...(one.length <= W ? [one] : ['Powered by Rails POS', `WhatsApp ${SUPPLIER.phone}`]).map(center)];
+};
+const finish = out => [...out, ...brandLines()].join('\n').split('\n').map(l => (l === LINE ? '-'.repeat(W) : l)).join('\n');
 
 /** Credit note (VAT vendor) or refund slip for one return. */
 function creditNoteText(sale, ret) {
@@ -2418,7 +2423,7 @@ function a4Header(title, subtitle) {
     <div class="a4-title"><h1>${esc(title)}</h1><div>${esc(subtitle)}</div></div>
   </header>`;
 }
-const a4Foot = () => `<footer class="a4-foot">Printed ${esc(fmtDT(new Date().toISOString()))}${ui.user ? ` by ${esc(ui.user.name)}` : ''} · Rails POS</footer>`;
+const a4Foot = () => `<footer class="a4-foot">Printed ${esc(fmtDT(new Date().toISOString()))}${ui.user ? ` by ${esc(ui.user.name)}` : ''}<span class="a4-brand-foot">Powered by <b>Rails POS</b> · till software for clothing shops · WhatsApp ${esc(SUPPLIER.phone)}</span></footer>`;
 const m4 = (cents, cls = '') => `<span class="m ${cents < 0 || cls === 'neg' ? 'neg' : ''}">${money(cents)}</span>`;
 
 function a4Summary(range) {
@@ -3787,7 +3792,7 @@ function cloudCardHtml() {
 
 const TRIAL_DAYS = 14;
 const GRACE_DAYS = 7;
-const SUPPLIER = { name: 'Rails POS', whatsapp: '27733142884' }; // supplier's WhatsApp Business (international format) for "Renew"
+const SUPPLIER = { name: 'Rails POS', whatsapp: '27733142884', phone: '073 314 2884' }; // supplier's WhatsApp Business (international format) for "Renew"
 
 function licence() {
   const today = startOfDay();

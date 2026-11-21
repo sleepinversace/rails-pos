@@ -17,6 +17,10 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v25 — 2026-11-21 · "Powered by Rails POS" on slips and A4 reports
+- ✨ Every receipt, lay-by slip, credit note, statement and Z-report ends with **"Powered by Rails POS · 073 314 2884"** (also on WhatsApp / email copies).
+- ✨ Every A4 report and statement has **"Powered by Rails POS · till software for clothing shops · WhatsApp 073 314 2884"** in its footer.
+
 ## v24 — 2026-11-21 · Import stock, lay-by reminders, reorder list, staff commission
 - ✨ **Import stock from Excel or CSV** (Stock → Import): choose an `.xlsx` or `.csv` file, or copy rows in Excel and paste them. One row per size/colour; only Name and Price are needed (Category, Size, Colour, Cost, Stock, SKU, Barcode, Description optional; headings matched loosely, e.g. "Qty", "Color", "Selling price"). Preview before importing, with problems listed by row. Products with the same name get the new sizes/colours; existing ones are skipped, or updated if ticked. Download a template. Opening stock is recorded as "Imported".
 - ✨ **Lay-by reminders on WhatsApp:** Clients → **To remind** lists lay-bys that are overdue, due within 14 days, or have had no payment for 30 days (and weren't reminded in the last week). One tap opens WhatsApp with a friendly message; the reminder is recorded on the lay-by. "Remind on WhatsApp" is also on each open lay-by. The wording is in Settings → Lay-bys.
