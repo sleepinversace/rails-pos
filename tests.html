@@ -807,6 +807,25 @@ test('Reports: reorder list, staff sales and commission; lay-by WhatsApp reminde
   }
 });
 
+test('Email me my data: one zip with Excel files and a full backup; the stock list imports back', async () => {
+  eq(w.crc32(new TextEncoder().encode('123456789')), 0xCBF43926, 'CRC-32 check value');
+  const exp = await w.buildDataExport();
+  ok(/^rails-pos-data-[a-z0-9-]+-\d{4}-\d\d-\d\d\.zip$/.test(exp.name), 'file name ' + exp.name);
+  const got = await w.unzip(await exp.blob.arrayBuffer(), () => true);
+  eq(Object.keys(got).sort(), ['READ ME.txt', 'backup.json', 'cashups.csv', 'clients.csv', 'layby-payments.csv', 'laybys.csv', 'sales.csv', 'stock.csv'], 'files in the zip');
+  eq(JSON.parse(got['backup.json']).products.length, P.state.products.length, 'full backup inside');
+  const back = w.rowsToItems(w.parseDelimited(got['stock.csv']));
+  eq(back.items.length, P.state.products.reduce((a, p) => a + p.variants.length, 0), 'stock.csv reads back with Stock → Import');
+  ok(got['clients.csv'].split('\r\n').length === P.state.customers.length + 1, 'one line per client');
+  // The button uses the share sheet (Mail, Gmail, Outlook…) where there is one
+  let shared = null;
+  w.navigator.canShare = () => true; w.navigator.share = async d => { shared = d; };
+  await nav('settings');
+  click('[data-action="email-data"]'); await tick(400);
+  delete w.navigator.canShare; delete w.navigator.share;
+  ok(shared && shared.files[0].name.endsWith('.zip') && shared.files[0].size > 1000, 'zip handed to the share sheet');
+});
+
 test('Only one tab at a time; the other can take over', async () => {
   const main = document.getElementById('app'), second = document.getElementById('app2');
   await loadApp(second);

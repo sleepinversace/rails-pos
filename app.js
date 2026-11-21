@@ -1393,8 +1393,8 @@ function receiptText(sale) {
 /** Lines → text; a lone LINE becomes a full-width dashed rule. */
 /** "Powered by Rails POS" at the foot of every slip, so customers and other shops see who made the till. */
 const brandLines = () => {
-  const one = `Powered by Rails POS · ${SUPPLIER.phone}`;
-  return ['', ...(one.length <= W ? [one] : ['Powered by Rails POS', `WhatsApp ${SUPPLIER.phone}`]).map(center)];
+  // No supplier phone number here: shop customers would call it instead of the shop.
+  return ['', center('Powered by Rails POS')];
 };
 const finish = out => [...out, ...brandLines()].join('\n').split('\n').map(l => (l === LINE ? '-'.repeat(W) : l)).join('\n');
 
@@ -2423,7 +2423,7 @@ function a4Header(title, subtitle) {
     <div class="a4-title"><h1>${esc(title)}</h1><div>${esc(subtitle)}</div></div>
   </header>`;
 }
-const a4Foot = () => `<footer class="a4-foot">Printed ${esc(fmtDT(new Date().toISOString()))}${ui.user ? ` by ${esc(ui.user.name)}` : ''}<span class="a4-brand-foot">Powered by <b>Rails POS</b> · till software for clothing shops · WhatsApp ${esc(SUPPLIER.phone)}</span></footer>`;
+const a4Foot = () => `<footer class="a4-foot">Printed ${esc(fmtDT(new Date().toISOString()))}${ui.user ? ` by ${esc(ui.user.name)}` : ''}<span class="a4-brand-foot">Powered by <b>Rails POS</b> · till software for clothing shops</span></footer>`;
 const m4 = (cents, cls = '') => `<span class="m ${cents < 0 || cls === 'neg' ? 'neg' : ''}">${money(cents)}</span>`;
 
 function a4Summary(range) {
@@ -2647,6 +2647,11 @@ async function renderSettings() {
       </div>
     </div>
     ${cloudCardHtml()}
+    <div class="section-title">Your data</div>
+    <div class="card">
+      <p style="margin-top:0">Everything in your shop — stock, sales, clients, lay-bys and cash-ups as Excel files, plus a full backup — in one zip file. It's your data: keep a copy, or take it with you any time.</p>
+      <button class="btn primary" data-action="email-data">Email me my data</button>
+    </div>
     <div class="section-title">Backup file</div>
     <div class="card">
       <p style="margin-top:0">${cloudOn()
@@ -2798,13 +2803,22 @@ async function restoreFromText(text) {
   await cloudResetAfter();
 }
 
+/** A CSV cell. Text that could be read as a spreadsheet formula is prefixed (CSV injection). */
+const csvCell = v => {
+  let s = String(v ?? '');
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+/** Rows → CSV text that Excel opens correctly (BOM for UTF-8, CRLF). Numbers are left as they are. */
+const toCsv = (head, rows) => '﻿' + [head, ...rows].map(r => r.map(v => (typeof v === 'number' ? String(v) : csvCell(v))).join(',')).join('\r\n');
+
 function exportCsv() {
-  // Prefix text that could be read as a spreadsheet formula (CSV injection).
-  const cell = v => {
-    let s = String(v ?? '');
-    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
-    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
+  downloadFile(`rails-pos-sales-${stamp()}.csv`, salesCsv(), 'text/csv');
+  toast(`Exported ${state.sales.length} sales`);
+}
+
+function salesCsv() {
+  const cell = csvCell;
   const num = centsToPlain;
   const head = ['type', 'doc_no', 'invoice_no', 'date', 'time', 'payment', 'sku', 'product', 'size', 'colour', 'qty',
     'unit_price', 'line_total', 'unit_cost', 'doc_total', 'doc_vat', 'vat_rate', 'customer'];
@@ -2822,8 +2836,110 @@ function exportCsv() {
         num(it.unitPrice), num(-ri.amount), num(it.unitCost), num(-r.amount), num(-r.vat), s.vatRate, cell(s.customer?.name)].join(','));
     }
   }
-  downloadFile(`rails-pos-sales-${stamp()}.csv`, '﻿' + rows.join('\r\n'), 'text/csv');
-  toast(`Exported ${state.sales.length} sales`);
+  return '﻿' + rows.join('\r\n');
+}
+
+/* ----- "Email me my data": everything in one zip file -----
+   Excel-friendly CSV files (stock — in the same layout Stock → Import reads —
+   sales, clients, lay-bys and payments, cash-ups) plus the full backup file,
+   so a shop always has its own data, even if it stops using Rails POS.
+   On phones, tablets and Windows the share sheet opens (choose Mail / Gmail /
+   Outlook / WhatsApp); otherwise the zip downloads and the email app opens. */
+
+async function buildDataExport() {
+  const n = centsToPlain;
+  const files = {};
+  files['stock.csv'] = toCsv(['Name', 'Category', 'Size', 'Colour', 'Price', 'Cost', 'Stock', 'SKU', 'Barcode', 'Description'],
+    state.products.flatMap(p => p.variants.map(v => [p.name, p.category, v.size, v.colour, n(priceOf(p, v)), n(costOf(p, v)), v.stock, v.sku, v.barcode || '', p.description || ''])));
+  files['sales.csv'] = salesCsv();
+  files['clients.csv'] = toCsv(['Name', 'Phone', 'Email', 'Address', 'Notes', 'Store credit', 'Open lay-bys', 'Owed'],
+    state.customers.map(c => { const open = customerLaybys(c.id).filter(l => l.status === 'open');
+      return [c.name, c.phone || '', c.email || '', c.address || '', c.notes || '', n(c.credit || 0), open.length, n(Math.max(0, sum(open, lbBalance)))]; }));
+  files['laybys.csv'] = toCsv(['Lay-by', 'Client', 'Phone', 'Started', 'Pay by', 'Status', 'Items', 'Total', 'Paid', 'Balance'],
+    state.laybys.map(l => [lbNo(l), l.customer.name, l.customer.phone || '', fmtDate(l.date), l.dueDate, LB_LABEL[lbState(l)],
+      l.items.map(it => `${it.qty}x ${it.name} (${it.size}/${it.colour})`).join('; '), n(l.total), n(lbPaid(l)), n(l.status === 'open' ? Math.max(0, lbBalance(l)) : 0)]));
+  files['layby-payments.csv'] = toCsv(['Lay-by', 'Client', 'Date', 'Time', 'Method', 'Amount', 'Taken by'],
+    state.laybys.flatMap(l => l.payments.map(p => [lbNo(l), l.customer.name, fmtDate(p.date), fmtTime(p.date), payLabel(p.method), n(p.amount), p.cashier || ''])));
+  files['cashups.csv'] = toCsv(['Z-report', 'From', 'To', 'Sales', 'Net takings', 'Expected cash', 'Counted cash', 'Over / short'],
+    state.cashups.map(z => [`Z${zNo(z)}`, z.from ? fmtDT(z.from) : '', fmtDT(z.to), z.salesCount, n(z.net), n(z.expected), n(z.counted), n(z.diff)]));
+  files['backup.json'] = await backupJson();
+  files['READ ME.txt'] = [
+    `${state.settings.storeName} — Rails POS data, ${fmtDT(new Date().toISOString())}`, '',
+    'stock.csv           Products, sizes/colours, prices, cost and stock (opens in Excel; Rails POS can import it again)',
+    'sales.csv           Every sale and refund, one line per item',
+    'clients.csv         Clients with contact details, store credit and what they owe',
+    'laybys.csv          Every lay-by with items, total, paid and balance',
+    'layby-payments.csv  Every lay-by payment',
+    'cashups.csv         End-of-day cash-ups (Z-reports)',
+    'backup.json         Everything, for Settings -> Restore from file in Rails POS', '',
+    'This is your data. Keep a copy somewhere safe.',
+  ].join('\r\n');
+  const slug = String(state.settings.storeName || 'shop').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'shop';
+  const name = `rails-pos-data-${slug}-${stamp()}.zip`;
+  return { name, blob: makeZip(files), files };
+}
+
+async function emailMyData() {
+  let exp;
+  try { exp = await buildDataExport(); } catch (e) { return toast(`Couldn't prepare the export: ${e.message}`, true); }
+  const file = new File([exp.blob], exp.name, { type: 'application/zip' });
+  const text = `${state.settings.storeName}: all shop data from Rails POS (stock, sales, clients, lay-bys, cash-ups and a full backup).`;
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: `Rails POS data · ${state.settings.storeName}`, text });
+      await markBackedUp();
+      return toast('Data shared — choose your email app to send it to yourself');
+    } catch (e) {
+      if (e?.name === 'AbortError') return; // cancelled
+    }
+  }
+  // No share sheet: save the file, then open the email app addressed to the shop.
+  const url = URL.createObjectURL(exp.blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = exp.name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  await markBackedUp();
+  const to = String(state.settings.storeEmail || '').trim();
+  const body = `${text}\n\nThe file "${exp.name}" was saved to your Downloads folder. Attach it to this email (paperclip), then send.`;
+  setTimeout(() => { location.href = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(`Rails POS data · ${state.settings.storeName} · ${stamp()}`)}&body=${encodeURIComponent(body)}`; }, 600);
+  toast(`Saved ${exp.name} — attach it to the email that opens`);
+}
+
+/* Minimal zip writer (files stored, not compressed; CRC-32 checked by every unzip tool). */
+const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(bytes) { let c = 0xFFFFFFFF; for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+
+function makeZip(files) {
+  const enc = new TextEncoder();
+  const now = new Date();
+  const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+  const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+  const parts = [], central = [];
+  let offset = 0;
+  for (const [name, content] of Object.entries(files)) {
+    const data = typeof content === 'string' ? enc.encode(content) : content;
+    const nm = enc.encode(name);
+    const crc = crc32(data);
+    const local = new DataView(new ArrayBuffer(30));
+    local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(6, 0x0800, true); // UTF-8 names
+    local.setUint16(10, dosTime, true); local.setUint16(12, dosDate, true);
+    local.setUint32(14, crc, true); local.setUint32(18, data.length, true); local.setUint32(22, data.length, true); local.setUint16(26, nm.length, true);
+    const cd = new DataView(new ArrayBuffer(46));
+    cd.setUint32(0, 0x02014b50, true); cd.setUint16(4, 20, true); cd.setUint16(6, 20, true); cd.setUint16(8, 0x0800, true);
+    cd.setUint16(12, dosTime, true); cd.setUint16(14, dosDate, true);
+    cd.setUint32(16, crc, true); cd.setUint32(20, data.length, true); cd.setUint32(24, data.length, true); cd.setUint16(28, nm.length, true);
+    cd.setUint32(42, offset, true);
+    parts.push(local.buffer, nm, data);
+    central.push(cd.buffer, nm);
+    offset += 30 + nm.length + data.length;
+  }
+  const size = central.reduce((a, b) => a + b.byteLength, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  const count = Object.keys(files).length;
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, count, true); end.setUint16(10, count, true);
+  end.setUint32(12, size, true); end.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, end.buffer], { type: 'application/zip' });
 }
 
 async function startFresh() {
@@ -5706,6 +5822,7 @@ const actions = {
   'backup-download': () => backupDownload(),
   'backup-copy': () => backupCopy(),
   'backup-share': () => backupShare(),
+  'email-data': () => emailMyData(),
   'restore-paste': () => restoreFromText($('#restoreText').value),
   'export-csv': () => exportCsv(),
   'start-fresh': () => startFresh(),
@@ -5775,7 +5892,7 @@ const ACTION_PERMS = {
   'add-variant': 'stock', 'edit-variant': 'stock', 'variant-save': 'stock', 'delete-variant': 'stock', 'delete-product': 'stock',
   'stock-d': 'stock', receive: 'stock', 'receive-save': 'stock', history: 'stock',
   range: 'reports', cashup: 'reports', 'cashup-save': 'reports', 'print-menu': 'reports', 'print-a4': 'reports',
-  'backup-download': 'settings', 'backup-copy': 'settings', 'backup-share': 'settings', 'restore-paste': 'settings',
+  'backup-download': 'settings', 'backup-copy': 'settings', 'backup-share': 'settings', 'restore-paste': 'settings', 'email-data': 'settings',
   'export-csv': 'settings', 'start-fresh': 'settings', 'load-demo': 'settings',
   'user-add': 'admin', 'user-edit': 'admin', 'user-save': 'admin', 'user-delete': 'admin',
   'cloud-signin': 'settings', 'cloud-signup': 'settings', 'cloud-disconnect': 'settings', 'cloud-create': 'settings', 'cloud-join': 'settings',

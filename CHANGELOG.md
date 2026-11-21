@@ -17,6 +17,10 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v26 — 2026-11-21 · "Email me my data"; supplier number off customer slips
+- ✨ **Settings → Your data → Email me my data:** one zip file with the whole shop as Excel files — `stock.csv` (in the same layout Stock → Import reads), `sales.csv`, `clients.csv`, `laybys.csv`, `layby-payments.csv`, `cashups.csv` — plus `backup.json` (full backup) and a "READ ME". On phones, tablets and Windows the share sheet opens (choose Mail / Gmail / Outlook); otherwise the file is saved and the email app opens to attach it. Counts as a backup.
+- 🔧 Slips and A4 reports now just say **"Powered by Rails POS"**: the supplier's WhatsApp number was removed so shop customers don't call it. (The Renew / Subscribe buttons for shop owners still use it.)
+
 ## v25 — 2026-11-21 · "Powered by Rails POS" on slips and A4 reports
 - ✨ Every receipt, lay-by slip, credit note, statement and Z-report ends with **"Powered by Rails POS · 073 314 2884"** (also on WhatsApp / email copies).
 - ✨ Every A4 report and statement has **"Powered by Rails POS · till software for clothing shops · WhatsApp 073 314 2884"** in its footer.
