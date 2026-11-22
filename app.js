@@ -398,7 +398,7 @@ function loadDemoData() {
   let seed = 7;
   const rand = () => (seed = (seed * 9301 + 49297) % 233280) / 233280; // deterministic
 
-  state.settings = { ...DEFAULT_SETTINGS, storeName: 'Demo Boutique', storeAddress: '12 Long Street, Cape Town', vatNumber: '4000000000' };
+  state.settings = { ...DEFAULT_SETTINGS, storeName: 'Demo Boutique', storeAddress: '1, road name, city', vatNumber: '4000000000' };
   state.products = [];
   state.cashups = [];
   state.expenses = [];
@@ -1913,12 +1913,23 @@ function showDoc(ref, { justSold = false, fresh = justSold } = {}) {
   if (fresh && state.settings.autoPrint && !TEST_MODE) setTimeout(() => printDoc(ref), 150);
   const s = doc.sale;
   const canReturn = doc.kind === 'sale' && s.status !== 'returned' && can('returns');
+  const paper = `<div class="doc-paper">${logoHtml()}<pre class="receipt w${paperChars()}" tabindex="0" aria-label="${esc(doc.title)}">${slipHtml(doc.text)}</pre></div>`;
+  // Straight after a sale: a big tick, the change due in large numbers and
+  // the next steps; the slip itself is folded away under "Show receipt".
+  const hero = justSold ? `<div class="sold-hero">
+      <div class="sold-tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5 10 17.5 19 7"/></svg></div>
+      <div class="sold-title">Sale complete</div>
+      <div class="sold-sub"><span class="money">${money(s.total)}</span> · ${esc(PAY_LABEL[s.payment] || s.payment)}</div>
+      ${s.payment === 'cash' ? (s.change > 0
+        ? `<div class="sold-change"><span>Change due</span><strong class="money">${money(s.change)}</strong></div>`
+        : '<div class="sold-nochange">Exact cash · no change</div>') : ''}
+      ${s.creditChange ? `<div class="sold-change"><span>Pay out unused credit in cash</span><strong class="money">${money(s.creditChange)}</strong></div>` : ''}
+    </div>
+    <details class="sold-receipt"><summary>Show receipt</summary>${paper}</details>` : paper;
   openModal({
-    title: (justSold ? 'Sale complete · ' : '') + doc.title,
+    title: justSold ? `Invoice #${saleNo(s)}` : doc.title,
     body: `
-      ${justSold && s.payment === 'cash' ? `<div class="banner info"><p>Change due: <strong class="money">${money(s.change)}</strong></p></div>` : ''}
-      ${justSold && s.creditChange ? `<div class="banner info"><p>Pay out unused credit in cash: <strong class="money">${money(s.creditChange)}</strong></p></div>` : ''}
-      <div class="doc-paper">${logoHtml()}<pre class="receipt w${paperChars()}" tabindex="0" aria-label="${esc(doc.title)}">${slipHtml(doc.text)}</pre></div>
+      ${hero}
       ${doc.kind === 'ret' ? `<p class="small"><button class="link" data-action="open-doc" data-doc="sale:${esc(s.id)}">View original invoice #${saleNo(s)}</button></p>` : ''}
       ${doc.kind === 'sale' && s.returns.length ? `<p class="small">${s.returns.map(r => `<button class="link" data-action="open-doc" data-doc="ret:${esc(s.id)}:${esc(r.id)}">Credit note ${retNo(r)}</button>`).join(' · ')}</p>` : ''}
       ${doc.kind !== 'z' ? `<div class="grid-2" style="margin-top:12px">
@@ -1927,7 +1938,13 @@ function showDoc(ref, { justSold = false, fresh = justSold } = {}) {
         <label class="field"><span>Customer email (optional)</span>
           <input id="emailTo" class="input" type="email" inputmode="email" placeholder="name@example.com" value="${esc(doc.email || '')}"></label>
       </div>` : ''}`,
-    foot: `
+    foot: justSold ? `
+      <button class="btn" data-action="doc-print" data-doc="${esc(ref)}">Print</button>
+      <button class="btn" data-action="doc-wa" data-doc="${esc(ref)}">WhatsApp</button>
+      <button class="btn" data-action="doc-email" data-doc="${esc(ref)}">Email</button>
+      <button class="btn" data-action="doc-copy" data-doc="${esc(ref)}">Copy</button>
+      ${doc.customerId && can('customers') ? `<button class="btn" data-action="open-customer" data-id="${esc(doc.customerId)}">Customer</button>` : ''}
+      <button class="btn primary sold-new" data-action="close-modal" autofocus>New sale</button>` : `
       <button class="btn primary" data-action="doc-wa" data-doc="${esc(ref)}">WhatsApp</button>
       ${doc.kind !== 'z' ? `<button class="btn" data-action="doc-email" data-doc="${esc(ref)}">Email</button>` : ''}
       <button class="btn" data-action="doc-copy" data-doc="${esc(ref)}">Copy</button>
@@ -2317,9 +2334,9 @@ function renderTotals(t = cartTotals()) {
   const paused = !sellingAllowed();
   const blocked = paused || !t.lines.length || (t.cash && (!Number.isFinite(t.tendered) || t.change < 0));
   $('#chargeBtn').disabled = blocked;
-  $('#chargeBtn').textContent = paused ? 'Selling paused (see the message above)' : !t.lines.length ? 'Charge'
+  $('#chargeBtn').innerHTML = paused ? 'Selling paused (see the message above)' : !t.lines.length ? 'Add items to charge'
     : t.due === 0 ? 'Complete exchange'
-    : `Charge ${money(t.due)} · ${PAY_LABEL[ui.cart.payment]}`;
+    : `Charge <b class="charge-amt">${money(t.due)}</b> <span class="charge-pay">· ${PAY_LABEL[ui.cart.payment]}</span>`;
   // Lay-by: put the cart aside for a client instead of charging now
   const lbBtn = $('#laybyBtn');
   if (lbBtn) {
@@ -4355,19 +4372,32 @@ function setCloudStatus(status, message = '') {
   if ((was === 'signedout') !== (status === 'signedout') && ui.appActive) renderBanners();
 }
 
+/** "just now", "5 min ago", "2 h ago", "3 days ago". */
+function agoText(iso) {
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000));
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const h = Math.round(mins / 60);
+  if (h < 24) return `${h} h ago`;
+  const d = Math.round(h / 24);
+  return `${d} day${d === 1 ? '' : 's'} ago`;
+}
+
 function renderCloudStatus() {
   const el = $('#netStatus');
   if (!el) return;
   const online = navigator.onLine;
   const p = Cloud.pending;
   let text, cls = '', title;
+  let more = ''; // extra words shown only where the header has room
   if (!cloudOn()) {
-    text = online ? 'Online' : 'Offline';
-    cls = online ? '' : 'offline';
+    // Without cloud sync nothing is wrong: the till keeps its data on this device.
+    text = online ? 'Saved' : 'Offline';
+    more = online ? ' on this device' : ' · still working';
+    cls = online ? 'local' : 'offline';
     title = online
-      ? (cloudReady() ? 'Not synced: this device keeps its own data. Turn on cloud sync in Settings.' : 'Connected to the internet')
+      ? (cloudReady() ? 'Saved on this device only. Turn on cloud sync in Settings to share with other devices and keep a copy online.' : 'Saved on this device')
       : 'No internet — everything still works and is saved on this device';
-    if (cloudReady()) { text = 'Not synced'; cls = 'offline'; }
   } else if (Cloud.status === 'syncing') {
     text = 'Syncing…'; title = 'Swapping changes with your other devices';
   } else if (!online || Cloud.status === 'offline') {
@@ -4379,9 +4409,11 @@ function renderCloudStatus() {
     text = 'Sync problem'; cls = 'err'; title = Cloud.message || 'Could not sync';
   } else {
     text = p ? 'Saving…' : 'Synced';
+    if (!p && Cloud.conf.lastSyncAt) more = ' ' + agoText(Cloud.conf.lastSyncAt);
     title = Cloud.conf.lastSyncAt ? `Last synced ${fmtDT(Cloud.conf.lastSyncAt)}` : 'Synced';
   }
-  el.textContent = text;
+  el.innerHTML = esc(text) + (more ? `<span class="net-more">${esc(more)}</span>` : '');
+  text += more;
   el.className = 'net ' + cls;
   el.title = title;
   el.setAttribute('aria-label', `${text}. ${title}`);
@@ -6832,6 +6864,7 @@ function bindEvents() {
     else if (cloudReady() && can('settings')) showView('settings');
   });
   renderCloudStatus();
+  setInterval(renderCloudStatus, 60000); // keeps "Synced 5 min ago" current
 
   // Save anything pending when the app is hidden or closed (phone locked, app switched).
   const flush = () => { if (ui.appActive) { flushAllAdjust(); saveCart(true); } };

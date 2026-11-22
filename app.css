@@ -902,3 +902,52 @@ input:disabled { opacity: .5; }
 .cart-welcome .cw-stat { margin-top: 10px; font-size: 13px; font-weight: 650; padding: 5px 12px; border-radius: 99px; background: var(--surface-2); color: var(--text); }
 .cart-welcome .cw-stat .money { color: var(--money); }
 .cart-welcome .cw-parked { margin-top: 6px; }
+
+/* ----- Cash / Card / EFT: one style for all three, the chosen one lit up ----- */
+.seg.pay button[data-pay] { --c: var(--neon); --ci: var(--pay-ink); }
+.seg.pay button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.seg.pay button:not(.on) { color: var(--text); border-color: color-mix(in srgb, var(--neon) 40%, var(--border)); box-shadow: none; }
+.seg.pay .pay-ico { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.quick-cash button { border-color: color-mix(in srgb, var(--neon) 55%, var(--border)) !important; box-shadow: none; }
+
+/* ----- Charge: clearly switched off until there is something to charge ----- */
+#chargeBtn:disabled { opacity: 1; background: transparent; color: var(--muted); border: 1.5px dashed var(--border); box-shadow: none; font-weight: 600; }
+#chargeBtn .charge-amt { font-weight: 900; font-size: 1.12em; letter-spacing: .01em; }
+#chargeBtn .charge-pay { font-weight: 600; opacity: .8; }
+
+/* ----- Header status pill: calm grey when the till simply saves on this device ----- */
+.net.local { background: var(--surface-2); color: var(--muted); }
+@media (max-width: 520px) { .net-more { display: none; } }
+
+/* ----- Side menu: Settings and Admin sit at the bottom, apart from the daily screens ----- */
+.nav-spacer { display: none; }
+@media (min-width: 860px) {
+  .app-nav { display: flex; flex-direction: column; padding-bottom: 10px; }
+  .app-nav button { flex: none; height: 72px; }
+  .nav-spacer { display: block; flex: 1; min-height: 12px; margin: 0 20px 8px; border-bottom: 1px solid var(--border); }
+  /* More products across on a tablet or computer */
+  .product-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+}
+
+/* ----- Sale complete ----- */
+.sold-hero { text-align: center; padding: 6px 0 14px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.sold-tick { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 60%, transparent), 0 0 26px color-mix(in srgb, var(--ok) 30%, transparent);
+  animation: sold-pop .35s ease-out; }
+.sold-tick svg { width: 34px; height: 34px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+@keyframes sold-pop { from { transform: scale(.6); opacity: 0; } to { transform: none; opacity: 1; } }
+.sold-title { font-size: 22px; font-weight: 800; }
+.sold-sub { color: var(--muted); font-size: 14px; }
+.sold-sub .money { color: var(--text); font-weight: 700; }
+.sold-change { margin-top: 10px; width: 100%; max-width: 340px; padding: 12px 16px; border-radius: 14px; background: var(--surface-2);
+  border: 1.5px solid color-mix(in srgb, var(--money) 55%, var(--border)); display: flex; flex-direction: column; gap: 2px; }
+.sold-change span { font-size: 13px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.sold-change strong { font-size: 40px; line-height: 1.1; font-weight: 900; color: var(--money); }
+.sold-nochange { margin-top: 6px; font-weight: 650; color: var(--muted); }
+.sold-receipt { margin: 4px 0 6px; }
+.sold-receipt summary { cursor: pointer; text-align: center; font-weight: 650; color: var(--neon); padding: 6px; list-style: none; }
+.sold-receipt summary::-webkit-details-marker { display: none; }
+.sold-receipt summary::after { content: " ▾"; }
+.sold-receipt[open] summary::after { content: " ▴"; }
+.modal-foot .sold-new { min-width: 140px; }
+@media (prefers-reduced-motion: reduce) { .sold-tick { animation: none; } }

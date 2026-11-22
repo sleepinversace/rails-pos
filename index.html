@@ -34,6 +34,9 @@
     <symbol id="i-cat-shoe" viewBox="0 0 24 24"><path d="M3 17V8h5l2 3 6 2c3 .8 5 2 5 4v1H3Z"/><path d="M3 20h18"/></symbol>
     <symbol id="i-cat-bag" viewBox="0 0 24 24"><path d="M5 8h14l-1 13H6Z"/><path d="M9 10V6a3 3 0 0 1 6 0v4"/></symbol>
     <symbol id="i-cat-hanger" viewBox="0 0 24 24"><path d="M12 7.5a2 2 0 1 1 2-2c0 1-1 1.5-2 2.2v1L21 15c.8.6.4 2-.6 2H3.6c-1 0-1.4-1.4-.6-2l9-6.3"/></symbol>
+    <symbol id="i-pay-cash" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.8"/><path d="M6 9.5v5M18 9.5v5"/></symbol>
+    <symbol id="i-pay-card" viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M2.5 9.5h19M6 15h4"/></symbol>
+    <symbol id="i-pay-eft" viewBox="0 0 24 24"><path d="M3 9.5 12 4l9 5.5M4.5 10v7M9.5 10v7M14.5 10v7M19.5 10v7M3 20h18"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
   </svg>
 
@@ -57,6 +60,7 @@
     <button data-action="nav" data-view="sales" data-perm="sales"><svg class="ico" aria-hidden="true"><use href="#i-sales"/></svg>Sales</button>
     <button data-action="nav" data-view="customers" data-perm="customers"><svg class="ico" aria-hidden="true"><use href="#i-client"/></svg>Clients</button>
     <button data-action="nav" data-view="reports" data-perm="reports"><svg class="ico" aria-hidden="true"><use href="#i-reports"/></svg>Reports</button>
+    <span class="nav-spacer" aria-hidden="true"></span>
     <button data-action="nav" data-view="settings" data-perm="settings"><svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg>Settings</button>
     <button data-action="nav" data-view="admin" data-perm="admin"><svg class="ico" aria-hidden="true"><use href="#i-admin"/></svg>Admin</button>
   </nav>
@@ -97,9 +101,9 @@
             <input id="discountValue" class="input sm grow" inputmode="decimal" placeholder="0">
           </div>
           <div class="seg pay" role="group" aria-label="Payment method">
-            <button data-action="pay" data-pay="cash">Cash</button>
-            <button data-action="pay" data-pay="card">Card</button>
-            <button data-action="pay" data-pay="eft">EFT</button>
+            <button data-action="pay" data-pay="cash"><svg class="pay-ico" aria-hidden="true"><use href="#i-pay-cash"/></svg>Cash</button>
+            <button data-action="pay" data-pay="card"><svg class="pay-ico" aria-hidden="true"><use href="#i-pay-card"/></svg>Card</button>
+            <button data-action="pay" data-pay="eft"><svg class="pay-ico" aria-hidden="true"><use href="#i-pay-eft"/></svg>EFT</button>
           </div>
           <div id="cashRow" class="cash-row">
             <input id="tendered" class="input sm" inputmode="decimal" placeholder="Cash tendered (blank = exact)" aria-label="Cash tendered">

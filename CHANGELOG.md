@@ -17,6 +17,18 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v34 — 2026-11-22 · Sale complete screen, calmer buttons and header
+
+- ✨ After a sale, a clear **Sale complete** screen: a big tick, the total and payment method, the **change due in large numbers** for cash, and Print / WhatsApp / Email / Copy / **New sale** buttons. The slip is folded away under "Show receipt". New sale is selected, so pressing Enter starts the next sale.
+- 🔧 Cash, Card and EFT now share one style with a small icon each; only the chosen one lights up.
+- 🔧 The Charge button is a dashed outline that says "Add items to charge" while the cart is empty, then lights up with the amount in bold: "Charge **R549.00** · Cash".
+- 🔧 The header pill no longer shows a pink "Not synced". Without cloud sync it is a calm grey "Saved on this device"; with cloud sync it says, for example, "Synced 2 min ago" (it updates every minute). On phones only the first word shows.
+- 🔧 On tablets and computers, Settings and Admin sit at the bottom of the side menu, apart from the daily screens.
+- 🔧 Product tiles can be a bit narrower on tablets and computers, so more fit across on wider screens.
+- 🔧 The demo shop's address is now a neutral placeholder: "1, road name, city".
+
+---
+
 ## v33 — 2026-11-22 · Friendlier empty cart
 
 - 🔧 With nothing in the cart, the cart panel now shows the Rails POS logo, "Ready to sell", how many sales the till has done today and, if there are any, a button for the parked sales waiting. The rand total for today shows only to staff who may see reports, so a cashier on a blind cash-up still cannot see it.

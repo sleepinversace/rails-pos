@@ -1335,7 +1335,7 @@ test('Cloud sync: two tills share sales, stock and settings; a wiped device gets
   const v0 = variant(product('Test <b>Tee</b>'), 'S', 'Red');
   eq(recs.filter(r => r.kind === 'movements' && r.data.variantId === v0.id).reduce((a, r) => a + r.data.change, 0), v0.stock, 'cloud movements add up to the stock');
   const stock0 = v0.stock;
-  ok($('#netStatus').textContent === 'Synced', 'header says Synced');
+  ok($('#netStatus').textContent.startsWith('Synced'), 'header says Synced');
 
   // Subscription follows the shop's paid-until date in the cloud
   eq(P.licence().state, 'active', 'new shop: 30-day trial counts as active');
