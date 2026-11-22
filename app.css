@@ -127,6 +127,12 @@ h3 { font-size: 15px; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; letter-spacing: .01em; min-width: 0; }
 .brand span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .brand img { border-radius: 7px; flex: none; box-shadow: 0 0 0 1px rgba(255,255,255,.28); }
+/* Rails POS wordmark, then a thin divider and the shop's own name */
+.brand .brand-name { flex: none; font-weight: 800; letter-spacing: .02em; }
+.brand .brand-name b { color: var(--accent); font-weight: 800; }
+.brand .brand-shop { font-weight: 600; opacity: .9; padding-left: 10px; border-left: 1px solid color-mix(in srgb, currentColor 35%, transparent); }
+.brand .brand-shop:empty { display: none; }
+@media (max-width: 420px) { .brand .brand-name { display: none; } .brand .brand-shop { padding-left: 0; border-left: 0; } }
 .net {
   font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 99px;
   background: var(--ok-soft); color: var(--ok); white-space: nowrap;

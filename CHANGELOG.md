@@ -17,6 +17,12 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v31 — 2026-11-22 · Rails POS name on the till header
+
+- 🔧 The header now shows the Rails POS logo and name, then a thin divider and the shop's own name. Before, the shop name replaced "Rails POS". On narrow phones only the logo and shop name show, so the header stays tidy.
+
+---
+
 ## v30 — 2026-11-22 · Finer staff permissions (blind cash-up) and a Best sellers report
 - 🔒 **Four new permissions** (Admin → edit a user):
   - **Products and prices** — add, edit, delete products and sizes, change prices, import. Split from **Stock counts and deliveries** (see stock, receive deliveries, adjust counts, stock take, labels), so a stock clerk can't change prices.

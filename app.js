@@ -2072,7 +2072,7 @@ function setPressed(selector, isOn) {
 /* ===== 13. Views ======================================================== */
 
 function renderAll() {
-  $('#storeNameLabel').textContent = state.settings.storeName || 'Rails POS';
+  $('#storeNameLabel').textContent = state.settings.storeName || '';
   // Theme: no attribute = follow the device; otherwise force light/dark.
   if (state.settings.theme === 'auto') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = state.settings.theme;
