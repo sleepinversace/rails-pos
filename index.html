@@ -116,10 +116,10 @@
       <div class="toolbar">
         <input id="stockSearch" type="search" placeholder="Search stock…" aria-label="Search stock">
         <button id="lowToggle" class="btn chip-btn" data-action="toggle-low" aria-pressed="false">Low stock</button>
-        <button class="btn" data-action="stocktake">Stock take</button>
-        <button class="btn" data-action="import-stock">Import</button>
-        <button class="btn" data-action="labels">Labels</button>
-        <button class="btn primary" data-action="add-product">+ Product</button>
+        <button class="btn" data-action="stocktake" data-need="stock">Stock take</button>
+        <button class="btn" data-action="import-stock" data-need="products">Import</button>
+        <button class="btn" data-action="labels" data-need="stock">Labels</button>
+        <button class="btn primary" data-action="add-product" data-need="products">+ Product</button>
       </div>
       <div id="stockList"></div>
     </section>
@@ -140,7 +140,7 @@
     <!-- ===== REPORTS (incl. cash-up) ===== -->
     <section id="view-reports" class="view" aria-label="Reports">
       <div id="cashupCard"></div>
-      <div class="report-bar">
+      <div class="report-bar" data-need="reports">
         <div id="rangeSeg" class="seg range" role="group" aria-label="Report period"></div>
         <button class="btn" data-action="print-menu"><svg class="ico-sm" aria-hidden="true"><use href="#i-print"/></svg>Print A4</button>
       </div>
@@ -148,7 +148,7 @@
         <label class="field"><span>From</span><input id="rFrom" class="input" type="date"></label>
         <label class="field"><span>To</span><input id="rTo" class="input" type="date"></label>
       </div>
-      <div id="reportBody"></div>
+      <div id="reportBody" data-need="reports"></div>
     </section>
 
     <!-- ===== SETTINGS ===== -->
@@ -158,14 +158,18 @@
 
     <!-- ===== ADMIN (users and what they may do) ===== -->
     <section id="view-admin" class="view" aria-label="Admin">
+      <div data-need="admin">
       <div class="toolbar">
         <h2 class="view-title">Users</h2>
         <button class="btn primary" data-action="user-add">+ User</button>
       </div>
       <p class="small muted" style="margin-top:0">Each person signs in with their own username and 4-digit PIN. Untick what they shouldn't use; the Sell screen is always available.</p>
       <div id="userList"></div>
+      </div>
+      <div data-need="activity">
       <div class="section-title">Activity log</div>
       <div id="activityLog"></div>
+      </div>
     </section>
   </main>
 

@@ -86,8 +86,10 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - Each sale records who was signed in ("Served by" on the receipt).
 - **Admin: users and access**
   - Add, rename and delete users, and reset their PIN.
-  - Each user gets a role: Owner (everything), Manager (everything except Admin), Cashier (sell and see sales) or Custom.
-  - Tick or untick each permission: discounts, refunds and exchanges, sales history, stock, reports and cash-up, settings and backups, admin. Selling is always allowed.
+  - Each user gets a role: Owner (everything), Manager (everything except Admin), Cashier (sell, sales history, clients and lay-bys, blind cash-up) or Custom.
+  - Tick or untick each permission: discounts, refunds and exchanges (incl. cancelling lay-bys), sales history, clients and lay-bys, stock counts and deliveries, products and prices, cash-up, petty cash, reports, activity log, settings and backups, admin. Selling is always allowed.
+  - **Blind cash-up:** someone with Cash-up but not Reports counts the drawer without seeing the expected cash or over / short.
+  - **Best sellers** report (Reports → Top sellers → See all, A4, Excel): ranked by items sold, value or profit, by product or size & colour.
   - Screens and buttons a user may not use are hidden, and every action is checked again when tapped. A cashier's cart ignores any discount.
   - You can't delete yourself, and there is always at least one user with Admin access.
   - This keeps staff and customers out of the till. It is not copy protection: a licence check needs a server (see *What to build next*).

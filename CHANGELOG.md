@@ -17,6 +17,17 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v30 — 2026-11-22 · Finer staff permissions (blind cash-up) and a Best sellers report
+- 🔒 **Four new permissions** (Admin → edit a user):
+  - **Products and prices** — add, edit, delete products and sizes, change prices, import. Split from **Stock counts and deliveries** (see stock, receive deliveries, adjust counts, stock take, labels), so a stock clerk can't change prices.
+  - **Cash-up** — close the till. Without **Reports** the count is **blind**: no expected cash, no over / short, no Z-report shown; the owner sees the result in Reports and the activity log ("blind count").
+  - **Petty cash** — its own permission (was part of Reports).
+  - **Activity log** — can be given without full Admin.
+- 🔒 **Cancelling a lay-by** (money back) now needs **Refunds and exchanges**.
+- 🔧 Roles: **Cashier** = sales history, clients and lay-bys, cash-up (blind). **Manager** = everything except Admin (now incl. the activity log). Existing staff keep everything they could do: Stock → also Products and prices; Reports → also Cash-up and Petty cash; Admin and managers → also Activity log; cashiers → also Cash-up.
+- 🔧 Screens and buttons follow the permissions: the Reports tab shows only Cash up / Petty cash for people without Reports; Stock hides + Product, Import, Edit and + Variant without Products and prices; Admin shows only the activity log without Admin.
+- ✨ **Best sellers** (Reports → Top sellers → **See all**, and Print A4 → Best sellers): everything sold in the period, ranked by **items sold, sales value or profit**, **by product or by size & colour**, filter by category, with stock left. Print A4 or **download for Excel**.
+
 ## v29 — 2026-11-22 · Park a sale, petty cash, daily summary, activity log, stock take, client events, returns check
 - ✨ **Park a sale** (fitting rooms): **Park** in the cart puts the sale aside with a name ("Lady in fitting room 2"); **Parked (n)** on the Sell screen brings it back. Kept on that till; items sold out meanwhile are left out with a warning.
 - ✨ **Petty cash** (Reports → cash-up card): money paid out of the till for expenses (categories set in Settings → Shop floor) or cash added. Counted in the expected cash, shown on the cash-up and Z-report, synced.

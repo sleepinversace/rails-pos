@@ -279,7 +279,7 @@ test('Reports: periods, chart, green money and A4 printouts', async () => {
   ok(docs[1].includes('CN00001') && docs[1].includes('-R230.00'), 'sales list has the refund');
   ok(docs[2].includes('Test &lt;b&gt;Tee&lt;/b&gt;') && docs[2].includes('TB-RED-S'), 'stock report escaped, lists SKUs');
   click('[data-action="print-menu"]'); await tick();
-  eq(d.querySelectorAll('#modal input[name="a4kind"]').length, 6, 'six A4 reports offered');
+  eq(d.querySelectorAll('#modal input[name="a4kind"]').length, 7, 'seven A4 reports offered');
   const origPrint = w.print; let printed = false; w.print = () => { printed = true; };
   $('#modal input[value="stock"]').checked = true;
   click('[data-action="print-a4"]'); await tick(150);
@@ -782,6 +782,26 @@ test('Reports: reorder list, staff sales and commission; lay-by WhatsApp reminde
   ok($('#printA4').textContent.includes('Reorder list') && $('#printA4').textContent.includes('Import Dress'), 'A4 reorder list');
   w.printA4('staff'); await tick(100);
   ok($('#printA4').textContent.includes('Staff sales & commission'), 'A4 staff report');
+  // Best sellers: everything sold, returns taken off; by product or by size/colour; A4 and Excel
+  const bs = w.bestSellers(range);
+  const sold = rep.sales.reduce((a, s) => a + s.items.reduce((b, it) => b + it.qty, 0), 0) - rep.rets.reduce((a, x) => a + x.ret.items.reduce((b, ri) => b + ri.qty, 0), 0);
+  eq(bs.qty, sold, 'items sold (net of returns) add up');
+  ok(bs.rows.every((r, i, a) => i === 0 || a[i - 1].qty >= r.qty), 'ranked by items sold');
+  const byValue = w.bestSellers(range, { sort: 'value' });
+  ok(byValue.rows.every((r, i, a) => i === 0 || a[i - 1].value >= r.value) && byValue.value === bs.value, 'ranked by sales value');
+  ok(w.bestSellers(range, { by: 'variant' }).rows.length >= bs.rows.length, 'by size and colour');
+  P.ui.reportRange = '30'; w.renderReports(); await tick();
+  click('[data-action="bs-open"]'); await tick(150);
+  ok($('#bsBody .bs-table') && $('#bsBody').textContent.includes(bs.rows[0].name), 'See all shows the list');
+  click('[data-action="bs-by"][data-v="variant"]'); await tick();
+  ok($('#bsBody').textContent.includes(' / '), 'sizes and colours shown');
+  let csvOut = ''; const dl = w.downloadFile; w.downloadFile = (n, t) => { csvOut = t; };
+  click('[data-action="bs-csv"]'); await tick();
+  w.downloadFile = dl;
+  ok(csvOut.includes('Rank,Product,Size,Colour'), 'Excel file has the columns');
+  click('[data-action="bs-print"]'); await tick(100);
+  ok($('#printA4').textContent.includes('Best sellers'), 'A4 best sellers');
+  P.ui.bs = { by: 'product', sort: 'qty', cat: '' };
   w.print = orig; w.setPrintMode('none');
   // Reminders: overdue / due soon / quiet lay-bys; message filled in; not again within a week
   const day = 86400000, iso = t => new Date(t).toISOString(), ymd = t => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
@@ -1036,12 +1056,17 @@ test('Admin: add a cashier who can only sell and see sales; edit, protect the la
   await signIn('thandi', '1111');
   ok($('#signin').hidden, 'cashier signed in');
   const visible = [...d.querySelectorAll('.app-nav button')].filter(b => !b.hidden).map(b => b.dataset.view);
-  eq(visible, ['sell', 'sales', 'customers'], 'cashier sees only Sell, Sales and Clients');
+  eq(visible, ['sell', 'sales', 'customers', 'reports'], 'cashier sees Sell, Sales, Clients and Reports (for the cash-up only)');
   ok($('#discountRow').hidden, 'no discount box');
-  P.actions.nav({ dataset: { view: 'reports' } }); await tick();
-  eq(P.ui.view, 'sell', 'reports blocked');
+  // Reports for a cashier: only the cash-up button — no takings, no expected cash, no Z-reports, no petty cash
+  P.actions.nav({ dataset: { view: 'reports' } }); await tick(150);
+  eq(P.ui.view, 'reports', 'cashier can open the cash-up');
+  ok($('#reportBody').hidden && $('.report-bar').hidden && !$('#reportBody').textContent.trim(), 'no takings or reports');
+  ok($('[data-action="cashup"]') && !$('[data-action="petty"]') && !$('[data-action="owner-summary"]') && !$('#cashupCard [data-k="expected"]') && !$('#cashupCard .z-list'), 'only the Cash up button; expected cash hidden');
   P.actions.nav({ dataset: { view: 'admin' } }); await tick();
   eq(P.ui.view, 'sell', 'admin blocked');
+  P.actions.nav({ dataset: { view: 'stock' } }); await tick();
+  eq(P.ui.view, 'sell', 'stock blocked');
   P.ui.cart.discountType = 'R'; P.ui.cart.discountText = '50';
   await addItem(product('Test <b>Tee</b>'), 'S', 'Red');
   eq(P.cartTotals().discount, 0, 'discount ignored for cashier');
@@ -1050,6 +1075,17 @@ test('Admin: add a cashier who can only sell and see sales; edit, protect the la
   ok(receiptText().includes('Employee: Thandi'), 'receipt names the cashier');
   ok(!$('[data-action="open-return"]'), 'no Return button for a cashier');
   closeModal(); await tick();
+  // Blind cash-up: the cashier counts without seeing the expected cash or over / short
+  const zBefore = P.state.cashups.length;
+  await nav('reports'); await tick(100);
+  click('[data-action="cashup"]'); await tick(150);
+  ok(!$('#modal').textContent.includes('Expected') && !$('#modal .totals'), 'no expected cash in the cashier\'s cash-up');
+  type('#cuCounted', '123.45');
+  ok(!$('#cuDiff').textContent.trim(), 'no over / short shown while typing');
+  click('[data-action="cashup-save"]'); await tick(400);
+  const bz = P.state.cashups[P.state.cashups.length - 1];
+  eq([P.state.cashups.length, bz.counted, bz.blind, $('#modal').hidden], [zBefore + 1, 12345, true, true], 'cash-up saved as a blind count, no Z-report shown');
+  ok(P.state.activity.some(a => a.type === 'cashup' && a.text.includes('blind count') && a.user === 'Thandi'), 'blind cash-up in the activity log');
 
   // Back to the owner: give Thandi reports, rename her, then delete her
   click('#lockBtn'); await tick(100);
@@ -1077,6 +1113,46 @@ test('Admin: add a cashier who can only sell and see sales; edit, protect the la
   eq((await P.DB.get('kv', 'auth')).users.length, 1, 'deleted');
   ok(P.state.sales.some(s => s.cashier === 'Thandi'), 'her past sale keeps her name');
   ok(P.state.activity.some(a => a.type === 'staff' && a.text.includes('Added staff member Thandi')) && P.state.activity.some(a => a.type === 'staff' && a.text.includes('Deleted staff member Thandi')), 'staff changes are in the activity log');
+
+  // A stock clerk: counts and deliveries, but may not change products or prices
+  click('[data-action="user-add"]'); await tick();
+  type('#uName', 'Sipho'); type('#uPin', '3333'); type('#uPin2', '3333');
+  for (const b of d.querySelectorAll('#modal [data-perm]')) { b.checked = b.dataset.perm === 'stock'; b.dispatchEvent(new w.Event('change', { bubbles: true })); }
+  click('[data-action="user-save"]'); await waitFor(() => $('#modal').hidden, 3000, 'stock clerk added');
+  // A manager who may see the activity log without full Admin
+  click('[data-action="user-add"]'); await tick();
+  type('#uName', 'Lerato'); type('#uPin', '4444'); type('#uPin2', '4444');
+  for (const b of d.querySelectorAll('#modal [data-perm]')) { b.checked = ['activity', 'petty'].includes(b.dataset.perm); b.dispatchEvent(new w.Event('change', { bubbles: true })); }
+  click('[data-action="user-save"]'); await waitFor(() => $('#modal').hidden, 3000, 'activity viewer added');
+
+  click('#lockBtn'); await tick(100);
+  await signIn('sipho', '3333');
+  await nav('stock'); await tick(150);
+  eq(P.ui.view, 'stock', 'stock clerk opens Stock');
+  ok($('[data-action="stocktake"]') && !$('[data-action="stocktake"]').hidden && $('[data-action="add-product"]').hidden && $('[data-action="import-stock"]').hidden, 'Stock take shown; + Product and Import hidden');
+  ok(!$('#stockList [data-action="edit-product"]') && !$('#stockList [data-action="add-variant"]') && $('#stockList [data-action="receive"]') && $('#stockList [data-stock-input]'), 'can receive and count, but no Edit / + Variant');
+  ok($('#stockList .var-label').disabled, 'size/colour details (prices) locked');
+  // Even a hidden button pressed some other way is refused (the real check is on every tap)
+  const fake = d.createElement('button'); fake.dataset.action = 'edit-product'; fake.dataset.id = P.state.products[0].id; d.body.append(fake);
+  fake.click(); await tick(); fake.remove();
+  ok($('#modal').hidden && $('#toast').textContent.includes("doesn't have access"), 'editing a product is refused');
+
+  click('#lockBtn'); await tick(100);
+  await signIn('lerato', '4444');
+  await nav('admin'); await tick(250);
+  eq(P.ui.view, 'admin', 'activity viewer opens Admin');
+  ok(d.querySelector('#userList').closest('[data-need="admin"]').hidden && !d.querySelector('#activityLog').closest('[data-need="activity"]').hidden && $('#activityLog .act-log'), 'sees the activity log but not the users');
+  await nav('reports'); await tick(150);
+  ok($('[data-action="petty"]') && !$('[data-action="cashup"]') && $('#reportBody').hidden, 'petty cash only on Reports');
+
+  click('#lockBtn'); await tick(100);
+  await signIn('AMISH', OWNER.pin);
+  await nav('admin'); await tick(200);
+  for (const name of ['Sipho', 'Lerato']) {
+    const u = (await P.DB.get('kv', 'auth')).users.find(x => x.name === name);
+    click(`[data-action="user-delete"][data-id="${u.id}"]`); await confirmYes();
+  }
+  eq((await P.DB.get('kv', 'auth')).users.length, 1, 'test staff removed');
 });
 
 /* ---------- a fake Supabase (auth + REST) for the sync tests ---------- */
@@ -1449,6 +1525,31 @@ test('Supplier admin page: shop logins refused; admin signs in with password; re
   click('[data-act="logout"]'); await tick(300);
   ok(!w.__admin.session && !sessionStorage.getItem('rails-pos-admin-session') && $('#loginForm'), 'signed out');
   await blank(B);
+});
+
+test('Permissions update: existing staff keep what they could do (stock, reports, admin split up)', async () => {
+  const A = document.getElementById('app');
+  await blank(A);
+  A.src = 'index.html?test&t=' + Date.now();
+  await new Promise(r => { A.onload = r; });
+  await waitFor(() => A.contentWindow.__pos, 6000, 'main till ready');
+  use(A);
+  const keep = await P.DB.get('kv', 'auth');
+  const old = { permsVersion: 2, users: [
+    { id: 'u-o', name: 'Old Owner', role: 'owner', perms: ['discount', 'returns', 'sales', 'stock', 'reports', 'settings', 'customers', 'admin'], salt: 'x', hash: 'y' },
+    { id: 'u-m', name: 'Old Manager', role: 'manager', perms: ['discount', 'returns', 'sales', 'stock', 'reports', 'settings', 'customers'], salt: 'x', hash: 'y' },
+    { id: 'u-c', name: 'Old Cashier', role: 'cashier', perms: ['sales', 'customers'], salt: 'x', hash: 'y' },
+    { id: 'u-s', name: 'Old Stock', role: 'custom', perms: ['stock'], salt: 'x', hash: 'y' },
+  ] };
+  await P.DB.write([{ store: 'kv', key: 'auth', value: old }]);
+  const a = await w.loadAuth();
+  const by = id => a.users.find(u => u.id === id);
+  eq([a.permsVersion, by('u-o').role, by('u-m').role, by('u-c').role], [3, 'owner', 'manager', 'cashier'], 'roles still match');
+  ok(['products', 'cashup', 'petty', 'activity'].every(p => by('u-o').perms.includes(p)), 'owner gets everything new');
+  ok(['products', 'cashup', 'petty', 'activity'].every(p => by('u-m').perms.includes(p)) && !by('u-m').perms.includes('admin'), 'manager: products, cash-up, petty cash, activity log (no admin)');
+  eq(by('u-c').perms, ['sales', 'customers', 'cashup'], 'cashier may now cash up (blind)');
+  eq(by('u-s').perms, ['stock', 'products'], 'stock person keeps editing products');
+  await P.DB.write([{ store: 'kv', key: 'auth', value: keep }]);
 });
 
 test('Upgrade: data saved by version 1 is migrated', async () => {

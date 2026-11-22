@@ -1292,6 +1292,97 @@ function staffReport(range) {
   return { rows, rate, net: sum(rows, r => r.net), commission: sum(rows, r => r.commission) };
 }
 
+/* ----- Best sellers -----
+   Every product (or every size/colour) sold in the period, ranked by items
+   sold, sales value or profit. Returns in the period are taken off. Value is
+   the shelf price (VAT incl., before sale discounts); profit = value excl. VAT
+   − cost. Shown on screen (Reports → Top sellers → See all), on A4 and as CSV. */
+const BS_SORT = { qty: 'Items sold', value: 'Sales value', profit: 'Profit' };
+
+function bestSellers(range, { by = 'product', sort = 'qty', cat = '' } = {}) {
+  const inR = iso => { const d = new Date(iso); return d >= range.from && d < range.to; };
+  const map = new Map();
+  const add = (it, qty, value, cost, rate) => {
+    const key = by === 'variant' ? it.variantId : it.productId;
+    const p = findProduct(it.productId);
+    const r = map.get(key) || { key, name: it.name, size: it.size, colour: it.colour, category: p?.category || '', qty: 0, value: 0, profit: 0 };
+    r.qty += qty; r.value += value;
+    r.profit += value - vatFromInclusive(value, rate) - cost;
+    map.set(key, r);
+  };
+  state.sales.filter(s => inR(s.date)).forEach(s => s.items.forEach(it => add(it, it.qty, it.unitPrice * it.qty, it.unitCost * it.qty, s.vatRate)));
+  allReturns().filter(x => inR(x.ret.date)).forEach(({ sale, ret }) => ret.items.forEach(ri => {
+    const it = sale.items[ri.idx];
+    add(it, -ri.qty, -ri.amount, -it.unitCost * ri.qty, sale.vatRate);
+  }));
+  const rows = [...map.values()].filter(r => r.qty > 0 && (!cat || r.category === cat)).map(r => {
+    const f = by === 'variant' ? findVariant(r.key) : null;
+    const p = by === 'variant' ? f?.product : findProduct(r.key);
+    return { ...r, stock: by === 'variant' ? (f ? f.variant.stock : null) : (p ? productStock(p) : null) };
+  });
+  rows.sort((a, b) => b[sort] - a[sort] || b.qty - a.qty || a.name.localeCompare(b.name));
+  return { rows, qty: sum(rows, r => r.qty), value: sum(rows, r => r.value), profit: sum(rows, r => r.profit) };
+}
+const bsLabel = (r, by) => (by === 'variant' ? `${r.name} (${r.size} / ${r.colour})` : r.name);
+
+function openBestSellers() {
+  ui.bs ||= { by: 'product', sort: 'qty', cat: '' };
+  openModal({ title: 'Best sellers', body: '<div id="bsBody"></div>',
+    foot: '<button class="btn" data-action="close-modal">Close</button><button class="btn" data-action="bs-csv">Download for Excel</button><button class="btn primary" data-action="bs-print">Print A4</button>' });
+  renderBestSellers();
+}
+
+function renderBestSellers() {
+  const B = ui.bs, range = reportRange();
+  if (!$('#bsBody')) return;
+  const bs = bestSellers(range, B);
+  const cats = [...new Set(state.products.map(p => p.category).filter(Boolean))].sort();
+  $('#bsBody').innerHTML = `
+    <p class="small muted" style="margin-top:0"><strong>${esc(range.label)}</strong> · change the period at the top of Reports. Returns are taken off.</p>
+    <div class="seg" role="group" aria-label="Rank by" style="margin-bottom:8px">${Object.entries(BS_SORT).map(([k, l]) =>
+      `<button data-action="bs-sort" data-v="${k}" class="${B.sort === k ? 'on' : ''}" aria-pressed="${B.sort === k}">${l}</button>`).join('')}</div>
+    <div class="row gap-s wrap" style="margin-bottom:10px">
+      <div class="seg" role="group" aria-label="Show">${[['product', 'By product'], ['variant', 'By size & colour']].map(([k, l]) =>
+        `<button data-action="bs-by" data-v="${k}" class="${B.by === k ? 'on' : ''}" aria-pressed="${B.by === k}">${l}</button>`).join('')}</div>
+      <select id="bsCat" aria-label="Category"><option value="">All categories</option>${cats.map(c => `<option ${B.cat === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
+    </div>
+    ${bs.rows.length ? `<table class="list-table bs-table">${bs.rows.slice(0, 200).map((r, i) => `<tr>
+        <td><span class="rank">${i + 1}</span>${esc(bsLabel(r, B.by))}<br><span class="small muted">${esc(r.category)}${r.stock != null ? ` · ${r.stock} in stock` : ''}</span></td>
+        <td class="r"><strong data-k="bs-qty">${r.qty}</strong> sold<br><span class="small"><span class="money">${money(r.value)}</span> · profit <span class="money ${r.profit < 0 ? 'neg' : ''}">${money(r.profit)}</span></span></td></tr>`).join('')}</table>
+      <p class="small muted">${bs.rows.length} ${B.by === 'variant' ? 'sizes/colours' : 'products'} · ${bs.qty} items · <span class="money">${money(bs.value)}</span> · profit <span class="money">${money(bs.profit)}</span>${bs.rows.length > 200 ? ' · showing the first 200 (A4 and Excel have all)' : ''}</p>`
+      : '<div class="empty">Nothing sold in this period.</div>'}`;
+}
+
+function a4BestSellers(range) {
+  const B = ui.bs || { by: 'product', sort: 'qty', cat: '' };
+  const bs = bestSellers(range, B);
+  return `${a4Header('Best sellers', `${range.label} · ranked by ${BS_SORT[B.sort].toLowerCase()}${B.cat ? ` · ${B.cat}` : ''}`)}
+    <section class="a4-kpis">
+      <div><span>${B.by === 'variant' ? 'Sizes / colours' : 'Products'} sold</span><b>${bs.rows.length}</b></div>
+      <div><span>Items sold</span><b>${bs.qty}</b></div>
+      <div><span>Sales value</span>${m4(bs.value)}</div>
+      <div><span>Profit</span>${m4(bs.profit)}</div>
+    </section>
+    <table class="a4-list">
+      <thead><tr><th>#</th><th>Product</th>${B.by === 'variant' ? '<th>Size / colour</th>' : ''}<th>Category</th><th class="r">Sold</th><th class="r">Sales value</th><th class="r">Profit</th><th class="r">In stock</th></tr></thead>
+      <tbody>${bs.rows.map((r, i) => `<tr><td>${i + 1}</td><td><b>${esc(r.name)}</b></td>${B.by === 'variant' ? `<td>${esc(r.size)} / ${esc(r.colour)}</td>` : ''}<td>${esc(r.category)}</td>
+        <td class="r">${r.qty}</td><td class="r">${m4(r.value)}</td><td class="r">${m4(r.profit)}</td><td class="r">${r.stock ?? ''}</td></tr>`).join('')
+        || `<tr><td colspan="${B.by === 'variant' ? 8 : 7}">Nothing sold in this period.</td></tr>`}</tbody>
+    </table>
+    <p class="a4-note">Sales value = shelf price incl. VAT, before sale discounts. Profit = value excl. VAT − cost. Returns in the period are taken off.</p>
+    ${a4Foot()}`;
+}
+
+function bestSellersCsv() {
+  const B = ui.bs || { by: 'product', sort: 'qty', cat: '' };
+  const bs = bestSellers(reportRange(), B);
+  const n = centsToPlain;
+  const csv = toCsv(['Rank', 'Product', ...(B.by === 'variant' ? ['Size', 'Colour'] : []), 'Category', 'Sold', 'Sales value', 'Profit', 'In stock'],
+    bs.rows.map((r, i) => [i + 1, r.name, ...(B.by === 'variant' ? [r.size, r.colour] : []), r.category, r.qty, n(r.value), n(r.profit), r.stock ?? '']));
+  downloadFile(`rails-pos-best-sellers-${stamp()}.csv`, csv, 'text/csv');
+  toast(`Downloaded ${bs.rows.length} line${bs.rows.length === 1 ? '' : 's'}`);
+}
+
 /** Money movements for a shift (from the last cash-up until now) on THIS till.
     With cloud sync, other devices' sales are in the data too, but each till
     counts only its own cash drawer. */
@@ -1369,7 +1460,7 @@ function renderPetty() {
         <td><span class="money ${x.type === 'in' ? '' : 'neg'}">${x.type === 'in' ? '+' : '−'}${money(x.amount)}</span>
         <button class="btn sm ghost" data-action="petty-del" data-id="${esc(x.id)}" aria-label="Delete this entry">✕</button></td></tr>`).join('')}</table>`
       : '<p class="small muted">Nothing yet.</p>'}
-    <p class="small muted">Expected cash in the drawer now: <strong class="money">${money(sh.expected)}</strong></p>`;
+    ${can('reports') ? `<p class="small muted">Expected cash in the drawer now: <strong class="money">${money(sh.expected)}</strong></p>` : ''}`;
 }
 
 async function savePetty() {
@@ -1433,6 +1524,7 @@ function sendDailySummary() {
 function openCashup() {
   const sh = computeShift(state.meta.lastCashupAt, new Date().toISOString());
   ui.shift = sh;
+  if (!can('reports')) return openBlindCashup();
   openModal({
     title: 'Cash-up (end of shift)',
     body: `
@@ -1458,6 +1550,7 @@ function openCashup() {
 function paintCashupDiff() {
   const counted = parseMoney($('#cuCounted').value);
   const el = $('#cuDiff');
+  if (!el || ui.shift?.blind) return;
   if (!Number.isFinite(counted)) { el.textContent = ''; return; }
   const diff = counted - ui.shift.expected;
   el.innerHTML = diff === 0 ? '<span class="ok-text">Balances exactly.</span>'
@@ -1471,16 +1564,33 @@ async function saveCashup() {
   if (!Number.isFinite(nextFloat) || nextFloat < 0) return toast('Enter a valid float', true);
   const sh = computeShift(state.meta.lastCashupAt, new Date().toISOString());
   const z = { id: uid('z'), number: state.meta.nextZNo, ...sh, counted, diff: counted - sh.expected, nextFloat, store: storeSnapshot(),
-    cashier: ui.user?.name || '', ...deviceStamp() };
+    cashier: ui.user?.name || '', ...(can('reports') ? {} : { blind: true }), ...deviceStamp() };
   state.cashups.push(z);
   state.meta.nextZNo += 1;
   state.meta.lastCashupAt = sh.to;
   state.meta.float = nextFloat;
   await persist([opPut('cashups', z), opKv('meta', state.meta),
-    logOp('cashup', `Cash-up Z${zNo(z)}: expected ${money(z.expected)}, counted ${money(z.counted)} — ${z.diff === 0 ? 'balanced' : `${z.diff > 0 ? 'over' : 'SHORT'} ${money(Math.abs(z.diff))}`}`, { amount: z.diff, ref: `z:${z.id}` })]);
+    logOp('cashup', `Cash-up Z${zNo(z)}${z.blind ? ' (blind count)' : ''}: expected ${money(z.expected)}, counted ${money(z.counted)} — ${z.diff === 0 ? 'balanced' : `${z.diff > 0 ? 'over' : 'SHORT'} ${money(Math.abs(z.diff))}`}`, { amount: z.diff, ref: `z:${z.id}` })]);
   closeModal();
   renderAll();
+  if (!can('reports')) {
+    // Blind cash-up: the person counting doesn't see expected / over / short. The owner sees it in Reports and the activity log.
+    return toast(`Cash-up saved: you counted ${money(counted)}. The manager will check it.`);
+  }
   showDoc(`z:${z.id}`, { fresh: true });
+}
+
+/** Cash-up for someone without "Reports": count the drawer without seeing the expected cash. */
+function openBlindCashup() {
+  ui.shift = { blind: true };
+  openModal({
+    title: 'Cash-up (end of shift)',
+    body: `<p style="margin-top:0">Count all the cash in the drawer (notes and coins) and type the total. The till checks it against the sales — your manager sees the result.</p>
+      <label class="field"><span>Cash counted in the drawer (R)</span><input class="input" id="cuCounted" inputmode="decimal" autofocus></label>
+      <div id="cuDiff" class="small" aria-live="polite"></div>
+      <label class="field" style="margin-top:10px"><span>Float to leave in the drawer for next shift (R)</span><input class="input" id="cuFloat" inputmode="decimal" value="${centsToPlain(state.meta.float || 0)}"></label>`,
+    foot: '<button class="btn" data-action="close-modal">Cancel</button><button class="btn primary" data-action="cashup-save">Close shift</button>',
+  });
 }
 
 /* ===== 11. Documents (receipts, credit notes, Z-reports) ================ */
@@ -1979,7 +2089,7 @@ function renderAll() {
 }
 
 function showView(name) {
-  if (VIEW_PERMS[name] && !can(VIEW_PERMS[name])) {
+  if (!canView(name)) {
     if (ui.user) toast(`${ui.user.name} doesn't have access to ${name}`, true);
     name = 'sell';
   }
@@ -2177,6 +2287,7 @@ function renderTotals(t = cartTotals()) {
 /* ----- Stock ----- */
 
 function renderStock() {
+  const canStock = can('stock'), canProducts = can('products');
   const q = $('#stockSearch').value.trim().toLowerCase();
   const low = state.settings.lowStock;
   $('#lowToggle').setAttribute('aria-pressed', String(ui.lowOnly));
@@ -2195,24 +2306,24 @@ function renderStock() {
         ${thumbHtml(p, 'md')}<div class="info"><h3>${esc(p.name)}</h3>
           <div class="small muted">${esc(p.category)} · Price <strong class="money">${money(p.price)}</strong> · Cost ${money(p.cost)} · Margin ${margin}% · ${productStock(p)} in stock</div></div>
         <div class="actions">
-          <button class="btn sm" data-action="receive" data-id="${esc(p.id)}">Receive</button>
-          <button class="btn sm" data-action="history" data-id="${esc(p.id)}">History</button>
-          <button class="btn sm" data-action="edit-product" data-id="${esc(p.id)}">Edit</button>
-          <button class="btn sm" data-action="add-variant" data-id="${esc(p.id)}">+ Variant</button>
-          <button class="btn sm" data-action="labels" data-id="${esc(p.id)}">Labels</button>
+          ${canStock ? `<button class="btn sm" data-action="receive" data-id="${esc(p.id)}">Receive</button>
+          <button class="btn sm" data-action="history" data-id="${esc(p.id)}">History</button>` : ''}
+          ${canProducts ? `<button class="btn sm" data-action="edit-product" data-id="${esc(p.id)}">Edit</button>
+          <button class="btn sm" data-action="add-variant" data-id="${esc(p.id)}">+ Variant</button>` : ''}
+          ${canStock ? `<button class="btn sm" data-action="labels" data-id="${esc(p.id)}">Labels</button>` : ''}
         </div>
       </div>
       ${variants.map(v => `
         <div class="var-row ${v.stock === 0 ? 'out' : v.stock <= low ? 'low' : ''}">
-          <button class="var-label" data-action="edit-variant" data-id="${esc(v.id)}" aria-label="Edit variant ${esc(v.size)} ${esc(v.colour)}">
+          <button class="var-label" data-action="edit-variant" data-id="${esc(v.id)}" aria-label="Edit variant ${esc(v.size)} ${esc(v.colour)}" ${canProducts ? '' : 'disabled'}>
             <span class="label"><strong>${esc(v.size)} / ${esc(v.colour)}</strong><span class="state-tag">${v.stock === 0 ? ' · out' : v.stock <= low ? ' · low' : ''}</span></span>
             <span class="sku">${esc(v.sku)}${v.barcode ? ` · ${esc(v.barcode)}` : ''}${v.price != null ? ` · <span class="price-tag">${money(v.price)}</span>` : ''}</span>
           </button>
-          <span class="stepper">
+          ${canStock ? `<span class="stepper">
             <button data-action="stock-d" data-id="${esc(v.id)}" data-d="-1" aria-label="Decrease stock ${esc(v.size)} ${esc(v.colour)}">−</button>
             <input type="number" inputmode="numeric" min="0" value="${v.stock}" data-stock-input="${esc(v.id)}" aria-label="Stock for ${esc(p.name)} ${esc(v.size)} ${esc(v.colour)}">
             <button data-action="stock-d" data-id="${esc(v.id)}" data-d="1" aria-label="Increase stock ${esc(v.size)} ${esc(v.colour)}">+</button>
-          </span>
+          </span>` : `<span class="small muted">${v.stock} in stock</span>`}
         </div>`).join('')}
     </div>`;
   }).join('');
@@ -2472,18 +2583,21 @@ function renderReports() {
   // Cash-up card for the current shift
   const sh = computeShift(state.meta.lastCashupAt, new Date().toISOString());
   const recentZ = state.cashups.slice(-5).reverse();
+  // Without "Reports" (e.g. a cashier who may cash up): no takings, no expected cash (a blind count), no Z-reports.
+  const full = can('reports');
   $('#cashupCard').innerHTML = `<div class="card cashup">
       <div class="row gap-s" style="flex-wrap:wrap">
         <div class="grow"><h3>Current shift</h3>
-          <div class="small muted">Since ${sh.from ? fmtDT(sh.from) : 'the first sale'} · ${sh.salesCount} sales · expected cash in drawer <strong class="money" data-k="expected">${money(sh.expected)}</strong></div></div>
+          <div class="small muted">Since ${sh.from ? fmtDT(sh.from) : 'the first sale'}${full ? ` · ${sh.salesCount} sales · expected cash in drawer <strong class="money" data-k="expected">${money(sh.expected)}</strong>` : ''}</div></div>
         <div class="row gap-s wrap">
-          <button class="btn" data-action="petty">Petty cash</button>
-          <button class="btn" data-action="owner-summary">Daily summary</button>
-          <button class="btn primary" data-action="cashup">Cash up</button>
+          ${can('petty') ? '<button class="btn" data-action="petty">Petty cash</button>' : ''}
+          ${full ? '<button class="btn" data-action="owner-summary">Daily summary</button>' : ''}
+          ${can('cashup') ? '<button class="btn primary" data-action="cashup">Cash up</button>' : ''}
         </div>
       </div>
-      ${recentZ.length ? `<div class="z-list">${recentZ.map(z => `<button class="link" data-action="open-doc" data-doc="z:${esc(z.id)}">Z${zNo(z)} · ${fmtDate(z.to)} · ${z.diff === 0 ? 'balanced' : (z.diff > 0 ? 'over ' : 'short ') + money(Math.abs(z.diff))}</button>`).join('')}</div>` : ''}
+      ${full && recentZ.length ? `<div class="z-list">${recentZ.map(z => `<button class="link" data-action="open-doc" data-doc="z:${esc(z.id)}">Z${zNo(z)} · ${fmtDate(z.to)} · ${z.diff === 0 ? 'balanced' : (z.diff > 0 ? 'over ' : 'short ') + money(Math.abs(z.diff))}</button>`).join('')}</div>` : ''}
     </div>`;
+  if (!full) { $('#reportBody').innerHTML = ''; return; }
 
   // Period picker
   $('#rangeSeg').innerHTML = RANGES.map(([k, l]) => `<button data-action="range" data-range="${k}">${l}</button>`).join('');
@@ -2559,7 +2673,7 @@ function renderReports() {
           : '<div class="muted small">No sales in this period.</div>'}</div>
       </div>
       <div>
-        <div class="section-title">Top sellers</div>
+        <div class="section-title row" style="justify-content:space-between">Top sellers <button class="btn sm" data-action="bs-open">See all</button></div>
         <div class="card">${r.top.length ? `<table class="list-table">${r.topAll.slice(0, 8).map((t, i) => `
           <tr><td><span class="rank">${i + 1}</span>${esc(t.name)}</td><td>${t.qty} sold · <span class="money">${money(t.amount)}</span></td></tr>`).join('')}</table>`
           : '<div class="muted small">No sales in this period.</div>'}</div>
@@ -2608,6 +2722,7 @@ const A4_REPORTS = [
   ['cashups', 'Cash-ups', 'Each Z-report in the period: expected and counted cash, over or short'],
   ['reorder', 'Reorder list', 'What is low or running out, how long it will last and how many to buy'],
   ['staff', 'Staff sales & commission', 'Sales, refunds and commission per employee in the period'],
+  ['best', 'Best sellers', 'Everything sold in the period, ranked by items sold, sales value or profit'],
 ];
 
 function a4Reorder(range) {
@@ -2784,7 +2899,7 @@ function a4Cashups(range) {
 function printA4(kind) {
   const range = reportRange();
   const html = kind === 'sales' ? a4SalesList(range) : kind === 'stock' ? a4Stock() : kind === 'cashups' ? a4Cashups(range)
-    : kind === 'reorder' ? a4Reorder(range) : kind === 'staff' ? a4Staff(range) : a4Summary(range);
+    : kind === 'reorder' ? a4Reorder(range) : kind === 'staff' ? a4Staff(range) : kind === 'best' ? a4BestSellers(range) : a4Summary(range);
   $('#printA4').innerHTML = html;
   setPrintMode('a4');
   closeModal();
@@ -3312,24 +3427,33 @@ const LOCKOUT_MS = 30 * 1000; // length of that pause
 /* What a user may do. Selling is always allowed. [key, label, description] */
 const PERMISSIONS = [
   ['discount', 'Give discounts', 'Type a discount in the cart'],
-  ['returns', 'Refunds and exchanges', 'Return items on a sale'],
+  ['returns', 'Refunds and exchanges', 'Return items on a sale; cancel lay-bys (money back)'],
   ['sales', 'Sales history', 'See past sales and reprint receipts'],
-  ['stock', 'Stock', 'Add and edit products, change stock, receive deliveries'],
-  ['reports', 'Reports and cash-up', 'See takings and profit, do the cash-up'],
-  ['settings', 'Settings and backups', 'Store details, VAT, backup, restore, start fresh'],
-  ['customers', 'Clients and lay-bys', 'Client profiles, lay-bys, payments and statements'],
+  ['customers', 'Clients and lay-bys', 'Client profiles, lay-bys, payments, reminders, events and statements'],
+  ['stock', 'Stock counts and deliveries', 'See stock, receive deliveries, adjust counts, stock take, print labels'],
+  ['products', 'Products and prices', 'Add, edit and delete products and sizes, change prices, import from Excel'],
+  ['cashup', 'Cash-up', 'Close the till and count the cash. Without "Reports" the count is blind (the expected cash is hidden)'],
+  ['petty', 'Petty cash', 'Pay money out of the till or add cash to it'],
+  ['reports', 'Reports', 'Takings, profit, staff sales, reorder list, A4 reports, daily summary, Z-reports'],
+  ['activity', 'Activity log', 'See who gave discounts, refunds, price changes, cash-ups and more'],
+  ['settings', 'Settings and backups', 'Store details, VAT, printers, backup, restore, start fresh'],
   ['admin', 'Admin', 'Add, change and delete users and what they may do'],
 ];
 const ALL_PERMS = PERMISSIONS.map(p => p[0]);
+const PERMS_VERSION = 3;
 /* Roles are presets that tick the boxes; any change to the boxes makes it "Custom". */
 const ROLES = {
   owner: { label: 'Owner', perms: ALL_PERMS },
   manager: { label: 'Manager', perms: ALL_PERMS.filter(p => p !== 'admin') },
-  cashier: { label: 'Cashier', perms: ['sales', 'customers'] },
+  cashier: { label: 'Cashier', perms: ['sales', 'customers', 'cashup'] },
   custom: { label: 'Custom', perms: null },
 };
-/* Which permission each screen needs (Sell needs none). */
-const VIEW_PERMS = { stock: 'stock', sales: 'sales', customers: 'customers', reports: 'reports', settings: 'settings', admin: 'admin' };
+/* Which permissions open each screen (any one of them; Sell needs none). Inside a
+   screen, buttons are shown or hidden by the exact permission they need. */
+const VIEW_PERMS = { stock: ['stock', 'products'], sales: ['sales'], customers: ['customers'], reports: ['reports', 'cashup', 'petty'],
+  settings: ['settings'], admin: ['admin', 'activity'] };
+const canAny = list => list.some(p => can(p));
+const canView = name => !VIEW_PERMS[name] || canAny(VIEW_PERMS[name]);
 
 // There is no built-in account: a new device runs the first-time setup
 // (section 14d), where the shop owner chooses their own name and PIN.
@@ -3359,6 +3483,23 @@ async function loadAuth() {
   if ((auth.permsVersion || 1) < 2 && auth.users.length) {
     for (const u of auth.users) if (['owner', 'manager', 'cashier'].includes(u.role) && Array.isArray(u.perms) && !u.perms.includes('customers')) u.perms.push('customers');
     auth.permsVersion = 2;
+    changed = true;
+  }
+  // v3 (v30 of the app): "Stock", "Reports and cash-up" and "Admin" were split up. Everyone keeps
+  // what they could do: Stock → + Products and prices; Reports → + Cash-up and Petty cash;
+  // Admin → + Activity log. Cashiers may now close the till (a blind cash-up).
+  if ((auth.permsVersion || 1) < 3 && auth.users.length) {
+    for (const u of auth.users) {
+      if (!Array.isArray(u.perms)) continue;
+      const add = p => { if (!u.perms.includes(p)) u.perms.push(p); };
+      if (u.perms.includes('stock')) add('products');
+      if (u.perms.includes('reports')) { add('cashup'); add('petty'); }
+      if (u.perms.includes('admin') || u.role === 'manager') add('activity'); // managers see the activity log too
+      if (u.role === 'cashier') add('cashup');
+      u.perms.sort((a, b) => ALL_PERMS.indexOf(a) - ALL_PERMS.indexOf(b));
+      u.role = roleOf(u.perms);
+    }
+    auth.permsVersion = PERMS_VERSION;
     changed = true;
   }
   // Accounts from the first sign-in version had no id or permissions.
@@ -3396,9 +3537,10 @@ function setUser(u) {
 
 /** Show only the screens and controls the signed-in user may use. */
 function applyPermissions() {
-  $$('.app-nav [data-perm]').forEach(b => { b.hidden = !can(b.dataset.perm); });
+  $$('.app-nav [data-view]').forEach(b => { b.hidden = !canView(b.dataset.view); });
+  $$('[data-need]').forEach(el => { el.hidden = !can(el.dataset.need); });
   $('#discountRow').hidden = !can('discount');
-  if (VIEW_PERMS[ui.view] && !can(VIEW_PERMS[ui.view])) showView('sell');
+  if (!canView(ui.view)) showView('sell');
 }
 
 /** Still signed in from earlier in this tab (e.g. after a reload)? */
@@ -3501,6 +3643,7 @@ async function setPin(user, pin) {
 /* ----- Admin: users and what they may do ----- */
 
 async function renderAdmin() {
+  if (!can('admin')) return renderActivity(); // e.g. a manager who may see the activity log only
   const auth = await loadAuth();
   const label = p => PERMISSIONS.find(x => x[0] === p)?.[1];
   $('#userList').innerHTML = auth.users.map(u => {
@@ -4418,7 +4561,7 @@ async function finishSetup(mode) {
     await persistEverything();
     restoreCart(ui.cart);
   }
-  await saveAuth({ users: [user], permsVersion: 2 });
+  await saveAuth({ users: [user], permsVersion: PERMS_VERSION });
   ui.firstRun = false;
   writeSession(user.id);
   setUser(user);
@@ -5169,7 +5312,7 @@ function laybyCard(l) {
       <button class="btn sm" data-action="open-doc" data-doc="lb:${esc(l.id)}">Slip</button>
       ${l.saleId ? `<button class="btn sm" data-action="open-doc" data-doc="sale:${esc(l.saleId)}">Tax invoice</button>` : ''}
       ${l.status === 'open' && bal > 0 ? `<button class="btn sm" data-action="lb-remind" data-id="${esc(l.id)}">Remind on WhatsApp</button>` : ''}
-      ${l.status === 'open' ? `<button class="btn sm danger" data-action="lb-cancel" data-id="${esc(l.id)}">Cancel lay-by</button>` : ''}
+      ${l.status === 'open' && can('returns') ? `<button class="btn sm danger" data-action="lb-cancel" data-id="${esc(l.id)}">Cancel lay-by</button>` : ''}
     </div>
     ${lastReminder(l) && l.status === 'open' ? `<div class="small muted" style="margin-top:6px">Last reminded ${fmtDate(lastReminder(l))}${(l.reminders.length > 1) ? ` · ${l.reminders.length} reminders` : ''}</div>` : ''}
   </div>`;
@@ -6447,6 +6590,11 @@ const actions = {
   'st-discard': () => discardStocktake(),
   'st-print': () => printStocktakeA4(),
   'event-msg': el => messageEvent(el.dataset.id),
+  'bs-open': () => openBestSellers(),
+  'bs-sort': el => { ui.bs.sort = el.dataset.v; renderBestSellers(); },
+  'bs-by': el => { ui.bs.by = el.dataset.v; renderBestSellers(); },
+  'bs-print': () => printA4('best'),
+  'bs-csv': () => bestSellersCsv(),
   'restore-paste': () => restoreFromText($('#restoreText').value),
   'export-csv': () => exportCsv(),
   'start-fresh': () => startFresh(),
@@ -6510,12 +6658,12 @@ const actions = {
 
 /* Actions that need a permission. Buttons are hidden too, but this is the real check. */
 const ACTION_PERMS = {
-  'import-stock': 'stock', 'imp-template': 'stock', 'imp-paste': 'stock', 'imp-save': 'stock',
+  'import-stock': 'products', 'imp-template': 'products', 'imp-paste': 'products', 'imp-save': 'products',
   'open-return': 'returns', 'ret-qty': 'returns', 'ret-all': 'returns', 'ret-method': 'returns', 'ret-go': 'returns',
-  'toggle-low': 'stock', 'add-product': 'stock', 'np-all': 'stock', 'np-save': 'stock', 'edit-product': 'stock', 'ep-save': 'stock',
-  'add-variant': 'stock', 'edit-variant': 'stock', 'variant-save': 'stock', 'delete-variant': 'stock', 'delete-product': 'stock',
+  'toggle-low': '', 'add-product': 'products', 'np-all': 'products', 'np-save': 'products', 'edit-product': 'products', 'ep-save': 'products',
+  'add-variant': 'products', 'edit-variant': 'products', 'variant-save': 'products', 'delete-variant': 'products', 'delete-product': 'products', 'photo-remove': 'products',
   'stock-d': 'stock', receive: 'stock', 'receive-save': 'stock', history: 'stock',
-  range: 'reports', cashup: 'reports', 'cashup-save': 'reports', petty: 'reports', 'petty-type': 'reports', 'petty-cat': 'reports', 'petty-save': 'reports', 'petty-del': 'reports', 'owner-summary': 'reports', 'print-menu': 'reports', 'print-a4': 'reports',
+  range: 'reports', 'bs-open': 'reports', 'bs-sort': 'reports', 'bs-by': 'reports', 'bs-print': 'reports', 'bs-csv': 'reports', cashup: 'cashup', 'cashup-save': 'cashup', petty: 'petty', 'petty-type': 'petty', 'petty-cat': 'petty', 'petty-save': 'petty', 'petty-del': 'petty', 'owner-summary': 'reports', 'print-menu': 'reports', 'print-a4': 'reports',
   'backup-download': 'settings', 'backup-copy': 'settings', 'backup-share': 'settings', 'restore-paste': 'settings', 'email-data': 'settings', 'share-pending': 'settings',
   'export-csv': 'settings', 'start-fresh': 'settings', 'load-demo': 'settings',
   'user-add': 'admin', 'user-edit': 'admin', 'user-save': 'admin', 'user-delete': 'admin',
@@ -6524,7 +6672,7 @@ const ACTION_PERMS = {
   labels: 'stock', 'lb-fill': 'stock', 'lb-print': 'stock', stocktake: 'stock', 'st-show': 'stock', 'st-review': 'stock', 'st-back': 'stock', 'st-uncounted': 'stock', 'st-apply': 'stock', 'st-discard': 'stock', 'st-print': 'stock',
   'open-customer': 'customers', 'cust-new': 'customers', 'cust-edit': 'customers', 'cust-save': 'customers', 'cust-sell': 'customers',
   'layby-start': 'customers', 'lbf-save': 'customers', 'lb-pay': 'customers', 'lbp-save': 'customers', 'lb-remind': 'customers', 'event-msg': 'customers',
-  'lb-collect': 'customers', 'lb-cancel': 'customers', 'lbc-save': 'customers', 'stmt-a4': 'customers',
+  'lb-collect': 'customers', 'lb-cancel': 'returns', 'lbc-save': 'returns', 'stmt-a4': 'customers',
   'logo-remove': 'settings',
 };
 function allowed(perm) {
@@ -6575,6 +6723,7 @@ function bindEvents() {
       stSetCount(t.dataset.st, t.value);
       const tt = stTotals(); const k = $('[data-k="st-counted"]'); if (k) k.textContent = tt.counted;
     }
+    if (t.id === 'bsCat' && ui.bs) { ui.bs.cat = t.value; renderBestSellers(); }
     if (['actUser', 'actType', 'actDays'].includes(t.id)) { ui.actFilter[{ actUser: 'user', actType: 'type', actDays: 'days' }[t.id]] = t.value; renderActivity(); }
     if ((t.id === 'rFrom' || t.id === 'rTo') && t.value) {
       ui.customFrom = $('#rFrom').value; ui.customTo = $('#rTo').value;
