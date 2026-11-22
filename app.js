@@ -1155,13 +1155,13 @@ function buildReport(range) {
 
   // By category (line amounts before the sale discount; refunds subtracted)
   const cats = new Map();
-  const addCat = (pid, qty, amount) => {
+  const addCat = (pid, qty, amount, cost) => {
     const name = findProduct(pid)?.category || 'Other';
-    const row = cats.get(name) || { name, qty: 0, amount: 0 };
-    row.qty += qty; row.amount += amount; cats.set(name, row);
+    const row = cats.get(name) || { name, qty: 0, amount: 0, cost: 0 };
+    row.qty += qty; row.amount += amount; row.cost += cost; cats.set(name, row);
   };
-  sales.forEach(s => s.items.forEach(it => addCat(it.productId, it.qty, it.unitPrice * it.qty)));
-  rets.forEach(({ sale, ret }) => ret.items.forEach(ri => addCat(sale.items[ri.idx].productId, -ri.qty, -ri.amount)));
+  sales.forEach(s => s.items.forEach(it => addCat(it.productId, it.qty, it.unitPrice * it.qty, it.unitCost * it.qty)));
+  rets.forEach(({ sale, ret }) => ret.items.forEach(ri => { const it = sale.items[ri.idx]; addCat(it.productId, -ri.qty, -ri.amount, -it.unitCost * ri.qty); }));
 
   // By cashier
   const people = new Map();
@@ -1216,6 +1216,71 @@ function previousRevenue(range) {
   const len = range.to - range.from;
   const prev = buildReport({ from: new Date(range.from - len), to: range.from });
   return prev.count || prev.refunds ? prev.revenue : null;
+}
+
+/** Average takings per weekday in the period (Mon first), for "Busiest days". */
+function weekdayPattern(r) {
+  const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const rows = names.map(name => ({ name, amount: 0, count: 0, days: 0 }));
+  const wd = d => (new Date(d).getDay() + 6) % 7;
+  for (let d = new Date(r.from); d < r.to; d = addDays(d, 1)) rows[wd(d)].days++;
+  r.sales.forEach(s => { rows[wd(s.date)].amount += s.total; rows[wd(s.date)].count++; });
+  r.rets.forEach(({ ret }) => { rows[wd(ret.date)].amount -= ret.amount; });
+  rows.forEach(x => { x.avg = x.days ? Math.round(x.amount / x.days) : 0; });
+  return rows;
+}
+
+/** Which sizes sell in each category during the period (refunds subtracted). */
+function sizeMix(r) {
+  const cats = new Map();
+  const add = (pid, size, qty) => {
+    const cat = findProduct(pid)?.category || 'Other';
+    const m = cats.get(cat) || new Map();
+    m.set(size || '—', (m.get(size || '—') || 0) + qty);
+    cats.set(cat, m);
+  };
+  r.sales.forEach(s => s.items.forEach(it => add(it.productId, it.size, it.qty)));
+  r.rets.forEach(({ sale, ret }) => ret.items.forEach(ri => { const it = sale.items[ri.idx]; add(it.productId, it.size, -ri.qty); }));
+  return [...cats].map(([name, m]) => {
+    const sizes = [...m].map(([size, qty]) => ({ size, qty })).filter(x => x.qty > 0).sort((a, b) => b.qty - a.qty);
+    return { name, total: sum(sizes, x => x.qty), sizes };
+  }).filter(c => c.total > 0 && c.sizes.length > 1).sort((a, b) => b.total - a.total);
+}
+
+/* ----- Slow movers -----
+   Products with stock that are not selling: none sold in SLOW_DAYS days (or
+   never), or so much stock that it would take more than SLOW_DAYS × 2 days to
+   sell at the pace of the last SLOW_DAYS days. Sorted by money tied up at cost. */
+const SLOW_DAYS = 60;
+
+function slowMovers() {
+  const now = Date.now();
+  const since = now - SLOW_DAYS * DAY_MS;
+  const firstSale = state.sales.length ? +new Date(state.sales[0].date) : now;
+  const windowDays = Math.max(1, Math.min(SLOW_DAYS, (now - firstSale) / DAY_MS));
+  const last = new Map(), recent = new Map();
+  state.sales.forEach(s => s.items.forEach(it => {
+    const t = +new Date(s.date);
+    if (t > (last.get(it.productId) || 0)) last.set(it.productId, t);
+    if (t >= since) recent.set(it.productId, (recent.get(it.productId) || 0) + it.qty);
+  }));
+  const rows = [];
+  for (const p of state.products) {
+    const units = sum(p.variants, v => Math.max(0, v.stock));
+    if (!units) continue;
+    const tied = sum(p.variants, v => Math.max(0, v.stock) * costOf(p, v));
+    const lastAt = last.get(p.id);
+    const sold = recent.get(p.id) || 0;
+    const age = lastAt ? (now - lastAt) / DAY_MS : (p.created > 1e12 ? (now - p.created) / DAY_MS : Infinity);
+    const lasts = sold ? units / (sold / windowDays) : Infinity;
+    let why = null;
+    if (!lastAt && age >= SLOW_DAYS) why = 'Never sold';
+    else if (lastAt && age >= SLOW_DAYS) why = `Not sold in ${Math.floor(age)} days`;
+    else if (sold && lasts > SLOW_DAYS * 2) why = `About ${Math.round(lasts)} days of stock at this pace`;
+    if (why) rows.push({ product: p, units, tied, why, sold });
+  }
+  rows.sort((a, b) => b.tied - a.tied);
+  return { rows, tied: sum(rows, r => r.tied) };
 }
 
 /** Stock on hand with cost and retail value (for the stock report). */
@@ -2671,7 +2736,10 @@ function renderReports() {
   $('#rTo').value = toDateInput(addDays(range.to, -1));
 
   const r = buildReport(range);
-  const prev = previousRevenue(range);
+  const len = range.to - range.from;
+  const pr = buildReport({ from: new Date(range.from - len), to: range.from });
+  const hasPrev = !!(pr.count || pr.refunds);
+  const prev = hasPrev ? pr.revenue : null;
   const methods = ['cash', 'card', 'eft', 'credit', 'layby'].filter(k => ['cash', 'card', 'eft'].includes(k) || r.byPayment[k]?.sales || r.byPayment[k]?.refunds);
   const payTotal = Math.max(1, sum(methods, k => Math.max(0, r.byPayment[k].sales - r.byPayment[k].refunds)));
   const vatOn = r.vat !== 0 || effectiveRate() > 0;
@@ -2686,28 +2754,62 @@ function renderReports() {
   } else if (prev === null && r.count) {
     trend = '<div class="trend">No sales in the period before</div>';
   }
+  // Small up/down arrow under the other numbers too (same period length just before)
+  const vs = (cur, old) => {
+    if (!hasPrev || !old || old <= 0) return '';
+    const c = (cur - old) / old * 100;
+    if (Math.abs(c) < 0.5) return '<div class="trend">= same as before</div>';
+    return `<div class="trend ${c >= 0 ? 'up' : 'down'}">${c >= 0 ? '▲' : '▼'} ${pct(Math.abs(c))}</div>`;
+  };
 
   // Takings chart (CSS bars). Hours for one day, days otherwise.
   const pts = r.series.points;
   const maxPt = Math.max(1, ...pts.map(p => p.amount));
   const best = pts.reduce((a, p) => (p.amount > (a?.amount ?? 0) ? p : a), null);
+  // Quietest: the lowest day among days that had sales (days, not hours)
+  const withSales = pts.filter(p => p.count);
+  const quiet = r.series.unit === 'day' && withSales.length > 2 ? withSales.reduce((a, p) => (p.amount < a.amount ? p : a)) : null;
+  const avgPt = r.series.unit === 'day' && pts.length ? Math.round(sum(pts, p => p.amount) / pts.length) : 0;
   const every = pts.length > 20 ? 5 : pts.length > 12 ? 2 : 1;
-  const chart = `<div class="chart" style="--n:${pts.length}" role="img" aria-label="Takings per ${r.series.unit}${best ? `; best ${esc(best.label)} with ${money(best.amount)}` : ''}">
+  const chart = `<div class="chart" style="--n:${pts.length}${avgPt ? `;--avg:${Math.min(1, avgPt / maxPt).toFixed(3)}` : ''}" role="img" aria-label="Takings per ${r.series.unit}${best ? `; best ${esc(best.label)} with ${money(best.amount)}` : ''}">
     ${pts.map((p, i) => `<div class="chart-col" title="${esc(p.label)}: ${money(p.amount)} · ${p.count} sale${p.count === 1 ? '' : 's'}">
       <span class="chart-bar${p === best ? ' best' : ''}" style="height:${Math.max(0, Math.round(p.amount / maxPt * 100))}%"></span>
       <span class="chart-lbl">${i % every === 0 || p === best ? esc(p.short) : ''}</span></div>`).join('')}
+    ${avgPt ? '<span class="chart-avg" aria-hidden="true"></span>' : ''}
   </div>
-  <p class="small muted chart-note">${best ? `Best ${r.series.unit}: <strong>${esc(best.label)}</strong> · <span class="money">${money(best.amount)}</span>` : 'No sales in this period.'}</p>`;
+  <div class="chart-notes small">${best ? `<span><span class="dot best"></span>Best ${r.series.unit}: <strong>${esc(best.label)}</strong> · <span class="money">${money(best.amount)}</span></span>` : '<span class="muted">No sales in this period.</span>'}
+    ${quiet ? `<span><span class="dot quiet"></span>Quietest: <strong>${esc(quiet.label)}</strong> · <span class="money">${money(quiet.amount)}</span></span>` : ''}
+    ${avgPt ? `<span><span class="dot avg"></span>Average per day: <span class="money">${money(avgPt)}</span></span>` : ''}</div>`;
+
+  // Busiest weekdays (7 days or more)
+  const wk = range.days >= 7 ? weekdayPattern(r) : null;
+  const wkMax = wk ? Math.max(1, ...wk.map(x => x.avg)) : 1;
+  const wkBest = wk ? wk.reduce((a, x) => (x.avg > a.avg ? x : a)) : null;
+  const weekCard = wk && r.count ? `<div class="section-title" id="r-sec-week">Busiest days of the week</div>
+    <div class="card bars">${wk.map(x => `<div class="bar-row"><span>${x.name}</span>
+      <span class="bar-track" aria-hidden="true"><span class="bar-fill${x === wkBest ? ' best' : ''}" style="width:${Math.round(Math.max(0, x.avg) / wkMax * 100)}%"></span></span>
+      <span class="small money">${money(x.avg)}</span></div>`).join('')}
+      <p class="small muted" style="margin:6px 0 0">Average takings on each weekday in this period. Busiest: <strong>${wkBest.name}</strong>, handy for planning staff.</p></div>` : '';
+
+  // Stock health: value on hand, slow movers, sizes that sell
+  const ss = stockSummary();
+  const slow = slowMovers();
+  const mix = sizeMix(r);
+  const catMax = Math.max(1, ...r.categories.map(c => c.amount));
+  const catTotal = Math.max(1, sum(r.categories, c => Math.max(0, c.amount)));
+  const jump = [['r-sec-overview', 'Overview'], ['r-sec-pay', 'Payments'], ['r-sec-cat', 'Categories'], ['r-sec-top', 'Top sellers'],
+    ['r-sec-staff', 'Staff'], ['r-sec-stock', 'Stock health'], ['r-sec-reorder', 'Reorder'], ...(vatOn ? [['r-sec-vat', 'VAT']] : []), ['r-sec-recent', 'Recent sales']];
 
   $('#reportBody').innerHTML = `
-    <p class="small muted" style="margin:0 0 10px"><strong>${esc(range.label)}</strong> · refunds counted on the day they happen</p>
+    <nav class="r-jump" aria-label="Jump to a section">${jump.map(([id, l]) => `<button class="chip" data-action="r-jump" data-to="${id}">${l}</button>`).join('')}</nav>
+    <p class="small muted" style="margin:0 0 10px" id="r-sec-overview"><strong>${esc(range.label)}</strong> · refunds counted on the day they happen</p>
     <div class="kpis">
       <div class="kpi hero"><div class="label">Net takings${vatOn ? ' (incl. VAT)' : ''}</div><div class="value money" data-k="revenue">${money(r.revenue)}</div>
         <div class="sub">${r.refunds ? `<span class="money">${money(r.gross)}</span> sales − <span class="money neg">${money(r.refunds)}</span> refunds` : vatOn ? `VAT <span class="money">${money(r.vat)}</span>` : 'not VAT registered'}</div>${trend}</div>
       <div class="kpi"><div class="label">Gross profit</div><div class="value money ${r.profit < 0 ? 'neg' : ''}" data-k="profit">${money(r.profit)}</div>
-        <div class="sub">${r.exVat > 0 ? `${r.margin}% margin · ` : ''}cost <span class="money">${money(r.cost)}</span></div></div>
-      <div class="kpi"><div class="label">Sales</div><div class="value num" data-k="count">${r.count}</div><div class="sub">${r.items} items · ${r.rets.length} refund${r.rets.length === 1 ? '' : 's'}</div></div>
-      <div class="kpi"><div class="label">Average sale</div><div class="value money" data-k="avg">${money(r.avg)}</div><div class="sub">${r.discounts ? `discounts given <span class="money neg">${money(r.discounts)}</span>` : 'per customer'}</div></div>
+        <div class="sub">${r.exVat > 0 ? `${r.margin}% margin · ` : ''}cost <span class="money">${money(r.cost)}</span></div>${vs(r.profit, pr.profit)}</div>
+      <div class="kpi"><div class="label">Sales</div><div class="value num" data-k="count">${r.count}</div><div class="sub">${r.items} items · ${r.rets.length} refund${r.rets.length === 1 ? '' : 's'}</div>${vs(r.count, pr.count)}</div>
+      <div class="kpi"><div class="label">Average sale</div><div class="value money" data-k="avg">${money(r.avg)}</div><div class="sub">${r.discounts ? `discounts given <span class="money neg">${money(r.discounts)}</span>` : 'per customer'}</div>${vs(r.avg, pr.avg)}</div>
     </div>
 
     <div class="section-title">Takings per ${r.series.unit}</div>
@@ -2715,7 +2817,8 @@ function renderReports() {
 
     <div class="report-cols">
       <div>
-        <div class="section-title">By payment method</div>
+        ${weekCard}
+        <div class="section-title" id="r-sec-pay">By payment method</div>
         <div class="card bars">${methods.map(k => {
           const b = r.byPayment[k];
           const net = b.sales - b.refunds;
@@ -2729,19 +2832,26 @@ function renderReports() {
 
         ${laybyReportCard(range)}
 
-        <div class="section-title">By category</div>
-        <div class="card">${r.categories.length ? `<table class="list-table">${r.categories.map(c => `
-          <tr><td>${esc(c.name)} <span class="muted small">· ${c.qty} item${c.qty === 1 ? '' : 's'}</span></td><td><span class="money">${money(c.amount)}</span></td></tr>`).join('')}</table>
-          <p class="small muted" style="margin:6px 0 0">Shelf prices, before sale discounts.</p>`
+        <div class="section-title" id="r-sec-cat">By category</div>
+        <div class="card">${r.categories.length ? `<div class="cat-rows">${r.categories.map(c => {
+            const ex = vatOn ? c.amount * 100 / (100 + (effectiveRate() || 0)) : c.amount;
+            const m = ex > 0 ? Math.round((ex - c.cost) / ex * 100) : 0;
+            return `<div class="cat-row" style="--cat:${catColour(c.name)}">
+            <div class="cat-row-top"><span><span class="cat-dot"></span><strong>${esc(c.name)}</strong> <span class="muted small">· ${c.qty} item${c.qty === 1 ? '' : 's'}</span></span>
+              <span><span class="money">${money(c.amount)}</span> <span class="muted small">${pct(Math.max(0, c.amount) / catTotal * 100)}</span></span></div>
+            <span class="bar-track" aria-hidden="true"><span class="bar-fill" style="width:${Math.round(Math.max(0, c.amount) / catMax * 100)}%"></span></span>
+            <div class="small muted">Profit <span class="money">${money(Math.round(ex - c.cost))}</span> · ${m}% margin</div></div>`;
+          }).join('')}</div>
+          <p class="small muted" style="margin:6px 0 0">Shelf prices, before sale discounts. Profit is excl. VAT, at cost price.</p>`
           : '<div class="muted small">No sales in this period.</div>'}</div>
       </div>
       <div>
-        <div class="section-title row" style="justify-content:space-between">Top sellers <button class="btn sm" data-action="bs-open">See all</button></div>
+        <div class="section-title row" style="justify-content:space-between" id="r-sec-top">Top sellers <button class="btn sm" data-action="bs-open">See all</button></div>
         <div class="card">${r.top.length ? `<table class="list-table">${r.topAll.slice(0, 8).map((t, i) => `
           <tr><td><span class="rank">${i + 1}</span>${esc(t.name)}</td><td>${t.qty} sold · <span class="money">${money(t.amount)}</span></td></tr>`).join('')}</table>`
           : '<div class="muted small">No sales in this period.</div>'}</div>
 
-        <div class="section-title">Staff sales &amp; commission</div>
+        <div class="section-title" id="r-sec-staff">Staff sales &amp; commission</div>
         <div class="card" id="staffCard">${(() => {
           const sr = staffReport(range);
           return `${sr.rows.length ? `<table class="list-table">${sr.rows.map(c => `
@@ -2754,7 +2864,7 @@ function renderReports() {
           </div>`;
         })()}</div>
 
-        <div class="section-title">Reorder list</div>
+        <div class="section-title" id="r-sec-reorder">Reorder list</div>
         <div class="card">${(() => {
           const ro = reorderList(range);
           return ro.rows.length ? `<table class="list-table">${ro.rows.slice(0, 10).map(x => `
@@ -2764,7 +2874,7 @@ function renderReports() {
             : '<div class="muted small">Nothing to reorder: no item is low or running out.</div>';
         })()}</div>
 
-        ${vatOn ? `<div class="section-title">VAT summary</div>
+        ${vatOn ? `<div class="section-title" id="r-sec-vat">VAT summary</div>
         <div class="card"><table class="list-table">
           <tr><td>Takings incl. VAT</td><td><span class="money">${money(r.revenue)}</span></td></tr>
           <tr><td>VAT (output tax)</td><td><span class="money">${money(r.vat)}</span></td></tr>
@@ -2772,7 +2882,34 @@ function renderReports() {
         </table></div>` : ''}
       </div>
     </div>
-    <div class="section-title">Recent sales</div>
+    <div class="section-title" id="r-sec-stock">Stock health</div>
+    <div class="kpis stock-kpis">
+      <div class="kpi"><div class="label">Stock on hand</div><div class="value num">${ss.units}</div><div class="sub">items across ${state.products.length} product${state.products.length === 1 ? '' : 's'}</div></div>
+      <div class="kpi"><div class="label">Stock value at cost</div><div class="value money">${money(ss.costValue)}</div><div class="sub">what you paid for it</div></div>
+      <div class="kpi"><div class="label">Value at selling price</div><div class="value money">${money(ss.retailValue)}</div><div class="sub">if it all sells at full price</div></div>
+      <div class="kpi"><div class="label">Tied up in slow stock</div><div class="value money ${slow.tied ? 'warn' : ''}">${money(slow.tied)}</div><div class="sub">${slow.rows.length} product${slow.rows.length === 1 ? '' : 's'} not selling well</div></div>
+    </div>
+    <div class="report-cols">
+      <div>
+        <div class="section-title">Slow movers</div>
+        <div class="card">${slow.rows.length ? `<table class="list-table">${slow.rows.slice(0, 8).map(x => `
+          <tr><td><span class="cat-dot" style="--cat:${catColour(x.product.category)}"></span>${esc(x.product.name)} <span class="muted small">· ${x.units} in stock</span><br>
+            <span class="small slow-why">${esc(x.why)}</span></td><td><span class="money">${money(x.tied)}</span><br><span class="small muted">at cost</span></td></tr>`).join('')}</table>
+          <p class="small muted" style="margin:6px 0 0">Not sold in ${SLOW_DAYS} days, or enough stock for more than ${SLOW_DAYS * 2} days at the pace of the last ${SLOW_DAYS} days. Good candidates for a sale or a new spot on the floor.</p>`
+          : `<div class="good-news">✓ Everything is selling. Nothing has sat unsold for ${SLOW_DAYS} days.</div>`}</div>
+      </div>
+      <div>
+        <div class="section-title">Sizes that sell</div>
+        <div class="card">${mix.length ? mix.slice(0, 6).map(c => `<div class="size-mix" style="--cat:${catColour(c.name)}">
+          <div class="size-mix-head"><span class="cat-dot"></span><strong>${esc(c.name)}</strong> <span class="muted small">· ${c.total} sold</span></div>
+          <div class="size-stack" aria-hidden="true">${c.sizes.map((s, i) => `<span style="flex:${s.qty};opacity:${Math.max(0.35, 1 - i * 0.16).toFixed(2)}"></span>`).join('')}</div>
+          <div class="size-chips">${c.sizes.slice(0, 6).map(s => `<span class="size-chip"><b>${esc(s.size)}</b> ${pct(s.qty / c.total * 100)}</span>`).join('')}</div></div>`).join('')
+          + '<p class="small muted" style="margin:6px 0 0">Share of items sold per size in this period. Use it to order the right size spread. Choose 30 days or more above for a better picture.</p>'
+          : '<div class="muted small">Not enough sales in this period to compare sizes.</div>'}</div>
+      </div>
+    </div>
+
+    <div class="section-title" id="r-sec-recent">Recent sales</div>
     ${r.sales.length ? r.sales.slice().reverse().slice(0, 10).map(saleRow).join('') : '<div class="empty">No sales in this period.</div>'}`;
 }
 
@@ -6669,6 +6806,7 @@ const actions = {
   'st-print': () => printStocktakeA4(),
   'event-msg': el => messageEvent(el.dataset.id),
   'bs-open': () => openBestSellers(),
+  'r-jump': el => { const t = document.getElementById(el.dataset.to); if (t) t.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); },
   'bs-sort': el => { ui.bs.sort = el.dataset.v; renderBestSellers(); },
   'bs-by': el => { ui.bs.by = el.dataset.v; renderBestSellers(); },
   'bs-print': () => printA4('best'),
@@ -6741,7 +6879,7 @@ const ACTION_PERMS = {
   'toggle-low': '', 'add-product': 'products', 'np-all': 'products', 'np-save': 'products', 'edit-product': 'products', 'ep-save': 'products',
   'add-variant': 'products', 'edit-variant': 'products', 'variant-save': 'products', 'delete-variant': 'products', 'delete-product': 'products', 'photo-remove': 'products',
   'stock-d': 'stock', receive: 'stock', 'receive-save': 'stock', history: 'stock',
-  range: 'reports', 'bs-open': 'reports', 'bs-sort': 'reports', 'bs-by': 'reports', 'bs-print': 'reports', 'bs-csv': 'reports', cashup: 'cashup', 'cashup-save': 'cashup', petty: 'petty', 'petty-type': 'petty', 'petty-cat': 'petty', 'petty-save': 'petty', 'petty-del': 'petty', 'owner-summary': 'reports', 'print-menu': 'reports', 'print-a4': 'reports',
+  range: 'reports', 'r-jump': 'reports', 'bs-open': 'reports', 'bs-sort': 'reports', 'bs-by': 'reports', 'bs-print': 'reports', 'bs-csv': 'reports', cashup: 'cashup', 'cashup-save': 'cashup', petty: 'petty', 'petty-type': 'petty', 'petty-cat': 'petty', 'petty-save': 'petty', 'petty-del': 'petty', 'owner-summary': 'reports', 'print-menu': 'reports', 'print-a4': 'reports',
   'backup-download': 'settings', 'backup-copy': 'settings', 'backup-share': 'settings', 'restore-paste': 'settings', 'email-data': 'settings', 'share-pending': 'settings',
   'export-csv': 'settings', 'start-fresh': 'settings', 'load-demo': 'settings',
   'user-add': 'admin', 'user-edit': 'admin', 'user-save': 'admin', 'user-delete': 'admin',

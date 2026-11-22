@@ -17,6 +17,19 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v35 — 2026-11-22 · Reports: stock health, sizes that sell, busiest days
+
+- ✨ **Stock health** section: stock on hand, stock value at cost and at selling price, and how much money is tied up in slow stock.
+- ✨ **Slow movers**: products not sold in 60 days (or never), or with enough stock for more than 120 days at the current pace, sorted by money tied up. Good candidates for a sale.
+- ✨ **Sizes that sell**: for each category, the share of items sold per size (for example Bottoms: 32 · 36%, 36 · 27%), to order the right size spread.
+- ✨ **Busiest days of the week** (7 days or more): average takings per weekday, for planning staff.
+- ✨ A **jump bar** at the top of Reports (Overview, Payments, Categories, Top sellers, Staff, Stock health, Reorder, VAT, Recent sales) that stays in view while scrolling.
+- 🔧 Profit, Sales and Average sale now show ▲/▼ compared with the period before, like Net takings already did.
+- 🔧 The takings chart shows a dashed average line, and the best day, quietest day and average per day under it.
+- 🔧 By category now has a coloured bar per category (same colours as the product tiles), its share of takings, and profit and margin.
+
+---
+
 ## v34 — 2026-11-22 · Sale complete screen, calmer buttons and header
 
 - ✨ After a sale, a clear **Sale complete** screen: a big tick, the total and payment method, the **change due in large numbers** for cash, and Print / WhatsApp / Email / Copy / **New sale** buttons. The slip is folded away under "Show receipt". New sale is selected, so pressing Enter starts the next sale.

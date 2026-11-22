@@ -951,3 +951,35 @@ input:disabled { opacity: .5; }
 .sold-receipt[open] summary::after { content: " ▴"; }
 .modal-foot .sold-new { min-width: 140px; }
 @media (prefers-reduced-motion: reduce) { .sold-tick { animation: none; } }
+
+/* ===== Reports: jump bar, chart notes, categories, stock health ===== */
+.r-jump { position: sticky; top: var(--header-h); z-index: 5; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
+  margin: 0 -4px 10px; padding: 8px 4px; background: var(--bg); }
+.r-jump::-webkit-scrollbar { display: none; }
+.r-jump .chip { flex: none; font-size: 12px; padding: 5px 11px; }
+#reportBody [id^="r-sec-"] { scroll-margin-top: calc(var(--header-h) + 56px); }
+.chart { position: relative; }
+.chart-avg { position: absolute; left: 0; right: 0; bottom: calc(22px + (100% - 28px) * var(--avg)); border-top: 1.5px dashed color-mix(in srgb, var(--text) 45%, transparent); pointer-events: none; }
+.chart-notes { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; color: var(--muted); }
+.chart-notes strong { color: var(--text); }
+.chart-notes .dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; vertical-align: 0; }
+.chart-notes .dot.best { background: var(--money-bar); }
+.chart-notes .dot.quiet { background: color-mix(in srgb, var(--money-bar) 55%, var(--surface-2)); }
+.chart-notes .dot.avg { height: 0; border-top: 2px dashed color-mix(in srgb, var(--text) 55%, transparent); border-radius: 0; vertical-align: 3px; }
+#view-reports .bar-fill.best { background: var(--accent); box-shadow: 0 0 10px color-mix(in srgb, var(--accent) var(--g1), transparent); }
+.cat-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px; background: var(--cat, var(--accent)); vertical-align: 0; box-shadow: 0 0 6px color-mix(in srgb, var(--cat, var(--accent)) 50%, transparent); }
+.cat-rows { display: flex; flex-direction: column; gap: 12px; }
+.cat-row { display: flex; flex-direction: column; gap: 5px; }
+.cat-row-top { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
+#view-reports .cat-row .bar-fill { background: var(--cat); box-shadow: 0 0 8px color-mix(in srgb, var(--cat) 45%, transparent); }
+.stock-kpis .kpi { border-top-color: var(--neon) !important; box-shadow: 0 -4px 16px -6px color-mix(in srgb, var(--neon) var(--g1), transparent) !important; }
+#view-reports .kpi .value.money.warn { color: var(--warn); text-shadow: none; }
+.slow-why { color: var(--warn); font-weight: 600; }
+.good-news { color: var(--ok); font-weight: 650; padding: 6px 2px; }
+.size-mix { margin-bottom: 14px; }
+.size-mix-head { font-size: 14px; margin-bottom: 6px; }
+.size-stack { display: flex; height: 10px; border-radius: 99px; overflow: hidden; gap: 2px; margin-bottom: 7px; }
+.size-stack span { background: var(--cat); }
+.size-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.size-chip { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--surface-2); color: var(--muted); }
+.size-chip b { color: var(--text); margin-right: 3px; }
