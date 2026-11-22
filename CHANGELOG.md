@@ -17,6 +17,13 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v32 — 2026-11-22 · Clearer product tiles
+
+- 🔧 Each category now has its own colour (the strip down the left of the tile) and a small clothing icon in the corner: shirt, pants, dress, jacket, shoe, bag, or a hanger for anything else. A product photo still takes that corner when there is one.
+- 🔧 The stock badge now says "58 in stock" (green), "Only 2 left" (orange) or "Out of stock" (red), instead of a bare number.
+
+---
+
 ## v31 — 2026-11-22 · Rails POS name on the till header
 
 - 🔧 The header now shows the Rails POS logo and name, then a thin divider and the shop's own name. Before, the shop name replaced "Rails POS". On narrow phones only the logo and shop name show, so the header stays tidy.

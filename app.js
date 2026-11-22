@@ -2109,6 +2109,31 @@ function showView(name) {
 
 /* ----- Sell ----- */
 
+/* Each category gets its own colour (the strip down the tile's left edge) and a
+   small clothing icon picked from words in its name. Same name → same colour. */
+const CAT_COLOURS = ['#45d3e8', '#ff5fa2', '#f5dc3c', '#4ade80', '#a78bfa', '#fb923c', '#60a5fa', '#2dd4bf'];
+const CAT_FIXED = { tops: 0, bottoms: 3, dresses: 1, outerwear: 4, accessories: 5, shoes: 6, kids: 7 };
+function catColour(cat) {
+  const k = String(cat || '').trim().toLowerCase();
+  if (k in CAT_FIXED) return CAT_COLOURS[CAT_FIXED[k]];
+  let h = 0;
+  for (const ch of k) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return CAT_COLOURS[h % CAT_COLOURS.length];
+}
+const CAT_ICONS = [
+  [/dress|skirt|gown/, 'i-cat-dress'],
+  [/jacket|coat|outer|blazer|hood|sweat|jersey|knit/, 'i-cat-jacket'],
+  [/bottom|jean|pant|trouser|short|legging|chino/, 'i-cat-pants'],
+  [/shoe|sneaker|boot|sandal|heel|slipper|foot/, 'i-cat-shoe'],
+  [/access|bag|belt|sock|hat|cap|scarf|jewel|watch|sunglass|wallet/, 'i-cat-bag'],
+  [/top|shirt|tee|blouse|polo|vest|kurta/, 'i-cat-shirt'],
+];
+function catIcon(cat) {
+  const k = String(cat || '').toLowerCase();
+  const id = (CAT_ICONS.find(([re]) => re.test(k)) || [, 'i-cat-hanger'])[1];
+  return `<span class="cat-icon" aria-hidden="true"><svg><use href="#${id}"/></svg></span>`;
+}
+
 /** "R199.00" or "from R199.00" when variants have different prices. */
 function priceLabel(p) {
   const prices = [...new Set(p.variants.map(v => priceOf(p, v)))];
@@ -2134,13 +2159,13 @@ function renderSell() {
 
   $('#productGrid').innerHTML = list.length ? list.map(p => {
     const stock = productStock(p);
-    const badge = stock === 0 ? '<span class="badge out">Out</span>'
-      : stock <= low ? `<span class="badge low">${stock} left</span>`
-      : `<span class="badge">${stock}</span>`;
+    const badge = stock === 0 ? '<span class="badge out">Out of stock</span>'
+      : stock <= low ? `<span class="badge low">Only ${stock} left</span>`
+      : `<span class="badge stock">${stock} in stock</span>`;
     const photo = thumbHtml(p);
-    return `<button class="product-card ${stock === 0 ? 'out' : ''} ${photo ? 'has-photo' : ''}" data-action="pick" data-id="${esc(p.id)}"
+    return `<button class="product-card ${stock === 0 ? 'out' : ''} ${photo ? 'has-photo' : ''}" style="--cat:${catColour(p.category)}" data-action="pick" data-id="${esc(p.id)}"
         aria-label="${esc(p.name)}, ${esc(priceLabel(p))}, ${stock} in stock">
-        ${photo}<span class="name">${esc(p.name)}</span>
+        ${photo || catIcon(p.category)}<span class="name">${esc(p.name)}</span>
         <span class="cat">${esc(p.category)} · ${p.variants.length} option${p.variants.length === 1 ? '' : 's'}</span>
         <span class="bottom"><span class="price money">${priceLabel(p)}</span>${badge}</span>
       </button>`;
