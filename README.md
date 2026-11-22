@@ -58,6 +58,14 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
 - **Barcode labels**
   - Stock → **Labels** (all products) or a product's **Labels** button. Choose how many of each size (or "Quantity = stock" / "1 of each"), the sheet (24, 21 or 40 per A4 sheet, or plain paper to cut out) and where to start on a half-used sheet.
   - Each label shows the shop name, product, size/colour, price, a Code 128 barcode of the SKU and the SKU. It scans with the camera or a USB scanner. Print at **100% / Actual size** with **no margins**.
+- **Shop floor and control** (v29)
+  - **Park a sale** for customers in the fitting room, and bring it back later.
+  - **Petty cash** paid out of or added to the till, counted in the cash-up.
+  - **Daily summary on WhatsApp** to the owner: takings, payment split, profit, lay-bys, petty cash, cash-ups over/short.
+  - **Activity log** (Admin): who gave discounts, refunds, price and stock changes, deletions, cash-ups, staff changes.
+  - **Full stock take** with a missing / extra report (value at cost) and A4 print.
+  - **Client events** (wedding, matric dance…) with a final-fitting date and WhatsApp reminders.
+  - **Returns-policy check**: warns when a return is outside the shop's return period.
 - **Subscription (licence)**
   - A device without a shop account has a **14-day free trial**. A new cloud shop gets **30 days free**, then follows its paid-until date (`shops.active_until`, set by the supplier in Supabase; shops can't change it). No date means no end.
   - Reminder in the last 7 days. After the date there are 7 days' grace, then **selling pauses**: Charge is disabled, but reports, backups and settings still work. The date is checked on every sync and remembered offline.

@@ -839,6 +839,108 @@ test('Email me my data: one zip with Excel files and a full backup; the stock li
   ok(['R380 per month', 'R50 per month', 'R1 500', 'POPIA', 'Information Regulator', 'operator'].every(x => legal.includes(x)), 'terms page has prices, POPIA and operator terms');
 });
 
+test('Park a sale, petty cash, daily summary, returns policy, activity log, stock take, client events', async () => {
+  const setv = (sel, v) => { const el = $(sel); if (!el) throw new Error(`Not found: ${sel} (modal ${$('#modal').hidden ? 'hidden' : 'open: ' + $('#modalTitle')?.textContent}, view ${P.ui.view}, stocktake ${JSON.stringify(P.state.meta.stocktake)?.slice(0, 80)}, inert ${!!$('#modal').closest('[inert]')})`); el.value = v; return el; };
+  const S = P.state;
+  const p = S.products.find(x => x.variants.filter(v => v.stock >= 3).length >= 2);
+  const [v1, v2] = p.variants.filter(v => v.stock >= 3);
+  await nav('sell');
+  // 1. Park a sale (fitting room), serve someone else, bring it back
+  w.addToCart(v1.id, 2); await tick();
+  w.openPark(); await tick();
+  type('#parkName', 'Fitting room 2');
+  click('[data-action="park-save"]'); await tick(300);
+  eq([P.ui.cart.lines.length, S.meta.parked.length, $('#parkedBtn').hidden, $('#parkedBtn').textContent], [0, 1, false, 'Parked (1)'], 'sale parked, cart empty, Parked button shown');
+  w.addToCart(v2.id, 1); await tick();
+  w.openParked(); await tick();
+  ok($('#modal').textContent.includes('Fitting room 2'), 'parked list shows the name');
+  click(`[data-action="park-resume"][data-id="${S.meta.parked[0].id}"]`); await tick(400);
+  eq([P.ui.cart.lines.map(l => [l.variantId, l.qty]), S.meta.parked.length], [[[v1.id, 2]], 1], 'parked sale back in the cart; the other sale was parked automatically');
+  w.closeCartSheet(); await tick();
+  w.closeModal?.(); closeModal();
+  w.deleteParked(S.meta.parked[0].id); await confirmYes(); await tick(200);
+  eq(S.meta.parked.length, 0, 'parked sale deleted');
+  P.ui.cart = w.emptyCart(); w.saveCart(true); await tick();
+
+  // 2. Petty cash: paid out and cash added change the expected cash
+  const before = w.computeShift(S.meta.lastCashupAt, new Date().toISOString()).expected;
+  w.openPetty(); await tick();
+  type('#ptAmount', '30'); type('#ptNote', 'milk');
+  click('[data-action="petty-save"]'); await tick(300);
+  click('[data-action="petty-type"][data-v="in"]'); await tick();
+  type('#ptAmount', '100');
+  click('[data-action="petty-save"]'); await tick(300);
+  const sh = w.computeShift(S.meta.lastCashupAt, new Date().toISOString());
+  eq([sh.pettyOut, sh.pettyIn, sh.expected - before], [3000, 10000, 7000], 'petty cash in the expected cash (−R30 + R100)');
+  ok(w.zText({ ...sh, number: 99, counted: sh.expected, diff: 0, nextFloat: 0, store: w.storeSnapshot() }).includes('Petty cash paid out'), 'Z-report shows petty cash');
+  closeModal();
+
+  // 3. Daily summary to the owner on WhatsApp
+  S.settings.ownerWhatsApp = '082 000 1111';
+  const txt = w.dailySummaryText();
+  ok(txt.includes('Net takings') && txt.includes('Petty cash paid out: R30.00') && txt.includes('Sent from Rails POS'), 'summary text: ' + txt.slice(0, 80));
+  let url = ''; const wo = w.open; w.open = u => { url = u; };
+  w.sendDailySummary();
+  w.open = wo;
+  ok(url.startsWith('https://wa.me/27820001111?text='), 'WhatsApp to the owner');
+
+  // 4. Returns policy: a sale from 20 days ago is outside the 7-day period
+  const old = S.sales.find(s => s.status !== 'returned' && s.items.length);
+  const keepDate = old.date;
+  old.date = new Date(Date.now() - 20 * 864e5).toISOString();
+  w.openReturn(old.id); await tick();
+  ok($('#modal .ret-policy') && $('#modal .ret-policy').textContent.includes('return period is 7 days'), 'warning: outside the return period');
+  w.closeModal(); await tick();
+  old.date = keepDate;
+
+  // 5. Activity log: earlier discounts, refunds, stock and petty cash are recorded with who did it
+  const types = new Set(S.activity.map(a => a.type));
+  ok(['discount', 'refund', 'exchange', 'petty', 'stock', 'cashup', 'layby'].every(t => types.has(t)), 'activity types: ' + [...types].join(','));
+  ok(S.activity.every(a => a.date && a.text), 'every entry has a time and text');
+  await nav('admin');
+  await tick(300);
+  ok($('#activityLog .act-log') && $('#activityLog .act-petty'), `Admin shows the activity log (view: ${P.ui.view}, user: ${P.ui.user?.name}, perms: ${(P.ui.user?.perms || []).join(' ')}, modal: ${!$('#modal').hidden}, rows: ${d.querySelectorAll('#activityLog tr').length})`);
+  const sel = setv('#actType', 'petty'); sel.dispatchEvent(new w.Event('change', { bubbles: true })); await tick();
+  ok([...d.querySelectorAll('#activityLog .act-tag')].every(t => t.textContent === 'Petty cash'), 'filter by kind');
+  P.ui.actFilter = { user: '', type: '', days: '7' };
+
+  // 6. Stock take: scan twice, type a count, review, apply
+  await nav('stock');
+  w.openStocktake(); await tick();
+  setv('#stScan', v1.sku).dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await tick(80);
+  setv('#stScan', v1.sku).dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await tick(80);
+  const box = setv(`[data-st="${v2.id}"]`, String(v2.stock + 4)); box.dispatchEvent(new w.Event('change', { bubbles: true })); await tick(80);
+  eq([S.meta.stocktake.counts[v1.id], S.meta.stocktake.counts[v2.id]], [2, v2.stock + 4], 'counts from scans and typing');
+  click('[data-action="st-review"]'); await tick();
+  const exp1 = v1.stock;
+  ok($('#stBody').textContent.includes('Missing') && $('#stBody').textContent.includes(`${2 - exp1}`), 'review shows missing / extra');
+  click('[data-action="st-apply"]'); await tick(); await confirmYes();
+  eq([v1.stock, v2.stock - 4 >= 0, S.meta.stocktake], [2, true, undefined], 'stock set to the counts, session finished');
+  ok((await movements()).some(m => m.ref === 'Stock take' && m.variantId === v1.id && m.change === 2 - exp1), 'recorded as a stock count');
+  ok(S.activity.some(a => a.type === 'stocktake' && a.text.includes('missing')), 'stock take in the activity log');
+
+  // 7. Client event: wedding in 10 days → Events list, fitting date, WhatsApp message
+  await nav('customers');
+  w.openCustomerEdit(); await tick();
+  type('#cuName', 'Bride Test'); type('#cuPhone', '082 333 4444');
+  setv('#cuEventType', 'Wedding');
+  const ev = new Date(Date.now() + 10 * 864e5); const ymd = `${ev.getFullYear()}-${String(ev.getMonth() + 1).padStart(2, '0')}-${String(ev.getDate()).padStart(2, '0')}`;
+  setv('#cuEventDate', ymd);
+  click('[data-action="cust-save"]'); await tick(300);
+  const bride = S.customers.find(c => c.name === 'Bride Test');
+  eq([bride.eventType, bride.eventDate], ['Wedding', ymd], 'event saved on the client');
+  ok($('#customersBody').textContent.includes('Wedding') && $('#customersBody').textContent.includes('final fitting by'), 'profile shows the event and fitting date');
+  click('[data-action="cust-back"]'); await tick();
+  click('[data-action="cust-filter"][data-f="events"]'); await tick();
+  ok($('#custList').textContent.includes('Bride Test') && $('#custList').textContent.includes('Final fitting by'), 'Events list');
+  const msg = w.eventMessage(bride);
+  ok(msg.includes('wedding') && msg.includes('10 days') && msg.includes('final fitting'), 'event message: ' + msg);
+  url = ''; w.open = u => { url = u; };
+  click(`[data-action="event-msg"][data-id="${bride.id}"]`); await tick(200);
+  w.open = wo;
+  ok(url.startsWith('https://wa.me/27823334444') && bride.eventMessaged, 'WhatsApp opened and noted');
+});
+
 test('Only one tab at a time; the other can take over', async () => {
   const main = document.getElementById('app'), second = document.getElementById('app2');
   await loadApp(second);
@@ -974,6 +1076,7 @@ test('Admin: add a cashier who can only sell and see sales; edit, protect the la
   click(`[data-action="user-delete"][data-id="${thandi.id}"]`); await confirmYes();
   eq((await P.DB.get('kv', 'auth')).users.length, 1, 'deleted');
   ok(P.state.sales.some(s => s.cashier === 'Thandi'), 'her past sale keeps her name');
+  ok(P.state.activity.some(a => a.type === 'staff' && a.text.includes('Added staff member Thandi')) && P.state.activity.some(a => a.type === 'staff' && a.text.includes('Deleted staff member Thandi')), 'staff changes are in the activity log');
 });
 
 /* ---------- a fake Supabase (auth + REST) for the sync tests ---------- */

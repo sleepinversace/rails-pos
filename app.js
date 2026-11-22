@@ -107,8 +107,10 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
    cloud and removes them from the outbox once they have arrived.
    ======================================================================== */
 
-const STORES = ['kv', 'products', 'sales', 'movements', 'cashups', 'customers', 'laybys', 'outbox'];
-const SYNC_STORES = ['products', 'sales', 'movements', 'cashups', 'customers', 'laybys'];
+const STORES = ['kv', 'products', 'sales', 'movements', 'cashups', 'customers', 'laybys', 'expenses', 'activity', 'outbox'];
+const SYNC_STORES = ['products', 'sales', 'movements', 'cashups', 'customers', 'laybys', 'expenses', 'activity'];
+// Record arrays kept in memory (state.<name>), saved and synced (v5 adds petty cash and the activity log).
+const DATA_STORES = ['products', 'sales', 'cashups', 'customers', 'laybys', 'expenses', 'activity'];
 const SYNC_KV = ['settings', 'auth']; // shared by all devices (meta, cart and cloud login stay per device)
 
 /** "sales:s123" for an op that must be sent to the cloud, else null. */
@@ -125,7 +127,7 @@ const DB = (() => {
     if (dbPromise) return dbPromise;
     dbPromise = new Promise((resolve, reject) => {
       if (!('indexedDB' in window)) return reject(new Error('This browser cannot store data (IndexedDB missing).'));
-      const req = indexedDB.open(DB_NAME, 4);
+      const req = indexedDB.open(DB_NAME, 5);
       req.onupgradeneeded = e => {
         const db = req.result;
         const tx = req.transaction;
@@ -137,6 +139,8 @@ const DB = (() => {
         if (!db.objectStoreNames.contains('outbox')) db.createObjectStore('outbox', { keyPath: 'key' }); // v3: cloud sync queue
         if (!db.objectStoreNames.contains('customers')) db.createObjectStore('customers', { keyPath: 'id' }); // v4: customers
         if (!db.objectStoreNames.contains('laybys')) db.createObjectStore('laybys', { keyPath: 'id' }).createIndex('customerId', 'customerId'); // v4: lay-bys
+        if (!db.objectStoreNames.contains('expenses')) db.createObjectStore('expenses', { keyPath: 'id' }); // v5: petty cash
+        if (!db.objectStoreNames.contains('activity')) db.createObjectStore('activity', { keyPath: 'id' }); // v5: activity log
         // Version 1 kept whole arrays in kv — move them into their own stores.
         if (e.oldVersion === 1) {
           const kv = tx.objectStore('kv');
@@ -222,9 +226,11 @@ async function persistEverything(movements = []) {
     ...state.cashups.map(c => opPut('cashups', c)),
     ...state.customers.map(c => opPut('customers', c)),
     ...state.laybys.map(l => opPut('laybys', l)),
+    ...state.expenses.map(x => opPut('expenses', x)),
+    ...state.activity.map(a => opPut('activity', a)),
     ...movements.map(m => opPut('movements', m)),
   ];
-  await DB.write(ops, ['products', 'sales', 'movements', 'cashups', 'customers', 'laybys']);
+  await DB.write(ops, ['products', 'sales', 'movements', 'cashups', 'customers', 'laybys', 'expenses', 'activity']);
 }
 
 /* ===== 3. State & loading =============================================== */
@@ -244,12 +250,17 @@ const DEFAULT_SETTINGS = {
   autoPrint: false,         // print new receipts / slips straight away
   laybyMonths: 3,           // default lay-by term
   laybyReminder: '',        // WhatsApp reminder wording ('' = the built-in message)
+  fittingDays: 14,          // final fitting this many days before a client's event
+  eventReminder: '',        // WhatsApp wording for event reminders ('' = built-in)
   commissionRate: 0,        // staff commission, % of each person's net sales excl. VAT (Reports)
   vatRegistered: true,      // false = no VAT on receipts or in reports
   vatNumber: '',
   vatRate: 15,              // percent; prices include VAT
   receiptFooter: 'Thank you for shopping with us!\nExchanges within 7 days with receipt.',
   lowStock: 3,
+  returnDays: 7,            // return / exchange period in days (0 = no limit); a warning only
+  ownerWhatsApp: '',        // owner's number for the daily summary
+  pettyCategories: 'Cleaning, Refreshments, Transport, Stationery, Wages, Other',
   theme: 'auto',            // auto | light | dark
   lastBackupAt: null,
   // PLUG-IN: multiple branches — add storeId / branchName here and stamp it on each sale.
@@ -293,6 +304,8 @@ const state = {
   cashups: [],
   customers: [],
   laybys: [],
+  expenses: [],  // petty cash paid out of / added to the drawer
+  activity: [],  // who did what (discounts, refunds, price changes…)
 };
 
 /** UI-only state. The cart is saved too (see saveCart) so a flat phone doesn't lose it. */
@@ -316,17 +329,20 @@ function emptyCart(payment = 'cash') {
 }
 
 async function loadState() {
-  const [settings, meta, cart, products, sales, cashups, customers, laybys] = await Promise.all([
+  const [settings, meta, cart, products, sales, cashups, customers, laybys, expenses, activity] = await Promise.all([
     DB.get('kv', 'settings'), DB.get('kv', 'meta'), DB.get('kv', 'cart'),
     DB.getAll('products'), DB.getAll('sales'), DB.getAll('cashups'), DB.getAll('customers'), DB.getAll('laybys'),
+    DB.getAll('expenses'), DB.getAll('activity'),
   ]);
+  state.expenses = expenses.sort(byDate2);
+  state.activity = activity.sort(byDate2);
   if (!meta) {
     // A brand-new device: start empty; the first-time setup (section 14d)
     // creates the shop, or loads demo data, or joins a synced shop.
     ui.firstRun = true;
     state.settings = { ...DEFAULT_SETTINGS };
     state.meta = { ...DEFAULT_META };
-    state.products = []; state.sales = []; state.cashups = []; state.customers = []; state.laybys = [];
+    state.products = []; state.sales = []; state.cashups = []; state.customers = []; state.laybys = []; state.expenses = []; state.activity = [];
     return;
   }
   ui.firstRun = false;
@@ -347,6 +363,7 @@ async function loadState() {
 /** Bring older sale records up to the current shape. */
 const byDate = (a, b) => a.date.localeCompare(b.date) || a.number - b.number;
 const byName = (a, b) => a.name.localeCompare(b.name);
+const byDate2 = (a, b) => String(a.date).localeCompare(String(b.date));
 
 function normalizeSale(s) {
   s.returns ||= [];
@@ -384,6 +401,7 @@ function loadDemoData() {
   state.settings = { ...DEFAULT_SETTINGS, storeName: 'Demo Boutique', storeAddress: '12 Long Street, Cape Town', vatNumber: '4000000000' };
   state.products = [];
   state.cashups = [];
+  state.expenses = [];
   defs.forEach(([name, category, price, cost, sizes, colours], i) => {
     const product = { id: uid('p'), name, category, price: price * 100, cost: cost * 100, created: i, variants: [] };
     for (const colour of colours) for (const size of sizes) {
@@ -433,6 +451,8 @@ function loadDemoData() {
     mkCust('Zanele Dlamini', '073 555 0202', ''),
     mkCust('Ayesha Khan', '061 555 0303', 'ayesha@example.com', 15000),
   ];
+  // An upcoming wedding, so the Events list has something to show
+  Object.assign(state.customers[0], { eventType: 'Wedding', eventDate: toDateInput(addDays(startOfDay(), 24)) });
   const mkLayby = (no, cust, startDay, picks, pays) => {
     const items = picks.map(([pi, vi]) => {
       const p = state.products[pi], v = p.variants[vi];
@@ -551,6 +571,90 @@ function saveCart(now = false) {
 }
 
 /** Put a saved cart back, dropping deleted variants and clamping to stock. */
+/* ----- Parked sales (fitting rooms) -----
+   Put the current cart aside with a name ("Lady in fitting room 2"), serve the
+   next customer, then bring it back. Kept on this device only (meta.parked).
+   Stock is not taken off until the sale is completed. */
+const parkedList = () => (state.meta.parked ||= []);
+
+function cartLinesTotal(cart) {
+  return sum(cart.lines, l => { const f = findVariant(l.variantId); return f ? priceOf(f.product, f.variant) * l.qty : 0; });
+}
+
+function openPark() {
+  if (!ui.cart.lines.length) return toast('The cart is empty', true);
+  if (ui.cart.credit) return toast('Finish or cancel the exchange first', true);
+  openModal({
+    title: 'Park this sale',
+    body: `<p class="small muted" style="margin-top:0">The items stay aside on this till so you can serve someone else. Bring the sale back from <strong>Parked</strong> on the Sell screen.</p>
+      <label class="field"><span>Name or note (optional)</span><input id="parkName" class="input" maxlength="40" placeholder="e.g. Lady in fitting room 2" value="${esc(ui.cart.customer?.name || findCustomer(ui.cart.customerId)?.name || '')}" autofocus></label>`,
+    foot: '<button class="btn" data-action="close-modal">Cancel</button><button class="btn primary" data-action="park-save">Park sale</button>',
+  });
+}
+
+async function parkCart(name = '') {
+  const lines = ui.cart.lines.reduce((a, l) => a + l.qty, 0);
+  const p = { id: uid('pk'), at: new Date().toISOString(), name: String(name).trim().slice(0, 40) || `Sale at ${fmtTime(new Date().toISOString())}`,
+    cashier: ui.user?.name || '', cart: clone(ui.cart) };
+  parkedList().push(p);
+  ui.cart = emptyCart(ui.cart.payment);
+  $('#discountValue').value = ''; $('#tendered').value = '';
+  await persist([opKv('meta', state.meta), opKv('cart', ui.cart)]);
+  closeModal();
+  closeCartSheet();
+  renderAll();
+  toast(`Parked: ${p.name} (${lines} item${lines === 1 ? '' : 's'})`);
+}
+
+function openParked() {
+  const list = parkedList();
+  if (!list.length) return toast('No parked sales', true);
+  openModal({
+    title: `Parked sales (${list.length})`,
+    body: list.slice().reverse().map(p => {
+      const items = p.cart.lines.reduce((a, l) => a + l.qty, 0);
+      return `<div class="card parked-row">
+        <div class="grow"><strong>${esc(p.name)}</strong><div class="small muted">${fmtTime(p.at)}${fmtDate(p.at) !== fmtDate(new Date().toISOString()) ? ` · ${fmtDate(p.at)}` : ''} · ${items} item${items === 1 ? '' : 's'} · <span class="money">${money(cartLinesTotal(p.cart))}</span>${p.cashier ? ` · ${esc(p.cashier)}` : ''}</div></div>
+        <div class="row gap-s"><button class="btn sm primary" data-action="park-resume" data-id="${esc(p.id)}">Bring back</button>
+          <button class="btn sm ghost" data-action="park-del" data-id="${esc(p.id)}" aria-label="Delete parked sale ${esc(p.name)}">✕</button></div>
+      </div>`;
+    }).join(''),
+    foot: '<button class="btn" data-action="close-modal">Close</button>',
+  });
+}
+
+async function resumeParked(id) {
+  const list = parkedList();
+  const p = list.find(x => x.id === id);
+  if (!p) return;
+  if (ui.cart.credit) return toast('Finish or cancel the exchange in the cart first', true);
+  const ops = [];
+  if (ui.cart.lines.length) {
+    // Don't lose what's in the cart now: park it first.
+    list.push({ id: uid('pk'), at: new Date().toISOString(), name: `Sale at ${fmtTime(new Date().toISOString())}`, cashier: ui.user?.name || '', cart: clone(ui.cart) });
+    toast('The sale that was in the cart has been parked');
+  }
+  state.meta.parked = list.filter(x => x !== p);
+  const wanted = p.cart.lines.reduce((a, l) => a + l.qty, 0);
+  restoreCart(p.cart); // drops sold-out lines and caps quantities at what is in stock now
+  const got = ui.cart.lines.reduce((a, l) => a + l.qty, 0);
+  ops.push(opKv('meta', state.meta), opKv('cart', ui.cart));
+  await persist(ops);
+  closeModal();
+  showView('sell');
+  if (!isWide()) openCartSheet();
+  if (got < wanted) toast(`${wanted - got} item${wanted - got === 1 ? '' : 's'} sold out meanwhile and ${wanted - got === 1 ? 'was' : 'were'} left out`, true);
+}
+
+async function deleteParked(id) {
+  const p = parkedList().find(x => x.id === id);
+  if (!p || !(await confirmBox(`Delete the parked sale "${p.name}"?`, 'Delete', true))) return openParked();
+  state.meta.parked = parkedList().filter(x => x !== p);
+  await persist([opKv('meta', state.meta)]);
+  renderAll();
+  if (parkedList().length) openParked(); else closeModal();
+}
+
 function restoreCart(saved) {
   ui.cart = { ...emptyCart(), ...(saved || {}) };
   ui.cart.lines = ui.cart.lines
@@ -681,6 +785,7 @@ async function checkout() {
   const oldCart = ui.cart;
   ui.cart = emptyCart(oldCart.payment);
   ops.push(opPut('sales', sale), opKv('meta', state.meta), opKv('cart', ui.cart));
+  if (sale.discount) ops.push(logOp('discount', `Discount ${money(sale.discount)}${sale.discountType === '%' ? ` (${sale.discountValue}%)` : ''} on sale #${saleNo(sale)} (${money(sale.subtotal)} → ${money(sale.total)})`, { amount: -sale.discount, ref: `sale:${sale.id}` }));
 
   try {
     await persist(ops);
@@ -752,11 +857,26 @@ function openReturn(saleId) {
   renderReturn();
 }
 
+/* Returns policy: how long ago the sale was, against the shop's return period
+   (Settings → Shop floor, 0 = no limit). A warning only — the shop decides. */
+const daysSinceSale = sale => Math.max(0, Math.round((startOfDay() - startOfDay(new Date(sale.date))) / DAY_MS));
+const outsideReturnPeriod = sale => { const lim = Number(state.settings.returnDays) || 0; return lim > 0 && daysSinceSale(sale) > lim; };
+function returnPolicyNote(sale) {
+  const days = daysSinceSale(sale);
+  const lim = Number(state.settings.returnDays) || 0;
+  const ago = days === 0 ? 'today' : `${days} day${days === 1 ? '' : 's'} ago`;
+  if (!lim) return `<p class="small muted" style="margin-top:0">Bought ${ago} (${fmtDate(sale.date)}).</p>`;
+  return days > lim
+    ? `<div class="banner licence-stop ret-policy"><p><strong>Bought ${ago}</strong> (${fmtDate(sale.date)}) — your return period is <strong>${lim} days</strong>. Only accept it if you choose to, e.g. a faulty item.</p></div>`
+    : `<div class="banner info ret-policy"><p>Bought ${ago} — within your ${lim}-day return period.</p></div>`;
+}
+
 function renderReturn() {
   const sale = state.sales.find(s => s.id === ui.ret?.saleId);
   if (!sale) return;
   const pv = returnPreview(sale, ui.ret.qty);
   $('#retBody').innerHTML = `
+    ${returnPolicyNote(sale)}
     <p class="small muted" style="margin-top:0">Choose what is coming back. Stock is put back automatically.</p>
     ${sale.items.map((it, idx) => {
       const left = it.qty - returnedQty(sale, idx);
@@ -809,6 +929,7 @@ async function processReturn(asExchange) {
   sale.status = saleStatus(sale);
   state.meta.nextCreditNo += 1;
   ops.push(opPut('sales', sale), opKv('meta', state.meta));
+  ops.push(logOp(asExchange ? 'exchange' : 'refund', `${asExchange ? 'Exchange credit' : `Refund (${PAY_LABEL[ret.method]})`} ${money(ret.amount)} on sale #${saleNo(sale)} of ${fmtDate(sale.date)}${outsideReturnPeriod(sale) ? ` — OUTSIDE the ${state.settings.returnDays}-day return period` : ''}`, { amount: -ret.amount, ref: `ret:${sale.id}:${ret.id}` }));
   try {
     await persist(ops);
   } catch {
@@ -879,7 +1000,8 @@ async function flushAdjust(variantId) {
   if (!f) return;
   const change = f.variant.stock - pend.start;
   if (!change) return;
-  await persist([opPut('products', f.product), opPut('movements', movement(f.product, f.variant, change, pend.reason))]);
+  await persist([opPut('products', f.product), opPut('movements', movement(f.product, f.variant, change, pend.reason)),
+    logOp('stock', `${f.product.name} (${f.variant.size} / ${f.variant.colour}): ${pend.start} → ${f.variant.stock} (${pend.reason === 'count' ? 'stock count' : 'adjusted'})`, { qty: change })]);
 }
 const flushAllAdjust = () => Promise.all([...pendingAdjust.keys()].map(flushAdjust));
 
@@ -930,7 +1052,7 @@ async function saveReceive(productId) {
     ops.push(opPut('movements', movement(p, v, q, 'receive', note)));
   }
   if (!total) return toast('Enter at least one quantity', true);
-  ops.push(opPut('products', p));
+  ops.push(opPut('products', p), logOp('stock', `Received ${total} × ${p.name}${note ? ` (${note})` : ''}`, { qty: total }));
   await persist(ops);
   closeModal();
   renderAll();
@@ -1193,7 +1315,12 @@ function computeShift(fromIso, toIso) {
   const lbPaid = m => sum(lbPays.filter(p => p.method === m), p => p.amount);
   const lbRefundCash = sum(state.laybys.filter(l => l.cancel && l.cancel.method === 'cash' && inShift(l.cancel.date) && mine(l.cancel)), l => l.cancel.refund);
   const laybyCash = lbPaid('cash');
+  // Petty cash: money paid out of the drawer (expenses) or added to it (e.g. change from the bank)
+  const petty = state.expenses.filter(x => inShift(x.date) && mine(x));
+  const pettyOut = sum(petty.filter(x => x.type !== 'in'), x => x.amount);
+  const pettyIn = sum(petty.filter(x => x.type === 'in'), x => x.amount);
   return {
+    pettyCount: petty.length, pettyOut, pettyIn,
     from: fromIso, to: toIso, float,
     salesCount: sales.length, refundCount: rets.length,
     gross, refunds, net: gross - refunds,
@@ -1202,8 +1329,105 @@ function computeShift(fromIso, toIso) {
     cardRefunds: refundBy('card'), eftRefunds: refundBy('eft'),
     creditUsed: sum(sales, s => s.creditUsed),
     laybyCount: lbPays.length, laybyCash, laybyCard: lbPaid('card'), laybyEft: lbPaid('eft'), laybyRefundCash: lbRefundCash,
-    cashOut, expected: float + cashSales + laybyCash - cashOut - lbRefundCash,
+    cashOut, expected: float + cashSales + laybyCash - cashOut - lbRefundCash - pettyOut + pettyIn,
   };
+}
+
+/* ----- Petty cash -----
+   Money taken out of the till for shop expenses (cleaning, milk, transport…)
+   or put in (e.g. change from the bank). It counts in this till's cash-up,
+   shows on the Z-report and in Reports. Synced like sales. */
+const pettyCats = () => { const c = splitList(state.settings.pettyCategories); return c.length ? c : ['Other']; };
+
+function openPetty() {
+  ui.petty = { type: 'out', cat: pettyCats()[0] };
+  openModal({
+    title: 'Petty cash',
+    body: '<div id="pettyBody"></div>',
+    foot: '<button class="btn" data-action="close-modal">Close</button><button class="btn primary" data-action="petty-save">Save</button>',
+  });
+  renderPetty();
+}
+
+function renderPetty() {
+  const P = ui.petty;
+  if (!P || !$('#pettyBody')) return;
+  const sh = computeShift(state.meta.lastCashupAt, new Date().toISOString());
+  const me = Cloud.conf?.deviceId;
+  const list = state.expenses.filter(x => (!state.meta.lastCashupAt || x.date > state.meta.lastCashupAt) && (!me || !x.device || x.device === me)).slice().reverse();
+  $('#pettyBody').innerHTML = `
+    <div class="seg" role="group" aria-label="Paid out or added" style="margin-bottom:10px">
+      <button data-action="petty-type" data-v="out" class="${P.type === 'out' ? 'on' : ''}" aria-pressed="${P.type === 'out'}">Paid out of the till</button>
+      <button data-action="petty-type" data-v="in" class="${P.type === 'in' ? 'on' : ''}" aria-pressed="${P.type === 'in'}">Cash added to the till</button>
+    </div>
+    <label class="field"><span>Amount (R)</span><input id="ptAmount" class="input" inputmode="decimal" autofocus value="${esc(P.amt || '')}"></label>
+    ${P.type === 'out' ? `<div class="field"><span>What for</span><div class="chips" role="group" aria-label="Category">${pettyCats().map(c =>
+      `<button class="chip ${P.cat === c ? 'on' : ''}" aria-pressed="${P.cat === c}" data-action="petty-cat" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div></div>` : ''}
+    <label class="field"><span>Note (optional)</span><input id="ptNote" class="input" maxlength="120" value="${esc(P.note || '')}" placeholder="${P.type === 'out' ? 'e.g. milk and sugar' : 'e.g. change from the bank'}"></label>
+    <div class="section-title">This shift on this till</div>
+    ${list.length ? `<table class="list-table">${list.map(x => `<tr><td>${fmtTime(x.date)} · ${x.type === 'in' ? 'Added' : esc(x.category)}${x.note ? ` <span class="muted small">· ${esc(x.note)}</span>` : ''}<br><span class="small muted">${esc(x.cashier || '')}</span></td>
+        <td><span class="money ${x.type === 'in' ? '' : 'neg'}">${x.type === 'in' ? '+' : '−'}${money(x.amount)}</span>
+        <button class="btn sm ghost" data-action="petty-del" data-id="${esc(x.id)}" aria-label="Delete this entry">✕</button></td></tr>`).join('')}</table>`
+      : '<p class="small muted">Nothing yet.</p>'}
+    <p class="small muted">Expected cash in the drawer now: <strong class="money">${money(sh.expected)}</strong></p>`;
+}
+
+async function savePetty() {
+  const P = ui.petty;
+  const amount = parseMoney($('#ptAmount').value);
+  if (!Number.isFinite(amount) || amount <= 0) return toast('Enter the amount', true);
+  if (amount > 10000000) return toast('That amount is too big for petty cash', true);
+  const note = $('#ptNote').value.trim().slice(0, 120);
+  const x = { id: uid('x'), date: new Date().toISOString(), type: P.type, amount, category: P.type === 'in' ? 'Cash added' : P.cat, note,
+    cashier: ui.user?.name || '', ...deviceStamp() };
+  state.expenses.push(x);
+  await persist([opPut('expenses', x), logOp('petty', `${P.type === 'in' ? `Cash added to the till: ${money(amount)}` : `Petty cash paid out: ${money(amount)} for ${x.category}`}${note ? ` (${note})` : ''}`, { amount: P.type === 'in' ? amount : -amount })]);
+  P.amt = ''; P.note = '';
+  toast(`${P.type === 'in' ? 'Added' : 'Paid out'} ${money(amount)}`);
+  renderPetty();
+  if (ui.view === 'reports') renderReports();
+}
+
+async function deletePetty(id) {
+  const x = state.expenses.find(e => e.id === id);
+  if (!x) return;
+  if (!(await confirmBox(`Delete ${x.type === 'in' ? 'cash added' : x.category} ${money(x.amount)}?`, 'Delete', true))) return renderPetty();
+  state.expenses = state.expenses.filter(e => e.id !== id);
+  await persist([{ store: 'expenses', key: id, del: true }, logOp('petty', `Deleted petty cash entry: ${x.category} ${money(x.amount)}`, { amount: x.type === 'in' ? -x.amount : x.amount })]);
+  if ($('#pettyBody')) renderPetty(); else openPetty();
+  if (ui.view === 'reports') renderReports();
+}
+
+/* ----- Daily summary for the owner (WhatsApp) ----- */
+function dailySummaryText() {
+  const from = startOfDay(), to = addDays(from, 1);
+  const r = buildReport({ from, to });
+  const inDay = iso => { const d = new Date(iso); return d >= from && d < to; };
+  const net = k => (r.byPayment[k] ? r.byPayment[k].sales - r.byPayment[k].refunds : 0);
+  const lbPays = state.laybys.flatMap(l => l.payments).filter(p => inDay(p.date));
+  const pettyOut = state.expenses.filter(x => inDay(x.date) && x.type !== 'in');
+  const zs = state.cashups.filter(z => inDay(z.to));
+  const overdue = state.laybys.filter(lbOverdue);
+  const out = [`*${state.settings.storeName} — ${fmtLong(new Date())}*`, '',
+    `💰 Net takings: ${money(r.revenue)}`,
+    `🧾 ${r.count} sale${r.count === 1 ? '' : 's'} · ${r.items} item${r.items === 1 ? '' : 's'}${r.rets.length ? ` · ${r.rets.length} refund${r.rets.length === 1 ? '' : 's'} (${money(r.refunds)})` : ''}`,
+    `Cash ${money(net('cash'))} · Card ${money(net('card'))} · EFT ${money(net('eft'))}`,
+    `📈 Gross profit: ${money(r.profit)}${r.exVat > 0 ? ` (${r.margin}%)` : ''}`];
+  if (r.discounts) out.push(`🏷️ Discounts given: ${money(r.discounts)}`);
+  if (lbPays.length) out.push(`🛍️ Lay-by payments: ${money(sum(lbPays, p => p.amount))} (${lbPays.length})`);
+  if (pettyOut.length) out.push(`💸 Petty cash paid out: ${money(sum(pettyOut, x => x.amount))} (${pettyOut.length})`);
+  if (r.topAll.length) out.push(`⭐ Best sellers: ${r.topAll.slice(0, 3).map(t => `${t.name} ×${t.qty}`).join(', ')}`);
+  zs.forEach(z => out.push(`🧮 Cash-up Z${zNo(z)}${z.cashier ? ` (${z.cashier})` : ''}: ${z.diff === 0 ? 'balanced' : `${z.diff > 0 ? 'over' : 'SHORT'} ${money(Math.abs(z.diff))}`}`));
+  if (!zs.length) out.push('🧮 No cash-up yet today');
+  if (overdue.length) out.push(`⚠️ Overdue lay-bys: ${overdue.length} (${money(sum(overdue, l => Math.max(0, lbBalance(l))))} owed)`);
+  out.push('', '_Sent from Rails POS_');
+  return out.join('\n');
+}
+
+function sendDailySummary() {
+  const num = waNumber(state.settings.ownerWhatsApp);
+  window.open(`https://wa.me/${num}?text=${encodeURIComponent(dailySummaryText())}`, '_blank', 'noopener');
+  if (!num) toast('Tip: add the owner\'s WhatsApp number in Settings → Shop floor');
 }
 
 function openCashup() {
@@ -1219,6 +1443,8 @@ function openCashup() {
         <span>− Cash refunds</span><span class="money">${money(sh.cashOut)}</span>
         ${sh.laybyCash || sh.laybyRefundCash ? `<span>+ Lay-by payments (cash)</span><span class="money">${money(sh.laybyCash)}</span>` : ''}
         ${sh.laybyRefundCash ? `<span>− Lay-by refunds (cash)</span><span class="money">${money(sh.laybyRefundCash)}</span>` : ''}
+        ${sh.pettyOut ? `<span>− Petty cash paid out</span><span class="money">${money(sh.pettyOut)}</span>` : ''}
+        ${sh.pettyIn ? `<span>+ Cash added</span><span class="money">${money(sh.pettyIn)}</span>` : ''}
         <span class="grand">Expected cash</span><span class="grand money">${money(sh.expected)}</span>
         <span class="muted">Card / EFT (not in drawer)</span><span class="muted money">${money(sh.card - sh.cardRefunds + (sh.laybyCard || 0))} / ${money(sh.eft - sh.eftRefunds + (sh.laybyEft || 0))}</span>
       </div>
@@ -1250,7 +1476,8 @@ async function saveCashup() {
   state.meta.nextZNo += 1;
   state.meta.lastCashupAt = sh.to;
   state.meta.float = nextFloat;
-  await persist([opPut('cashups', z), opKv('meta', state.meta)]);
+  await persist([opPut('cashups', z), opKv('meta', state.meta),
+    logOp('cashup', `Cash-up Z${zNo(z)}: expected ${money(z.expected)}, counted ${money(z.counted)} — ${z.diff === 0 ? 'balanced' : `${z.diff > 0 ? 'over' : 'SHORT'} ${money(Math.abs(z.diff))}`}`, { amount: z.diff, ref: `z:${z.id}` })]);
   closeModal();
   renderAll();
   showDoc(`z:${z.id}`, { fresh: true });
@@ -1442,6 +1669,8 @@ function zText(z) {
   if (z.laybyCash) out.push(lr('+ Lay-by cash', money(z.laybyCash)));
   out.push(lr('- Cash refunds', money(z.cashOut)));
   if (z.laybyRefundCash) out.push(lr('- Lay-by refunds', money(z.laybyRefundCash)));
+  if (z.pettyOut) out.push(lr('- Petty cash paid out', money(z.pettyOut)));
+  if (z.pettyIn) out.push(lr('+ Cash added', money(z.pettyIn)));
   out.push(lr('Expected cash', money(z.expected)));
   out.push(lr('Counted cash', money(z.counted)));
   out.push(lr(z.diff === 0 ? 'Balanced' : z.diff > 0 ? 'OVER' : 'SHORT', money(Math.abs(z.diff))));
@@ -1594,6 +1823,7 @@ function showDoc(ref, { justSold = false, fresh = justSold } = {}) {
       <button class="btn" data-action="doc-copy" data-doc="${esc(ref)}">Copy</button>
       <button class="btn" data-action="doc-print" data-doc="${esc(ref)}">Print</button>
       ${doc.kind === 'stmt' ? `<button class="btn" data-action="stmt-a4" data-id="${esc(doc.customer.id)}">Print A4</button>` : ''}
+      ${doc.kind === 'z' && can('reports') ? '<button class="btn" data-action="owner-summary">Daily summary to owner</button>' : ''}
       ${canReturn ? `<button class="btn danger" data-action="open-return" data-id="${esc(s.id)}">Return / exchange</button>` : ''}
       ${doc.customerId && can('customers') ? `<button class="btn" data-action="open-customer" data-id="${esc(doc.customerId)}">Customer</button>` : ''}
       <button class="btn" data-action="close-modal">${justSold ? 'New sale' : 'Close'}</button>`,
@@ -1777,6 +2007,9 @@ function priceLabel(p) {
 }
 
 function renderSell() {
+  const pk = (state.meta.parked || []).length;
+  const pb = $('#parkedBtn');
+  if (pb) { pb.hidden = !pk; pb.textContent = `Parked (${pk})`; }
   const cats = ['All', ...new Set(state.products.map(p => p.category).filter(Boolean))];
   if (!cats.includes(ui.category)) ui.category = 'All';
   $('#catChips').innerHTML = cats.map(c =>
@@ -2091,10 +2324,15 @@ async function saveEditProduct(id) {
   const p = findProduct(id);
   const base = p && readProductForm();
   if (!base) return;
+  const was = { price: p.price, cost: p.cost, name: p.name };
   Object.assign(p, base);
   if (!p.photo) delete p.photo;
   if (!p.description) delete p.description;
-  await persist([opPut('products', p)]);
+  const ops = [opPut('products', p)];
+  const ch = [was.name !== p.name ? `name "${was.name}" → "${p.name}"` : '', was.price !== p.price ? `price ${money(was.price)} → ${money(p.price)}` : '',
+    was.cost !== p.cost ? `cost ${money(was.cost)} → ${money(p.cost)}` : ''].filter(Boolean);
+  if (ch.length) ops.push(logOp('price', `${p.name}: ${ch.join(', ')}`));
+  await persist(ops);
   closeModal();
   renderAll();
   toast('Product updated');
@@ -2157,6 +2395,9 @@ async function saveVariant(productId, variantId) {
   if (cost !== null && (!Number.isFinite(cost) || cost < 0)) return toast('Enter a valid cost or leave it blank', true);
   const ops = [];
   if (v) {
+    if ((v.price ?? null) !== price || (v.cost ?? null) !== cost) {
+      ops.push(logOp('price', `${p.name} (${v.size} / ${v.colour}): own price ${v.price != null ? money(v.price) : 'none'} → ${price !== null ? money(price) : 'none'}${(v.cost ?? null) !== cost ? `, own cost ${v.cost != null ? money(v.cost) : 'none'} → ${cost !== null ? money(cost) : 'none'}` : ''}`));
+    }
     Object.assign(v, { size, colour, sku: sku || v.sku });
     if (price === null) delete v.price; else v.price = price;
     if (cost === null) delete v.cost; else v.cost = cost;
@@ -2183,7 +2424,7 @@ async function deleteVariant(variantId) {
   if (!(await confirmBox(`Delete ${f.product.name} ${f.variant.size}/${f.variant.colour}? Past sales are kept.`, 'Delete', true))) return;
   f.product.variants = f.product.variants.filter(v => v !== f.variant);
   ui.cart.lines = ui.cart.lines.filter(l => l.variantId !== variantId);
-  await persist([opPut('products', f.product), opKv('cart', ui.cart)]);
+  await persist([opPut('products', f.product), opKv('cart', ui.cart), logOp('delete', `Deleted ${f.product.name} ${f.variant.size} / ${f.variant.colour} (${f.variant.stock} in stock)`)]);
   renderAll();
   toast('Variant deleted');
 }
@@ -2195,7 +2436,7 @@ async function deleteProduct(id) {
   state.products = state.products.filter(x => x !== p);
   const ids = new Set(p.variants.map(v => v.id));
   ui.cart.lines = ui.cart.lines.filter(l => !ids.has(l.variantId));
-  await persist([{ store: 'products', key: p.id, del: true }, opKv('cart', ui.cart)]);
+  await persist([{ store: 'products', key: p.id, del: true }, opKv('cart', ui.cart), logOp('delete', `Deleted product ${p.name} (${productStock(p)} in stock)`)]);
   renderAll();
   toast('Product deleted');
 }
@@ -2235,7 +2476,11 @@ function renderReports() {
       <div class="row gap-s" style="flex-wrap:wrap">
         <div class="grow"><h3>Current shift</h3>
           <div class="small muted">Since ${sh.from ? fmtDT(sh.from) : 'the first sale'} · ${sh.salesCount} sales · expected cash in drawer <strong class="money" data-k="expected">${money(sh.expected)}</strong></div></div>
-        <button class="btn primary" data-action="cashup">Cash up</button>
+        <div class="row gap-s wrap">
+          <button class="btn" data-action="petty">Petty cash</button>
+          <button class="btn" data-action="owner-summary">Daily summary</button>
+          <button class="btn primary" data-action="cashup">Cash up</button>
+        </div>
       </div>
       ${recentZ.length ? `<div class="z-list">${recentZ.map(z => `<button class="link" data-action="open-doc" data-doc="z:${esc(z.id)}">Z${zNo(z)} · ${fmtDate(z.to)} · ${z.diff === 0 ? 'balanced' : (z.diff > 0 ? 'over ' : 'short ') + money(Math.abs(z.diff))}</button>`).join('')}</div>` : ''}
     </div>`;
@@ -2607,6 +2852,10 @@ async function renderSettings() {
       <label class="field" style="margin:12px 0 0"><span>WhatsApp reminder message</span>
         <textarea class="plain" data-setting="laybyReminder" rows="4">${esc(st.laybyReminder || DEFAULT_REMINDER)}</textarea></label>
       <p class="small muted" style="margin:6px 0 0">These words are filled in for each client: {name} {fullname} {shop} {number} {balance} {total} {paid} {due}</p>
+      <label class="field" style="margin:12px 0 0"><span>Final fitting (days before a client's event)</span><input class="input" inputmode="numeric" data-setting="fittingDays" value="${esc(st.fittingDays ?? 14)}"></label>
+      <label class="field" style="margin:12px 0 0"><span>WhatsApp event message</span>
+        <textarea class="plain" data-setting="eventReminder" rows="3">${esc(st.eventReminder || DEFAULT_EVENT_MSG)}</textarea></label>
+      <p class="small muted" style="margin:6px 0 0">Filled in: {name} {fullname} {shop} {event} {date} {days} {fitting} {owed}</p>
     </div>
     <div class="section-title">VAT</div>
     <div class="card">
@@ -2627,6 +2876,11 @@ async function renderSettings() {
             ${[['auto', 'Neon (default)'], ['light', 'Light (bright sunlight)']].map(([t, l]) => `<option value="${t}" ${(st.theme === 'dark' ? 'auto' : st.theme) === t ? 'selected' : ''}>${l}</option>`).join('')}
           </select></label>
       </div>
+      <div class="grid-2">
+        <label class="field"><span>Return / exchange period (days, 0 = no limit)</span><input class="input" data-setting="returnDays" inputmode="numeric" value="${esc(st.returnDays ?? 7)}"></label>
+        <label class="field"><span>Owner's WhatsApp (daily summary)</span><input class="input" type="tel" inputmode="tel" data-setting="ownerWhatsApp" placeholder="082 123 4567" value="${esc(st.ownerWhatsApp || '')}"></label>
+      </div>
+      <label class="field" style="margin-bottom:0"><span>Petty cash categories (comma separated)</span><input class="input" data-setting="pettyCategories" value="${esc(st.pettyCategories || '')}"></label>
     </div>
     </div>
     <div>
@@ -2701,6 +2955,15 @@ async function onSettingChange(input) {
     value = Number(String(value).replace(',', '.'));
     if (!Number.isFinite(value) || value < 0 || value > 100) return toast('VAT rate must be 0–100', true);
   }
+  if (key === 'fittingDays') {
+    value = parseInt(value, 10) || 0;
+    if (!(value >= 0 && value <= 120)) return toast('Fitting days must be 0 to 120', true);
+  }
+  if (key === 'returnDays') {
+    value = parseInt(value, 10) || 0;
+    if (!(value >= 0 && value <= 365)) return toast('Return period must be 0 to 365 days', true);
+  }
+  if (key === 'ownerWhatsApp' && value.trim() && !waNumber(value)) return toast('That WhatsApp number doesn\'t look right', true);
   if (key === 'lowStock') {
     value = parseInt(value, 10);
     if (!Number.isFinite(value) || value < 0) return toast('Threshold must be 0 or more', true);
@@ -2735,7 +2998,8 @@ async function backupJson() {
   return JSON.stringify({
     app: 'rails-pos', version: 2, exportedAt: new Date().toISOString(),
     settings: state.settings, meta: state.meta, products: state.products, sales: state.sales,
-    cashups: state.cashups, customers: state.customers, laybys: state.laybys, movements: await DB.getAll('movements'),
+    cashups: state.cashups, customers: state.customers, laybys: state.laybys, expenses: state.expenses, activity: state.activity,
+    movements: await DB.getAll('movements'),
   });
 }
 
@@ -2824,6 +3088,8 @@ async function restoreFromText(text) {
   state.cashups = data.cashups || [];
   state.customers = (data.customers || []).sort(byName);
   state.laybys = (data.laybys || []).sort(byDate);
+  state.expenses = (data.expenses || []).sort(byDate2);
+  state.activity = (data.activity || []).sort(byDate2);
   state.meta = { ...DEFAULT_META, ...data.meta };
   // Never reuse a number that already exists.
   state.meta.nextReceiptNo = Math.max(state.meta.nextReceiptNo, ...state.sales.map(s => s.number + 1));
@@ -2835,6 +3101,7 @@ async function restoreFromText(text) {
   await persistEverything(data.movements || []);
   restoreCart(ui.cart);
   renderAll();
+  await persist([logOp('shop', `Restored a backup from ${data.exportedAt ? fmtDate(data.exportedAt) : 'an unknown date'}`)]);
   toast('Backup restored');
   await cloudResetAfter();
 }
@@ -2987,11 +3254,14 @@ async function startFresh() {
   state.cashups = [];
   state.customers = [];
   state.laybys = [];
+  state.expenses = [];
+  // the activity log is kept: it shows that the shop was started fresh, and by whom
   state.meta = { ...DEFAULT_META };
   ui.cart = emptyCart();
   await persistEverything();
   restoreCart(ui.cart);
   renderAll();
+  await persist([logOp('shop', 'Started fresh (all products, sales and clients deleted)')]);
   toast('Fresh start — add your first product on the Stock screen');
   await cloudResetAfter();
 }
@@ -3247,6 +3517,44 @@ async function renderAdmin() {
       <p class="small muted" style="margin:8px 0 0">Can: ${['Sell', ...ALL_PERMS.filter(p => u.perms.includes(p)).map(label)].map(esc).join(' · ')}</p>
     </div>`;
   }).join('');
+  renderActivity();
+}
+
+/* ----- Activity log -----
+   Who did what: discounts, refunds and exchanges, price changes, stock
+   changes, deletions, lay-by cancellations, cash-ups (over / short), petty
+   cash, staff changes, imports and resets. Synced, so the owner sees every
+   till. Shown on the Admin screen (owners only). */
+const ACTIVITY_LABEL = { discount: 'Discount', refund: 'Refund', exchange: 'Exchange', price: 'Price change', stock: 'Stock', delete: 'Deleted',
+  layby: 'Lay-by', cashup: 'Cash-up', petty: 'Petty cash', staff: 'Staff', shop: 'Shop', stocktake: 'Stock take' };
+
+/** Make an activity entry (and keep it in memory); returns the op to save with the change itself. */
+function logOp(type, text, extra = {}) {
+  const a = { id: uid('a'), date: new Date().toISOString(), type, user: ui.user?.name || '', text: String(text).slice(0, 240), ...extra, ...deviceStamp() };
+  state.activity.push(a);
+  return opPut('activity', a);
+}
+
+function renderActivity() {
+  const box = $('#activityLog');
+  if (!box) return;
+  const F = ui.actFilter ||= { user: '', type: '', days: '7' };
+  const since = F.days === 'all' ? '' : addDays(startOfDay(), -(Number(F.days) - 1)).toISOString();
+  const users = [...new Set(state.activity.map(a => a.user).filter(Boolean))].sort();
+  const rows = state.activity.filter(a => (!since || a.date >= since) && (!F.user || a.user === F.user) && (!F.type || a.type === F.type))
+    .slice().reverse();
+  box.innerHTML = `<div class="card">
+    <div class="row gap-s wrap" style="margin-bottom:8px">
+      <select id="actUser" aria-label="Person"><option value="">Everyone</option>${users.map(u => `<option ${F.user === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select>
+      <select id="actType" aria-label="Kind"><option value="">Everything</option>${Object.entries(ACTIVITY_LABEL).map(([k, l]) => `<option value="${k}" ${F.type === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <select id="actDays" aria-label="Period">${[['1', 'Today'], ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['all', 'All time']].map(([v, l]) => `<option value="${v}" ${F.days === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+    </div>
+    ${rows.length ? `<table class="list-table act-log">${rows.slice(0, 300).map(a => `<tr>
+        <td class="small muted" style="white-space:nowrap">${fmtDate(a.date)}<br>${fmtTime(a.date)}</td>
+        <td><span class="act-tag act-${esc(a.type)}">${esc(ACTIVITY_LABEL[a.type] || a.type)}</span> ${esc(a.text)}<br><span class="small muted">${esc(a.user || '—')}${a.series ? ` · till ${esc(a.series)}` : ''}</span></td></tr>`).join('')}</table>
+      ${rows.length > 300 ? `<p class="small muted">Showing the latest 300 of ${rows.length}.</p>` : ''}`
+      : '<p class="small muted" style="margin:0">Nothing recorded for this choice.</p>'}
+  </div>`;
 }
 
 function openUserForm(id = null) {
@@ -3300,6 +3608,10 @@ async function saveUser(id) {
   if (pin) await setPin(user, pin);
   if (!id) auth.users.push(user);
   await saveAuth(auth);
+  const permTxt = p => (p || []).slice().sort().join(',');
+  const what = !id ? `Added staff member ${name} (${ROLES[user.role]?.label || 'Custom'})`
+    : [before.name !== name ? `renamed ${before.name} → ${name}` : '', permTxt(before.perms) !== permTxt(perms) ? `access changed to ${ROLES[user.role]?.label || 'Custom'} (${perms.join(', ') || 'selling only'})` : '', pin ? 'PIN reset' : ''].filter(Boolean).join(', ');
+  if (what) await persist([logOp('staff', id ? `${name}: ${what}` : what)]);
   closeModal();
   toast(id ? `${name} saved` : `${name} added`);
   if (user.id === ui.user?.id) setUser(user); // own name or access changed
@@ -3316,6 +3628,7 @@ async function deleteUser(id) {
   if (!(await confirmBox(`Delete ${user.name}? They will no longer be able to sign in. Their past sales keep their name.`, 'Delete user', true))) return;
   auth.users = rest;
   await saveAuth(auth);
+  await persist([logOp('staff', `Deleted staff member ${user.name}`)]);
   toast(`${user.name} deleted`);
   renderAdmin();
 }
@@ -3538,7 +3851,7 @@ async function applyRemote(rows) {
       continue;
     }
 
-    const arr = { products: state.products, sales: state.sales, cashups: state.cashups, customers: state.customers, laybys: state.laybys }[r.kind];
+    const arr = { products: state.products, sales: state.sales, cashups: state.cashups, customers: state.customers, laybys: state.laybys, expenses: state.expenses, activity: state.activity }[r.kind];
     if (!arr || !SYNC_STORES.includes(r.kind)) continue;
     const i = arr.findIndex(x => x.id === r.id);
     if (r.deleted || !r.data) {
@@ -3566,6 +3879,8 @@ async function applyRemote(rows) {
     state.cashups.sort((a, b) => (a.to || '').localeCompare(b.to || ''));
     state.customers.sort(byName);
     state.laybys.sort(byDate);
+    state.expenses.sort(byDate2);
+    state.activity.sort(byDate2);
   }
   if (authChanged) await refreshCurrentUser();
   return changed;
@@ -3748,7 +4063,7 @@ async function createCloudShop(mode) {
     if (mode === 'empty') {
       const theme = state.settings.theme;
       if (state.meta.demo) state.settings = { ...DEFAULT_SETTINGS, theme };
-      state.products = []; state.sales = []; state.cashups = []; state.customers = []; state.laybys = [];
+      state.products = []; state.sales = []; state.cashups = []; state.customers = []; state.laybys = []; state.expenses = []; state.activity = [];
       state.meta = { ...DEFAULT_META };
       ui.cart = emptyCart();
       await persistEverything();
@@ -4094,7 +4409,7 @@ async function finishSetup(mode) {
   } else if (mode === 'new') {
     const theme = state.settings.theme;
     state.settings = { ...DEFAULT_SETTINGS, storeName: shop, theme };
-    state.products = []; state.sales = []; state.cashups = []; state.customers = []; state.laybys = [];
+    state.products = []; state.sales = []; state.cashups = []; state.customers = []; state.laybys = []; state.expenses = []; state.activity = [];
     state.meta = { ...DEFAULT_META };
     ui.cart = emptyCart();
   }
@@ -4489,6 +4804,7 @@ async function scanTick() {
 function onScanned(code, target) {
   closeScanner();
   navigator.vibrate?.(60);
+  if (target === 'stocktake') return stCountCode(code);
   if (target === 'sell') {
     const f = findByCode(code);
     if (f) {
@@ -4773,7 +5089,8 @@ function paintCustomerList() {
   const open = state.laybys.filter(l => l.status === 'open');
   const overdue = open.filter(lbOverdue);
   const toRemind = open.filter(l => reminderReason(l)).length;
-  $('#custChips').innerHTML = [['all', 'All clients'], ['open', 'Open lay-bys'], ['overdue', `Overdue${overdue.length ? ` (${overdue.length})` : ''}`], ['remind', `To remind${toRemind ? ` (${toRemind})` : ''}`]]
+  const evCount = upcomingEvents(30).length;
+  $('#custChips').innerHTML = [['all', 'All clients'], ['open', 'Open lay-bys'], ['overdue', `Overdue${overdue.length ? ` (${overdue.length})` : ''}`], ['remind', `To remind${toRemind ? ` (${toRemind})` : ''}`], ['events', `Events${evCount ? ` (${evCount})` : ''}`]]
     .map(([k, l]) => `<button class="chip ${f === k ? 'on' : ''}" aria-pressed="${f === k}" data-action="cust-filter" data-f="${k}">${l}</button>`).join('');
   $('#custKpis').innerHTML = `
     <div class="kpi"><div class="label">Open lay-bys</div><div class="value num">${open.length}</div></div>
@@ -4781,6 +5098,7 @@ function paintCustomerList() {
     <div class="kpi"><div class="label">Overdue</div><div class="value num ${overdue.length ? 'err-text' : ''}">${overdue.length}</div>
       <div class="sub">${overdue.length ? money(sum(overdue, lbBalance)) + ' owed' : 'none'}</div></div>`;
   if (f === 'remind') { $('#custList').innerHTML = reminderListHtml(); return; }
+  if (f === 'events') { $('#custList').innerHTML = eventsListHtml(); return; }
   const rows = state.customers
     .filter(c => !q || c.name.toLowerCase().includes(q) || (digits && String(c.phone || '').replace(/\D/g, '').includes(digits)) || String(c.email || '').toLowerCase().includes(q))
     .map(c => { const lbs = customerLaybys(c.id).filter(l => l.status === 'open'); return { c, open: lbs, overdue: lbs.filter(lbOverdue), owed: sum(lbs, lbBalance) }; })
@@ -4811,6 +5129,7 @@ function renderCustomerProfile(c) {
           <div class="small muted">${c.phone ? `<a class="link" href="tel:${esc(tel)}">${esc(c.phone)}</a>` : 'No phone'}${c.email ? ` · ${esc(c.email)}` : ''}</div>
           ${c.address ? `<div class="small muted">${esc(c.address)}</div>` : ''}
           ${c.notes ? `<div class="small" style="margin-top:4px">${esc(c.notes)}</div>` : ''}
+          ${c.eventDate ? `<div class="small event-line" style="margin-top:4px">🎉 ${eventLine(c)} · final fitting by ${fmtLong(fittingDate(c))} · <button class="link" data-action="event-msg" data-id="${esc(c.id)}">WhatsApp</button></div>` : ''}
         </div>
         <div class="row gap-s wrap">
           <button class="btn sm" data-action="cust-edit" data-id="${esc(c.id)}">Edit</button>
@@ -4933,9 +5252,74 @@ function openCustomerEdit(id = null) {
         <label class="field"><span>Email (for statements)</span><input id="cuEmail" class="input" type="email" inputmode="email" value="${esc(c?.email || '')}"></label>
       </div>
       <label class="field"><span>Address (needed on tax invoices over ${money(FULL_TAX_INVOICE_OVER)})</span><textarea id="cuAddr" class="plain" rows="2">${esc(c?.address || '')}</textarea></label>
-      <label class="field"><span>Notes (sizes, preferences…)</span><textarea id="cuNotes" class="plain" rows="2">${esc(c?.notes || '')}</textarea></label>`,
+      <label class="field"><span>Notes (sizes, preferences…)</span><textarea id="cuNotes" class="plain" rows="2">${esc(c?.notes || '')}</textarea></label>
+      <div class="grid-2">
+        <label class="field"><span>Event (optional)</span><select id="cuEventType"><option value="">None</option>${EVENT_TYPES.map(e => `<option ${c?.eventType === e ? 'selected' : ''}>${esc(e)}</option>`).join('')}</select></label>
+        <label class="field"><span>Event date</span><input id="cuEventDate" class="input" type="date" value="${esc(c?.eventDate || '')}"></label>
+      </div>`,
     foot: `<button class="btn" data-action="close-modal">Cancel</button><button class="btn primary" data-action="cust-save" data-id="${esc(id || '')}">${c ? 'Save' : 'Add client'}</button>`,
   });
+}
+
+/* ----- Client events (wedding, matric dance…) -----
+   A client can have an event date. Clients → "Events" lists events in the
+   next 60 days with a countdown, the final-fitting date (Settings → Lay-bys:
+   days before the event) and any lay-by money still owed, plus a one-tap
+   WhatsApp message (wording in Settings → Lay-bys). */
+const EVENT_TYPES = ['Wedding', 'Matric dance', 'Engagement', 'Graduation', 'Eid', 'Party', 'Other'];
+const DEFAULT_EVENT_MSG = 'Hi {name}, this is {shop}. Your {event} is on {date} — only {days} days to go! Please pop in for your final fitting by {fitting}.{owed} See you soon!';
+const daysUntil = ymd => Math.round((fromDateInput(ymd) - startOfDay()) / DAY_MS);
+const fittingDate = c => addDays(fromDateInput(c.eventDate), -(Number(state.settings.fittingDays) || 14));
+
+function upcomingEvents(windowDays = 60) {
+  return state.customers.filter(c => c.eventDate && fromDateInput(c.eventDate))
+    .map(c => ({ c, days: daysUntil(c.eventDate), owed: Math.max(0, sum(customerLaybys(c.id).filter(l => l.status === 'open'), lbBalance)) }))
+    .filter(x => x.days >= -1 && x.days <= windowDays)
+    .sort((a, b) => a.days - b.days);
+}
+
+function eventLine(c) {
+  if (!c.eventDate || !fromDateInput(c.eventDate)) return '';
+  const d = daysUntil(c.eventDate);
+  const when = d === 0 ? 'today' : d === 1 ? 'tomorrow' : d > 0 ? `in ${d} days` : `${-d} day${d === -1 ? '' : 's'} ago`;
+  return `${esc(c.eventType || 'Event')}: ${fmtLong(fromDateInput(c.eventDate))} (${when})`;
+}
+
+function eventMessage(c) {
+  const days = daysUntil(c.eventDate);
+  const owed = Math.max(0, sum(customerLaybys(c.id).filter(l => l.status === 'open'), lbBalance));
+  const vals = { name: String(c.name).trim().split(/\s+/)[0], fullname: c.name, shop: state.settings.storeName, event: (c.eventType || 'event').toLowerCase(),
+    date: fmtLong(fromDateInput(c.eventDate)), days: Math.max(0, days), fitting: fmtLong(fittingDate(c)),
+    owed: owed ? ` Your lay-by balance is ${money(owed)}.` : '' };
+  return String(state.settings.eventReminder || DEFAULT_EVENT_MSG).replace(/\{(\w+)\}/g, (m, k) => (k in vals ? vals[k] : m));
+}
+
+async function messageEvent(id) {
+  const c = findCustomer(id);
+  if (!c?.eventDate) return;
+  const num = waNumber(c.phone);
+  if (!num) return toast('This client has no phone number — add it with Edit', true);
+  window.open(`https://wa.me/${num}?text=${encodeURIComponent(eventMessage(c))}`, '_blank', 'noopener');
+  c.eventMessaged = new Date().toISOString();
+  await persist([opPut('customers', c)]);
+  renderCustomers();
+}
+
+function eventsListHtml() {
+  const ev = upcomingEvents();
+  if (!ev.length) return '<div class="empty">No events in the next 60 days. Add an event date (e.g. a wedding) on a client\'s profile with Edit.</div>';
+  return ev.map(({ c, days, owed }) => {
+    const fit = fittingDate(c);
+    const fitDue = startOfDay() >= fit;
+    return `<div class="card remind-row">
+      <div class="grow"><strong>${esc(c.name)}</strong> <span class="muted small">· ${eventLine(c)}</span>
+        <div class="small ${fitDue && days >= 0 ? 'warn-text' : 'muted'}">Final fitting by ${fmtLong(fit)}${owed ? ` · <span class="err-text">lay-by owed ${money(owed)}</span>` : ''}${c.eventMessaged ? ` · messaged ${fmtDate(c.eventMessaged)}` : ''}</div></div>
+      <div class="row gap-s wrap">
+        <button class="btn sm primary" data-action="event-msg" data-id="${esc(c.id)}">WhatsApp</button>
+        <button class="btn sm" data-action="open-customer" data-id="${esc(c.id)}">Open</button>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 async function saveCustomer(id) {
@@ -4944,7 +5328,12 @@ async function saveCustomer(id) {
   const email = $('#cuEmail').value.trim();
   if (email && !/^\S+@\S+\.\S+$/.test(email)) return toast('That email address doesn\'t look right', true);
   const c = id ? findCustomer(id) : { id: uid('c'), credit: 0, created: Date.now() };
+  const eventDate = $('#cuEventDate').value;
+  const eventType = $('#cuEventType').value;
+  if (eventType && !eventDate) return toast('Choose the event date (or set Event to None)', true);
   Object.assign(c, { name, phone: $('#cuPhone').value.trim(), email, address: $('#cuAddr').value.trim(), notes: $('#cuNotes').value.trim() });
+  if (eventDate) { if (c.eventDate !== eventDate) delete c.eventMessaged; c.eventDate = eventDate; c.eventType = eventType || 'Other'; }
+  else { delete c.eventDate; delete c.eventType; delete c.eventMessaged; }
   if (!id) { state.customers.push(c); state.customers.sort(byName); }
   await persist([opPut('customers', c)]);
   closeModal();
@@ -5208,6 +5597,7 @@ async function saveLaybyCancel() {
     cancel: { date: now, paid, fee, refund: back, method: mode === 'refund' ? ui.lbc.method : mode, cashier: ui.user?.name || '', ...deviceStamp() },
   });
   if (mode === 'credit' && c) { c.credit = (c.credit || 0) + back; ops.push(opPut('customers', c)); }
+  ops.push(logOp('layby', `Cancelled lay-by ${lbNo(l)} (${l.customer.name}): paid ${money(paid)}, ${mode === 'refund' ? `refunded ${money(back)} (${PAY_LABEL[ui.lbc.method]})` : mode === 'credit' ? `${money(back)} store credit` : 'shop kept the money'}${fee ? `, fee ${money(fee)}` : ''}`, { amount: mode === 'refund' ? -back : 0, ref: `lb:${l.id}` }));
   ops.push(opPut('laybys', l));
   await persist(ops);
   closeModal();
@@ -5668,6 +6058,7 @@ async function saveImport() {
   await persist(ops);
   closeModal();
   renderAll();
+  await persist([logOp('stock', `Imported stock: ${plan.newProducts.size} new product${plan.newProducts.size === 1 ? '' : 's'}, ${plan.variantCount} size/colours${I.update ? `, ${plan.updates.length} updated` : ''}`)]);
   toast(`Imported: ${plan.newProducts.size} new product${plan.newProducts.size === 1 ? '' : 's'}, ${plan.variantCount} size/colour${plan.variantCount === 1 ? '' : 's'}${I.update && plan.updates.length ? `, ${plan.updates.length} updated` : ''}`);
   ui.imp = null;
 }
@@ -5679,6 +6070,184 @@ function downloadImportTemplate() {
   a.download = 'rails-pos-stock-template.csv';
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+/* ===== 14h. Stock take ===================================================
+   Count everything in the shop: scan each item (USB scanner + Enter, or the
+   camera), or type the counts. Kept on this device while counting
+   (meta.stocktake), so it can be closed and continued later. Review shows
+   what is missing or extra (units and value at cost); "Apply" sets the stock
+   to the counts with "Stock count" movements and an activity-log entry.
+   Items not counted can be left as they are or treated as missing (0).
+   ======================================================================== */
+
+const stSession = () => state.meta.stocktake || null;
+const stCounted = v => stSession()?.counts[v.id];
+const saveSt = () => DB.write([opKv('meta', state.meta)]);
+
+function openStocktake() {
+  if (!stSession()) { state.meta.stocktake = { started: new Date().toISOString(), counts: {}, by: ui.user?.name || '' }; saveSt(); }
+  ui.st = { find: '', show: 'all', review: false, uncounted: 'keep' };
+  openModal({ title: 'Stock take', body: '<div id="stBody"></div>', foot: '<div id="stFoot" class="foot-row"></div>' });
+  renderStocktake();
+}
+
+function stTotals() {
+  const s = stSession();
+  let lines = 0, counted = 0, expected = 0;
+  for (const p of state.products) for (const v of p.variants) {
+    expected += Math.max(0, v.stock);
+    if (s.counts[v.id] != null) { lines++; counted += s.counts[v.id]; }
+  }
+  return { lines, counted, expected, variants: sum(state.products, p => p.variants.length) };
+}
+
+function renderStocktake() {
+  const s = stSession();
+  if (!s || !$('#stBody')) return;
+  if (ui.st.review) return renderStReview();
+  const t = stTotals();
+  const q = ui.st.find.trim().toLowerCase();
+  const rows = [];
+  for (const p of state.products) for (const v of p.variants) {
+    const c = s.counts[v.id];
+    if (ui.st.show === 'counted' && c == null) continue;
+    if (ui.st.show === 'not' && c != null) continue;
+    if (q && !`${p.name} ${v.size} ${v.colour} ${v.sku} ${v.barcode || ''}`.toLowerCase().includes(q)) continue;
+    rows.push({ p, v, c });
+  }
+  $('#stBody').innerHTML = `
+    <p class="small muted" style="margin-top:0">Started ${fmtDT(s.started)}${s.by ? ` by ${esc(s.by)}` : ''}. Scan each item (a USB scanner adds 1 per scan), or type the counts below. You can close this and carry on later.</p>
+    <div class="row gap-s" style="margin-bottom:8px">
+      <input id="stScan" class="input grow" placeholder="Scan or type a barcode / SKU, then Enter" autocomplete="off" enterkeyhint="go" aria-label="Scan or type a barcode">
+      <button class="btn" data-action="scan" data-target="stocktake" aria-label="Scan with the camera"><svg class="ico-sm" aria-hidden="true"><use href="#i-scan"/></svg>Scan</button>
+    </div>
+    <div class="kpis st-kpis">
+      <div class="kpi"><div class="label">Counted</div><div class="value num" data-k="st-counted">${t.counted}</div><div class="sub">${t.lines} of ${t.variants} sizes/colours</div></div>
+      <div class="kpi"><div class="label">Expected</div><div class="value num">${t.expected}</div><div class="sub">in stock according to Rails POS</div></div>
+    </div>
+    <div class="row gap-s wrap" style="margin:8px 0">
+      <input id="stFind" class="input grow" type="search" placeholder="Find a product…" value="${esc(ui.st.find)}" aria-label="Find a product">
+      <div class="seg" role="group" aria-label="Show">${[['all', 'All'], ['not', 'Not counted'], ['counted', 'Counted']].map(([k, l]) =>
+        `<button data-action="st-show" data-v="${k}" class="${ui.st.show === k ? 'on' : ''}" aria-pressed="${ui.st.show === k}">${l}</button>`).join('')}</div>
+    </div>
+    <div class="lb-list">${rows.slice(0, 400).map(({ p, v, c }) => `<label class="lb-row st-row ${c == null ? '' : c === v.stock ? 'st-ok' : 'st-diff'}">
+        <span class="grow">${esc(p.name)} <span class="muted">(${esc(v.size)} / ${esc(v.colour)})</span><br><span class="small muted">${esc(v.sku)} · expected ${v.stock}${c != null && c !== v.stock ? ` · <strong>${c > v.stock ? '+' : ''}${c - v.stock}</strong>` : ''}</span></span>
+        <input class="input sm lb-qty" inputmode="numeric" data-st="${esc(v.id)}" value="${c ?? ''}" placeholder="–" aria-label="Count for ${esc(p.name)} ${esc(v.size)} ${esc(v.colour)}"></label>`).join('')
+      || '<div class="empty">Nothing to show.</div>'}
+      ${rows.length > 400 ? `<p class="small muted">Showing 400 of ${rows.length} — use Find to narrow it down.</p>` : ''}</div>`;
+  $('#stFoot').innerHTML = `<button class="btn danger" data-action="st-discard">Discard</button><span class="grow"></span>
+    <button class="btn" data-action="close-modal">Close (continue later)</button>
+    <button class="btn primary" data-action="st-review" ${t.lines ? '' : 'disabled'}>Review differences</button>`;
+}
+
+/** One scan / Enter: +1 for that size/colour. */
+function stCountCode(code) {
+  const s = stSession();
+  if (!s) return;
+  const f = findByCode(String(code).trim());
+  if (!f) { toast(`No product has the code ${code}`, true); navigator.vibrate?.([60, 60, 60]); return; }
+  s.counts[f.variant.id] = (s.counts[f.variant.id] || 0) + 1;
+  saveSt();
+  toast(`${f.product.name} ${f.variant.size}/${f.variant.colour}: ${s.counts[f.variant.id]}`);
+  renderStocktake();
+  $('#stScan')?.focus();
+}
+
+function stSetCount(variantId, value) {
+  const s = stSession();
+  if (!s) return;
+  const txt = String(value).trim();
+  if (txt === '') delete s.counts[variantId];
+  else { const n = parseInt(txt, 10); if (!(n >= 0)) return toast('Enter a whole number', true); s.counts[variantId] = Math.min(n, 99999); }
+  saveSt();
+}
+
+/** Differences between the counts and the stock in Rails POS. */
+function stDifferences(uncounted = ui.st?.uncounted || 'keep') {
+  const s = stSession();
+  const rows = [];
+  for (const p of state.products) for (const v of p.variants) {
+    const c = s.counts[v.id] ?? (uncounted === 'zero' ? 0 : null);
+    if (c == null || c === v.stock) continue;
+    rows.push({ p, v, counted: c, expected: v.stock, diff: c - v.stock, value: (c - v.stock) * costOf(p, v), uncounted: s.counts[v.id] == null });
+  }
+  rows.sort((a, b) => a.value - b.value);
+  const missing = rows.filter(r => r.diff < 0), extra = rows.filter(r => r.diff > 0);
+  return { rows, missingUnits: -sum(missing, r => r.diff), missingValue: -sum(missing, r => r.value), extraUnits: sum(extra, r => r.diff), extraValue: sum(extra, r => r.value) };
+}
+
+function renderStReview() {
+  const d = stDifferences();
+  const t = stTotals();
+  $('#stBody').innerHTML = `
+    <div class="kpis st-kpis">
+      <div class="kpi"><div class="label">Missing</div><div class="value num err-text">${d.missingUnits}</div><div class="sub">worth <span class="money neg">${money(d.missingValue)}</span> at cost</div></div>
+      <div class="kpi"><div class="label">Extra</div><div class="value num">${d.extraUnits}</div><div class="sub">worth <span class="money">${money(d.extraValue)}</span> at cost</div></div>
+    </div>
+    <div class="field"><span>Sizes/colours not counted (${t.variants - t.lines})</span>
+      <div class="seg" role="group" aria-label="Not counted">
+        <button data-action="st-uncounted" data-v="keep" class="${ui.st.uncounted === 'keep' ? 'on' : ''}" aria-pressed="${ui.st.uncounted === 'keep'}">Leave as they are</button>
+        <button data-action="st-uncounted" data-v="zero" class="${ui.st.uncounted === 'zero' ? 'on' : ''}" aria-pressed="${ui.st.uncounted === 'zero'}">They're missing (0)</button>
+      </div></div>
+    ${d.rows.length ? `<table class="list-table">${d.rows.slice(0, 300).map(r => `<tr><td>${esc(r.p.name)} <span class="muted">(${esc(r.v.size)} / ${esc(r.v.colour)})</span>${r.uncounted ? ' <span class="small muted">· not counted</span>' : ''}<br>
+      <span class="small muted">expected ${r.expected} · counted ${r.counted}</span></td><td><strong class="${r.diff < 0 ? 'err-text' : 'ok-text'}">${r.diff > 0 ? '+' : ''}${r.diff}</strong><br><span class="money small ${r.value < 0 ? 'neg' : ''}">${money(r.value)}</span></td></tr>`).join('')}</table>`
+      : '<div class="empty">No differences — everything counted matches.</div>'}
+    <p class="small muted">"Apply" sets the stock to your counts (recorded as stock counts in each item's history and in the activity log). Sales made while counting: count those items again before applying.</p>`;
+  $('#stFoot').innerHTML = `<button class="btn" data-action="st-back">Back to counting</button><span class="grow"></span>
+    <button class="btn" data-action="st-print">Print A4</button>
+    <button class="btn primary" data-action="st-apply">Apply counts</button>`;
+}
+
+async function applyStocktake() {
+  const d = stDifferences();
+  if (!(await confirmBox(`Set the stock to your counts? ${d.rows.length} size/colour${d.rows.length === 1 ? '' : 's'} change: ${d.missingUnits} missing (${money(d.missingValue)}), ${d.extraUnits} extra (${money(d.extraValue)}).`, 'Apply counts'))) return;
+  const ops = [];
+  const touched = new Set();
+  for (const r of d.rows) {
+    r.v.stock = r.counted;
+    touched.add(r.p);
+    ops.push(opPut('movements', { ...movement(r.p, r.v, r.diff, 'count'), ref: 'Stock take' }));
+  }
+  touched.forEach(p => ops.push(opPut('products', p)));
+  const t = stTotals();
+  ops.push(logOp('stocktake', `Stock take applied: ${t.counted} items counted, ${d.missingUnits} missing (${money(d.missingValue)} at cost), ${d.extraUnits} extra (${money(d.extraValue)})`, { amount: d.extraValue - d.missingValue }));
+  delete state.meta.stocktake;
+  ops.push(opKv('meta', state.meta));
+  await persist(ops);
+  closeModal();
+  renderAll();
+  toast(d.rows.length ? `Stock updated: ${d.rows.length} change${d.rows.length === 1 ? '' : 's'}` : 'Stock take finished — no changes');
+}
+
+async function discardStocktake() {
+  if (!(await confirmBox('Throw away this stock take and all its counts?', 'Discard', true))) return openStocktake();
+  delete state.meta.stocktake;
+  await saveSt();
+  closeModal();
+  toast('Stock take discarded');
+}
+
+function printStocktakeA4() {
+  const d = stDifferences();
+  const s = stSession();
+  $('#printA4').innerHTML = `${a4Header('Stock take — differences', `Started ${fmtDT(s.started)}${s.by ? ` by ${s.by}` : ''}`)}
+    <section class="a4-kpis">
+      <div><span>Missing items</span><b>${d.missingUnits}</b><small>${money(d.missingValue)} at cost</small></div>
+      <div><span>Extra items</span><b>${d.extraUnits}</b><small>${money(d.extraValue)} at cost</small></div>
+      <div><span>Net difference</span>${m4(d.extraValue - d.missingValue)}</div>
+      <div><span>Not counted</span><b>${ui.st.uncounted === 'zero' ? 'treated as 0' : 'left as is'}</b></div>
+    </section>
+    <table class="a4-list">
+      <thead><tr><th>Product</th><th>Size / colour</th><th>SKU</th><th class="r">Expected</th><th class="r">Counted</th><th class="r">Difference</th><th class="r">Value at cost</th></tr></thead>
+      <tbody>${d.rows.map(r => `<tr class="${r.diff < 0 ? 'refund' : ''}"><td>${esc(r.p.name)}</td><td>${esc(r.v.size)} / ${esc(r.v.colour)}</td><td class="sku">${esc(r.v.sku)}</td>
+        <td class="r">${r.expected}</td><td class="r">${r.counted}${r.uncounted ? '*' : ''}</td><td class="r">${r.diff > 0 ? '+' : ''}${r.diff}</td><td class="r">${m4(r.value)}</td></tr>`).join('')
+        || '<tr><td colspan="7">No differences.</td></tr>'}</tbody>
+    </table>
+    <p class="a4-note">* not counted, treated as 0. Checked by: ______________________ Date: ____________</p>
+    ${a4Foot()}`;
+  setPrintMode('a4');
+  setTimeout(() => window.print(), 50);
 }
 
 /* ===== 15. One tab at a time ============================================
@@ -5858,6 +6427,26 @@ const actions = {
   'backup-share': () => backupShare(),
   'email-data': () => emailMyData(),
   'share-pending': () => sharePending(),
+  petty: () => openPetty(),
+  'petty-type': el => { ui.petty.amt = $('#ptAmount')?.value || ''; ui.petty.note = $('#ptNote')?.value || ''; ui.petty.type = el.dataset.v; renderPetty(); },
+  'petty-cat': el => { ui.petty.cat = el.dataset.v; $$('[data-action="petty-cat"]').forEach(b => { b.classList.toggle('on', b.dataset.v === ui.petty.cat); b.setAttribute('aria-pressed', String(b.dataset.v === ui.petty.cat)); }); },
+  'petty-save': () => savePetty(),
+  'petty-del': el => deletePetty(el.dataset.id),
+  'owner-summary': () => sendDailySummary(),
+  park: () => openPark(),
+  'park-save': () => parkCart($('#parkName')?.value || ''),
+  parked: () => openParked(),
+  'park-resume': el => resumeParked(el.dataset.id),
+  'park-del': el => deleteParked(el.dataset.id),
+  stocktake: () => openStocktake(),
+  'st-show': el => { ui.st.show = el.dataset.v; renderStocktake(); },
+  'st-review': () => { ui.st.review = true; renderStocktake(); },
+  'st-back': () => { ui.st.review = false; renderStocktake(); },
+  'st-uncounted': el => { ui.st.uncounted = el.dataset.v; renderStocktake(); },
+  'st-apply': () => applyStocktake(),
+  'st-discard': () => discardStocktake(),
+  'st-print': () => printStocktakeA4(),
+  'event-msg': el => messageEvent(el.dataset.id),
   'restore-paste': () => restoreFromText($('#restoreText').value),
   'export-csv': () => exportCsv(),
   'start-fresh': () => startFresh(),
@@ -5926,15 +6515,15 @@ const ACTION_PERMS = {
   'toggle-low': 'stock', 'add-product': 'stock', 'np-all': 'stock', 'np-save': 'stock', 'edit-product': 'stock', 'ep-save': 'stock',
   'add-variant': 'stock', 'edit-variant': 'stock', 'variant-save': 'stock', 'delete-variant': 'stock', 'delete-product': 'stock',
   'stock-d': 'stock', receive: 'stock', 'receive-save': 'stock', history: 'stock',
-  range: 'reports', cashup: 'reports', 'cashup-save': 'reports', 'print-menu': 'reports', 'print-a4': 'reports',
+  range: 'reports', cashup: 'reports', 'cashup-save': 'reports', petty: 'reports', 'petty-type': 'reports', 'petty-cat': 'reports', 'petty-save': 'reports', 'petty-del': 'reports', 'owner-summary': 'reports', 'print-menu': 'reports', 'print-a4': 'reports',
   'backup-download': 'settings', 'backup-copy': 'settings', 'backup-share': 'settings', 'restore-paste': 'settings', 'email-data': 'settings', 'share-pending': 'settings',
   'export-csv': 'settings', 'start-fresh': 'settings', 'load-demo': 'settings',
   'user-add': 'admin', 'user-edit': 'admin', 'user-save': 'admin', 'user-delete': 'admin',
   'cloud-signin': 'settings', 'cloud-signup': 'settings', 'cloud-disconnect': 'settings', 'cloud-create': 'settings', 'cloud-join': 'settings',
   'go-settings': 'settings',
-  labels: 'stock', 'lb-fill': 'stock', 'lb-print': 'stock',
+  labels: 'stock', 'lb-fill': 'stock', 'lb-print': 'stock', stocktake: 'stock', 'st-show': 'stock', 'st-review': 'stock', 'st-back': 'stock', 'st-uncounted': 'stock', 'st-apply': 'stock', 'st-discard': 'stock', 'st-print': 'stock',
   'open-customer': 'customers', 'cust-new': 'customers', 'cust-edit': 'customers', 'cust-save': 'customers', 'cust-sell': 'customers',
-  'layby-start': 'customers', 'lbf-save': 'customers', 'lb-pay': 'customers', 'lbp-save': 'customers', 'lb-remind': 'customers',
+  'layby-start': 'customers', 'lbf-save': 'customers', 'lb-pay': 'customers', 'lbp-save': 'customers', 'lb-remind': 'customers', 'event-msg': 'customers',
   'lb-collect': 'customers', 'lb-cancel': 'customers', 'lbc-save': 'customers', 'stmt-a4': 'customers',
   'logo-remove': 'settings',
 };
@@ -5962,6 +6551,10 @@ function bindEvents() {
   });
   $('#sellSearch').addEventListener('input', renderSell);
   $('#sellSearch').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); onSellSearchEnter(); } });
+  // Stock take: a scanner types the code + Enter → count 1
+  document.addEventListener('keydown', e => {
+    if (e.target.id === 'stScan' && e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); const v = e.target.value.trim(); e.target.value = ''; if (v) stCountCode(v); }
+  });
   $('#stockSearch').addEventListener('input', renderStock);
   $('#salesSearch').addEventListener('input', renderSales);
   $('#discountValue').addEventListener('input', e => { ui.cart.discountText = e.target.value; renderTotals(); saveCart(); });
@@ -5978,6 +6571,11 @@ function bindEvents() {
     if (t.closest?.('#labelsBody')) onLabelsChange(t);
     if (t.id === 'impFile' && allowed('stock')) loadImportFile(t);
     if (t.id === 'impUpdate' && ui.imp) { ui.imp.update = t.checked; renderImport(); }
+    if (t.dataset.st !== undefined && allowed('stock')) {
+      stSetCount(t.dataset.st, t.value);
+      const tt = stTotals(); const k = $('[data-k="st-counted"]'); if (k) k.textContent = tt.counted;
+    }
+    if (['actUser', 'actType', 'actDays'].includes(t.id)) { ui.actFilter[{ actUser: 'user', actType: 'type', actDays: 'days' }[t.id]] = t.value; renderActivity(); }
     if ((t.id === 'rFrom' || t.id === 'rTo') && t.value) {
       ui.customFrom = $('#rFrom').value; ui.customTo = $('#rTo').value;
       renderReports();
@@ -5988,6 +6586,12 @@ function bindEvents() {
     if (e.target.id === 'fSizes' || e.target.id === 'fColours') renderVariantGrid();
     if (e.target.id === 'cuCounted') paintCashupDiff();
     if (e.target.dataset?.lbq !== undefined) onLabelsChange(e.target); // label counts update as you type
+    if (e.target.id === 'stFind' && ui.st) {
+      ui.st.find = e.target.value;
+      const pos = e.target.selectionStart;
+      renderStocktake();
+      const f = $('#stFind'); f.focus(); f.setSelectionRange(pos, pos);
+    }
     const id = e.target.id;
     if (id === 'custSearch') { ui.custQuery = e.target.value; paintCustomerList(); }
     if (ui.lbf && id === 'lbfSearch') { ui.lbf.query = e.target.value; paintLaybyResults(); }
@@ -6002,7 +6606,8 @@ function bindEvents() {
       else if (!$('#modal').hidden) closeModal();
       else closeCartSheet();
     }
-    if (e.key === 'Enter' && !$('#modal').hidden && e.target.tagName === 'INPUT') {
+    // (not in the stock take: a barcode scanner sends Enter after every code)
+    if (e.key === 'Enter' && !e.defaultPrevented && !$('#modal').hidden && e.target.tagName === 'INPUT' && !e.target.closest('#stBody')) {
       // Enter in a modal form presses its primary button
       const primary = $('#modal .modal-foot .btn.primary');
       if (primary && !primary.disabled) { e.preventDefault(); primary.click(); }

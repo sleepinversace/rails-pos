@@ -17,6 +17,17 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v29 — 2026-11-22 · Park a sale, petty cash, daily summary, activity log, stock take, client events, returns check
+- ✨ **Park a sale** (fitting rooms): **Park** in the cart puts the sale aside with a name ("Lady in fitting room 2"); **Parked (n)** on the Sell screen brings it back. Kept on that till; items sold out meanwhile are left out with a warning.
+- ✨ **Petty cash** (Reports → cash-up card): money paid out of the till for expenses (categories set in Settings → Shop floor) or cash added. Counted in the expected cash, shown on the cash-up and Z-report, synced.
+- ✨ **Daily summary on WhatsApp**: one tap (Reports, or on the Z-report) sends the owner today's takings, cash/card/EFT, profit, discounts, lay-by payments, petty cash, best sellers, cash-ups over/short and overdue lay-bys. Owner's number in Settings → Shop floor.
+- ✨ **Activity log** (Admin screen, owners): who gave discounts, refunds and exchanges, changed prices, adjusted or received stock, deleted products, cancelled lay-bys, cashed up (over/short), used petty cash, changed staff, imported stock, ran a stock take, restored or started fresh. Filter by person, kind and period. Synced, so it covers every till; kept when the shop starts fresh.
+- ✨ **Full stock take** (Stock → Stock take): scan every item (USB scanner or camera) or type counts; continue later; review **missing / extra** with the value at cost; leave uncounted items or treat them as missing; print A4; apply as stock counts.
+- ✨ **Client events** (wedding, matric dance, Eid…): event date on the client, shown on the profile with the final-fitting date; **Clients → Events** lists the next 60 days with lay-by money still owed and a one-tap WhatsApp message. Wording and fitting days in Settings → Lay-bys. A demo client has a wedding.
+- ✨ **Returns-policy check**: the return screen says how long ago the sale was and warns when it's outside the shop's return period (Settings → Shop floor, default 7 days; 0 = no limit). Returns outside the period are marked in the activity log.
+- 🐞 Pressing Enter in the stock take (as barcode scanners do) no longer jumps to the review.
+- 🗄️ SQL: record types `expenses` and `activity`. Re-run `cloud/supabase-setup.sql`. (On-device database version 5.)
+
 ## v28 — 2026-11-22 · Full check; sharing fix for iPhone / iPad
 - 🐞 **Email me my data** and **Share backup** on iPhone / iPad: Safari can refuse to open the share sheet because preparing the file takes a moment. The app now shows "Your file is ready" with a **Share** button; that tap always works.
 - 🔧 Full check of the app: all screens at phone and tablet size, every slip type at 80 mm, 58 mm and WhatsApp width, all six A4 reports, statements, A4 and label-printer labels, import, reminders and the data export — no errors found.

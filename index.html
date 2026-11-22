@@ -63,6 +63,7 @@
         <div class="search-row">
           <input id="sellSearch" type="search" placeholder="Search name or scan SKU…" autocomplete="off" enterkeyhint="go" aria-label="Search products or scan SKU">
           <button class="btn scan-btn" data-action="scan" data-target="sell" aria-label="Scan a barcode with the camera"><svg class="ico-sm" aria-hidden="true"><use href="#i-scan"/></svg><span>Scan</span></button>
+          <button id="parkedBtn" class="btn parked-btn" data-action="parked" hidden>Parked</button>
         </div>
         <div id="catChips" class="chips" role="group" aria-label="Categories"></div>
         <div id="productGrid" class="product-grid"></div>
@@ -72,6 +73,7 @@
       <aside id="cartPanel" class="cart-panel" aria-label="Cart">
         <div class="cart-head">
           <h2 id="cartTitle" tabindex="-1">Cart</h2>
+          <button class="btn ghost sm" data-action="park" title="Put this sale aside (e.g. the customer is in the fitting room)">Park</button>
           <button class="btn ghost sm" data-action="clear-cart">Clear</button>
           <button class="btn ghost sm cart-close" data-action="close-cart" aria-label="Close cart">✕</button>
         </div>
@@ -114,6 +116,7 @@
       <div class="toolbar">
         <input id="stockSearch" type="search" placeholder="Search stock…" aria-label="Search stock">
         <button id="lowToggle" class="btn chip-btn" data-action="toggle-low" aria-pressed="false">Low stock</button>
+        <button class="btn" data-action="stocktake">Stock take</button>
         <button class="btn" data-action="import-stock">Import</button>
         <button class="btn" data-action="labels">Labels</button>
         <button class="btn primary" data-action="add-product">+ Product</button>
@@ -161,6 +164,8 @@
       </div>
       <p class="small muted" style="margin-top:0">Each person signs in with their own username and 4-digit PIN. Untick what they shouldn't use; the Sell screen is always available.</p>
       <div id="userList"></div>
+      <div class="section-title">Activity log</div>
+      <div id="activityLog"></div>
     </section>
   </main>
 
