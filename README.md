@@ -34,6 +34,7 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
 - **Cloud sync and backup** (Supabase)
   - Every device of a shop shares sales, stock, products, settings and staff users. Changes arrive within about 20 seconds, and straight away when you open Reports or Sales.
   - Works offline: sales are queued and sent when the connection returns. The header shows Synced 2 min ago, Syncing…, Offline · 3 waiting, or Sync problem (and a calm grey "Saved on this device" when cloud sync isn't on).
+  - **Devices online:** Settings → Cloud sync lists the shop's devices (till letter, type, who is signed in, online now or last seen). On tablets and computers the header also shows "Devices online 2". A device drops off as soon as the app is closed or the screen locks.
   - Stock stays right when two tills sell the same item at once: devices sync stock *movements* (−1, +1 …) and each device adds them up.
   - Each device is a till with its own letter, so receipt numbers never clash (A-00012, B-00003). Each till cashes up its own drawer, and Reports show the whole shop.
   - A new, lost or wiped device signs in with the shop email and gets everything back.
