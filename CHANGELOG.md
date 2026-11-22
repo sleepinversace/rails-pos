@@ -17,6 +17,14 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v38 — 2026-11-22 · "Devices online" in the header; closed devices drop off at once 🗄️
+
+- ✨ On tablets and computers, the header shows **Devices online 2** (the live number of the shop's devices with Rails POS open) next to the sync status. Tap it to open the device list in Settings. Hidden on phones to keep the header tidy, and when cloud sync is off.
+- 🐞 A phone that was closed or switched off could still show as "online now" for a few minutes. Now a device says goodbye when the app is closed, hidden or the screen locks, so it drops off straight away; devices also check in on every sync (about every 20 seconds), and one that stops checking in counts as offline after 90 seconds.
+- 🗄️ Needs the Supabase SQL file re-run again (`devices.left_at`, new `device_bye` function, `device_ping` returns `left_at`).
+
+---
+
 ## v37 — 2026-11-22 · See which devices are signed in 🗄️
 
 - ✨ **Settings → Cloud sync** now lists the shop's devices: till letter, type (iPad, iPhone, Android phone, Windows PC…), who is signed in on it, and "online now" or when it was last seen. At the top: "3 devices online now · 4 used in the last 30 days". The header pill's tooltip shows the same count.

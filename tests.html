@@ -1332,8 +1332,13 @@ function fakeCloud() {
     if (p === '/rest/v1/rpc/device_ping') {
       if (!shop) return json({ message: 'Not your shop' }, 400);
       db.devices ||= new Map();
-      db.devices.set(shop.id + '|' + body.p_device, { shop_id: shop.id, device: body.p_device, code: body.p_code, label: body.p_label, user_name: body.p_user, last_seen: new Date().toISOString() });
+      db.devices.set(shop.id + '|' + body.p_device, { shop_id: shop.id, device: body.p_device, code: body.p_code, label: body.p_label, user_name: body.p_user, last_seen: new Date().toISOString(), left_at: null });
       return json([...db.devices.values()].filter(d => d.shop_id === shop.id).map(({ shop_id, ...d }) => d));
+    }
+    if (p === '/rest/v1/rpc/device_bye') {
+      const d = shop && db.devices?.get(shop.id + '|' + body.p_device);
+      if (d) d.left_at = new Date().toISOString();
+      return json(null, 204);
     }
     if (p === '/rest/v1/rpc/reset_shop') {
       shop.generation++;
@@ -1439,8 +1444,20 @@ test('Cloud sync: two tills share sales, stock and settings; a wiped device gets
   await w.devicePing(true);
   eq(P.Cloud.devices.map(x => x.code).sort(), ['A', 'B'], 'both tills checked in');
   ok(P.Cloud.devices.every(x => Date.now() - new Date(x.last_seen) < 60000), 'both online now');
+  w.renderCloudStatus();
+  eq([$('#devPill').hidden, $('#devPill').textContent.trim()], [false, 'Devices online 2'], 'header pill counts the devices online');
+  // Till A closes the app (goodbye): B sees 1 online at its next check-in, and A as "seen … ago"
+  const devA = [...cloud.devices.values()].find(x => x.code === 'A');
+  devA.left_at = new Date().toISOString();
+  await w.devicePing(true); w.renderCloudStatus();
+  eq($('#devPill').textContent.trim(), 'Devices online 1', 'a closed device drops off at once');
+  // B's own goodbye reaches the cloud (sent when the app is hidden or closed)
+  w.deviceBye(); await tick(100);
+  ok([...cloud.devices.values()].find(x => x.code === 'B').left_at, 'goodbye recorded');
+  await w.devicePing(true);
+  ok(![...cloud.devices.values()].find(x => x.code === 'B').left_at, 'checking in again clears it');
   await nav('settings'); await tick(100);
-  ok($('#cloudDevices').textContent.includes('2 devices online now') && $('#cloudDevices').textContent.includes('(this device)'), 'Settings lists the devices: ' + $('#cloudDevices').textContent.replace(/\s+/g, ' ').slice(0, 120));
+  ok($('#cloudDevices').textContent.includes('1 device online now') && /seen/.test($('#cloudDevices').textContent) && $('#cloudDevices').textContent.includes('(this device)'), 'Settings lists the devices: ' + $('#cloudDevices').textContent.replace(/\s+/g, ' ').slice(0, 120));
   await nav('sell');
 
   // Both tills sell the same shirt while offline, and A changes the address

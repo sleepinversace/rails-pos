@@ -4326,11 +4326,13 @@ async function syncNow() {
 }
 
 /* ----- Devices signed in (v37) -----
-   While syncing, each device checks in (at most once a minute) and gets the
-   shop's device list back. "Online now" = checked in within ONLINE_MS. If the
+   While syncing (every 20 s while the app is open), each device checks in and
+   gets the shop's device list back. When the app is closed, hidden or the
+   screen locks, it says goodbye (deviceBye) so it drops off straight away.
+   "Online now" = no goodbye since, and checked in within ONLINE_MS. If the
    cloud database hasn't been updated yet, this quietly does nothing. */
-const PING_EVERY_MS = 60000;
-const ONLINE_MS = 3.5 * 60000;
+const PING_EVERY_MS = 15000;
+const ONLINE_MS = 90000;
 
 function deviceLabel() {
   const ua = navigator.userAgent || '';
@@ -4358,8 +4360,34 @@ async function devicePing(force = false) {
   }
 }
 
-const isOnline = d => Date.now() - new Date(d.last_seen) < ONLINE_MS;
+const isOnline = d => d.device === Cloud.conf?.deviceId || (!d.left_at && Date.now() - new Date(d.last_seen) < ONLINE_MS);
+
+/** The app is being closed or hidden (screen locked, app switched): tell the
+    cloud this device is no longer online. keepalive lets it finish after close. */
+function deviceBye() {
+  if (!cloudOn() || !Cloud.conf?.deviceId || !Cloud.conf.access || !Cloud.devices) return;
+  Cloud.pingAt = 0; // check in again as soon as the app is back
+  try {
+    cloudFetch(CLOUD.url.replace(/\/$/, '') + '/rest/v1/rpc/device_bye', {
+      method: 'POST', keepalive: true,
+      headers: { apikey: CLOUD.key, Authorization: 'Bearer ' + Cloud.conf.access, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_shop: Cloud.conf.shopId, p_device: Cloud.conf.deviceId }),
+    }).catch(() => {});
+  } catch {}
+}
 const onlineDevices = () => (Cloud.devices || []).filter(isOnline);
+
+/** Header pill "Devices online 2" (tablets and computers only; hidden on phones by CSS). */
+function renderDevPill() {
+  const pill = document.getElementById('devPill');
+  if (!pill) return;
+  const show = cloudOn() && Array.isArray(Cloud.devices) && Cloud.devices.length > 0;
+  pill.hidden = !show;
+  if (!show) return;
+  const n = onlineDevices().length;
+  pill.innerHTML = `<span class="dev-dot ${n ? 'on' : ''}"></span>Devices online <b>${n}</b>`;
+  pill.setAttribute('aria-label', `${n} device${n === 1 ? '' : 's'} online now`);
+}
 
 /** Settings → Cloud sync: who is signed in, and when each device was last seen. */
 function devicesHtml() {
@@ -4607,6 +4635,7 @@ function renderCloudStatus() {
   el.className = 'net ' + cls;
   el.title = title;
   el.setAttribute('aria-label', `${text}. ${title}`);
+  renderDevPill();
   if (ui.view === 'settings' && document.getElementById('cloudStatusLine')) $('#cloudStatusLine').innerHTML = cloudStatusLine();
   if (ui.view === 'settings' && document.getElementById('cloudDevices')) $('#cloudDevices').innerHTML = devicesHtml();
 }
@@ -7051,6 +7080,9 @@ function bindEvents() {
   // Header pill: online / offline, or the cloud sync status
   window.addEventListener('online', () => { renderCloudStatus(); syncNow(); });
   window.addEventListener('offline', () => renderCloudStatus());
+  $('#devPill').addEventListener('click', () => {
+    if (ui.user && $('#blocker').hidden && can('settings')) showView('settings');
+  });
   $('#netStatus').addEventListener('click', () => {
     if (!ui.user || !$('#blocker').hidden) return;
     if (cloudOn() && Cloud.status !== 'signedout') syncNow();
@@ -7061,7 +7093,8 @@ function bindEvents() {
 
   // Save anything pending when the app is hidden or closed (phone locked, app switched).
   const flush = () => { if (ui.appActive) { flushAllAdjust(); saveCart(true); } };
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); else syncNow(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { flush(); deviceBye(); } else syncNow(); });
+  window.addEventListener('pagehide', deviceBye);
   window.addEventListener('pagehide', flush);
 
   window.matchMedia('(min-width: 860px)').addEventListener('change', () => { closeCartSheet(); updateInert(); });

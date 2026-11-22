@@ -994,3 +994,11 @@ input:disabled { opacity: .5; }
 .dev-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--muted); opacity: .5; margin-right: 4px; }
 .dev-dot.on { background: var(--ok); opacity: 1; box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 60%, transparent); }
 .dev-on { color: var(--ok); font-weight: 650; white-space: nowrap; }
+
+/* ----- Header: "Devices online 2" (tablets and computers only) ----- */
+.dev-pill { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 99px;
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); background: var(--ok-soft); color: var(--ok); cursor: pointer; white-space: nowrap; }
+.dev-pill b { font-weight: 800; }
+.dev-pill .dev-dot { margin-right: 0; width: 7px; height: 7px; }
+.dev-pill[hidden] { display: none; }
+@media (max-width: 700px) { .dev-pill { display: none; } }

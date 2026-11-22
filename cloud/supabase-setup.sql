@@ -126,8 +126,10 @@ end $$;
 grant execute on function public.claim_device(uuid), public.reset_shop(uuid) to authenticated;
 revoke execute on function public.claim_device(uuid), public.reset_shop(uuid) from public, anon;
 
--- v37: which devices are signed in. Each device checks in while it syncs (at
--- most once a minute); "online now" = checked in within the last 3 minutes.
+-- v37: which devices are signed in. Each device checks in while it syncs
+-- (about every 20 seconds while open). v38: when the app is closed, hidden or
+-- the screen locks, the device says goodbye (left_at), so it drops off at once;
+-- otherwise "online now" = checked in within the last 90 seconds.
 create table if not exists public.devices (
   shop_id   uuid not null references public.shops(id) on delete cascade,
   device    text not null,             -- the app's own device id
@@ -137,6 +139,7 @@ create table if not exists public.devices (
   last_seen timestamptz not null default now(),
   primary key (shop_id, device)
 );
+alter table public.devices add column if not exists left_at timestamptz; -- v38: set when the app closes
 alter table public.devices enable row level security;
 drop policy if exists "own devices" on public.devices;
 create policy "own devices" on public.devices for select to authenticated
@@ -145,9 +148,10 @@ revoke all on public.devices from anon, authenticated;
 grant select on public.devices to authenticated;
 
 -- Check in and get the shop's devices back (seen in the last 30 days).
+drop function if exists public.device_ping(uuid, text, text, text, text); -- v38 adds left_at to the result
 create or replace function public.device_ping(p_shop uuid, p_device text, p_code text default null,
   p_label text default null, p_user text default null)
-returns table (device text, code text, label text, user_name text, last_seen timestamptz)
+returns table (device text, code text, label text, user_name text, last_seen timestamptz, left_at timestamptz)
 language plpgsql security definer set search_path = public as $$
 #variable_conflict use_column
 begin
@@ -158,14 +162,22 @@ begin
   insert into public.devices as d (shop_id, device, code, label, user_name, last_seen)
     values (p_shop, p_device, left(p_code, 8), left(p_label, 40), left(p_user, 60), now())
     on conflict (shop_id, device) do update
-      set code = excluded.code, label = excluded.label, user_name = excluded.user_name, last_seen = now();
+      set code = excluded.code, label = excluded.label, user_name = excluded.user_name, last_seen = now(), left_at = null;
   return query
-    select d.device, d.code, d.label, d.user_name, d.last_seen from public.devices d
+    select d.device, d.code, d.label, d.user_name, d.last_seen, d.left_at from public.devices d
     where d.shop_id = p_shop and d.last_seen > now() - interval '30 days'
     order by d.code nulls last, d.last_seen desc;
 end $$;
-revoke execute on function public.device_ping(uuid, text, text, text, text) from public, anon;
-grant execute on function public.device_ping(uuid, text, text, text, text) to authenticated;
+-- The app was closed, hidden or the screen locked: this device is no longer online.
+create or replace function public.device_bye(p_shop uuid, p_device text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  update public.devices d set left_at = now()
+  where d.shop_id = p_shop and d.device = p_device
+    and exists (select 1 from public.shops s where s.id = p_shop and s.owner = auth.uid());
+end $$;
+revoke execute on function public.device_ping(uuid, text, text, text, text), public.device_bye(uuid, text) from public, anon;
+grant execute on function public.device_ping(uuid, text, text, text, text), public.device_bye(uuid, text) to authenticated;
 
 -- =========================================================================
 -- SUPPLIER ADMIN (admin.html) — only for the Rails POS supplier.
@@ -263,7 +275,7 @@ begin
            (select count(distinct r.device) from public.records r
              where r.shop_id = s.id and r.device is not null and r.updated_at > now() - interval '30 days')::int,
            s.billed_devices,
-           (select count(*) from public.devices d where d.shop_id = s.id and d.last_seen > now() - interval '3 minutes')::int
+           (select count(*) from public.devices d where d.shop_id = s.id and d.left_at is null and d.last_seen > now() - interval '90 seconds')::int
     from public.shops s join auth.users u on u.id = s.owner
     order by s.created_at;
 end $$;
