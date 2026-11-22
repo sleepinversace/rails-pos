@@ -17,6 +17,13 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v33 — 2026-11-22 · Friendlier empty cart
+
+- 🔧 With nothing in the cart, the cart panel now shows the Rails POS logo, "Ready to sell", how many sales the till has done today and, if there are any, a button for the parked sales waiting. The rand total for today shows only to staff who may see reports, so a cashier on a blind cash-up still cannot see it.
+- To go back to the old empty cart only: `git revert` this commit (the tile changes in v32 stay). The whole app before v32 is saved as the git tag `backup-v31`.
+
+---
+
 ## v32 — 2026-11-22 · Clearer product tiles
 
 - 🔧 Each category now has its own colour (the strip down the left of the tile) and a small clothing icon in the corner: shirt, pants, dress, jacket, shoe, bag, or a hanger for anything else. A product photo still takes that corner when there is one.

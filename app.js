@@ -2231,6 +2231,27 @@ function onSellSearchEnter() {
 
 /* ----- Cart ----- */
 
+/* What the empty cart shows: the Rails POS logo, how to start, today's sales
+   (the rand total only for staff who may see reports — a blind cash-up
+   cashier sees the count only) and a shortcut to parked sales. */
+function cartWelcomeHtml() {
+  const from = startOfDay(), to = addDays(from, 1);
+  const today = state.sales.filter(s => { const d = new Date(s.date); return d >= from && d < to; });
+  const pk = (state.meta.parked || []).length;
+  let stat = 'No sales yet today';
+  if (today.length) {
+    stat = `${today.length} sale${today.length === 1 ? '' : 's'} today`;
+    if (can('reports')) stat += ` · <span class="money">${money(buildReport({ from, to }).revenue)}</span>`;
+  }
+  return `<div class="cart-welcome">
+    <img src="icon-192.png" alt="" width="64" height="64">
+    <div class="cw-title">Ready to sell</div>
+    <div class="cw-hint">Tap a product or scan a barcode to start a sale.</div>
+    <div class="cw-stat">${stat}</div>
+    ${pk ? `<button class="btn sm cw-parked" data-action="parked">${pk} parked sale${pk === 1 ? '' : 's'} waiting</button>` : ''}
+  </div>`;
+}
+
 function renderCart() {
   const t = cartTotals();
   const cr = ui.cart.credit;
@@ -2250,7 +2271,7 @@ function renderCart() {
         <span>${l.qty}</span>
         <button data-action="line-qty" data-id="${esc(l.variantId)}" data-d="1" aria-label="One more ${esc(l.product.name)}">+</button></span></div>
       <div style="text-align:right"><button class="btn ghost sm" data-action="line-remove" data-id="${esc(l.variantId)}" aria-label="Remove ${esc(l.product.name)}">Remove</button></div>
-    </div>`).join('') : `<div class="empty">${cr ? 'Add the items the customer is taking in exchange.' : 'Tap a product or scan a barcode to start a sale.'}</div>`;
+    </div>`).join('') : cr ? '<div class="empty">Add the items the customer is taking in exchange.</div>' : cartWelcomeHtml();
 
   setPressed('[data-action="disc-type"]', b => b.dataset.type === ui.cart.discountType);
   setPressed('[data-action="pay"]', b => b.dataset.pay === ui.cart.payment);
