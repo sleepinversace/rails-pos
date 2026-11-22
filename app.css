@@ -983,3 +983,14 @@ input:disabled { opacity: .5; }
 .size-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .size-chip { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--surface-2); color: var(--muted); }
 .size-chip b { color: var(--text); margin-right: 3px; }
+
+/* ----- Settings → Cloud sync: devices signed in ----- */
+.dev-box:empty { display: none; }
+.dev-box { margin: 4px 0 12px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); }
+.dev-head { font-size: 14px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.dev-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.dev-list li { display: flex; align-items: center; gap: 8px; }
+.dev-list .grow { flex: 1; min-width: 0; }
+.dev-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--muted); opacity: .5; margin-right: 4px; }
+.dev-dot.on { background: var(--ok); opacity: 1; box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 60%, transparent); }
+.dev-on { color: var(--ok); font-weight: 650; white-space: nowrap; }

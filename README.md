@@ -79,6 +79,7 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - Sign in with the admin email and password (no authenticator app). Only logins listed in the `vendor_admins` table get in; everything else is refused by the database.
   - Every shop with its login email, trial / paid status, paid-until date, tills, last activity, total paid and last payment. Totals: shops, paid this month, shops needing attention, deactivated.
   - **Record payment:** paid-on date (can be backdated), the **paid-until** date you choose, amount, method and note. **Payment history** per shop. **Set date** / **No end date** without a payment. **Deactivate** (with a reason the shop sees) and **Reactivate**.
+  - **Online now:** how many of each shop's devices are open right now (v37).
   - **Billing:** monthly fee per shop (R380 + R50 per extra device; devices used in the last 30 days, or a number you set), suggested payment amounts, the once-off setup fee (R1 500), printable **invoices** and **payment receipts** (A4 or PDF). Your bank details for invoices are saved only in your browser. Prices are in `PRICES` at the top of `admin.js`.
   - Every change is written to an audit log (Recent changes). The page forgets the login when the tab closes, signs out after 15 minutes idle, has a strict content-security policy and is never cached offline.
   - Add an admin once in Supabase → SQL Editor: `insert into public.vendor_admins (user_id) select id from auth.users where email = 'your@email';`

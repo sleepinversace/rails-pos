@@ -4311,6 +4311,7 @@ async function syncNow() {
     }
     Cloud.conf.lastSyncAt = new Date().toISOString();
     await saveCloudConf();
+    await devicePing();
     setCloudStatus('ok');
     if (Cloud.licenceChanged) { Cloud.licenceChanged = false; renderAfterSync(); }
   } catch (e) {
@@ -4322,6 +4323,57 @@ async function syncNow() {
     renderCloudStatus();
     if (Cloud.again) { Cloud.again = false; scheduleSync(300); }
   }
+}
+
+/* ----- Devices signed in (v37) -----
+   While syncing, each device checks in (at most once a minute) and gets the
+   shop's device list back. "Online now" = checked in within ONLINE_MS. If the
+   cloud database hasn't been updated yet, this quietly does nothing. */
+const PING_EVERY_MS = 60000;
+const ONLINE_MS = 3.5 * 60000;
+
+function deviceLabel() {
+  const ua = navigator.userAgent || '';
+  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'iPad';
+  if (/iPhone/.test(ua)) return 'iPhone';
+  if (/Android/.test(ua)) return /Mobile/.test(ua) ? 'Android phone' : 'Android tablet';
+  if (/Windows/.test(ua)) return 'Windows PC';
+  if (/Macintosh/.test(ua)) return 'Mac';
+  if (/CrOS/.test(ua)) return 'Chromebook';
+  return 'Browser';
+}
+
+async function devicePing(force = false) {
+  if (!cloudOn() || !Cloud.conf?.deviceId) return;
+  if (!force && Cloud.pingAt && Date.now() - Cloud.pingAt < PING_EVERY_MS) return;
+  Cloud.pingAt = Date.now();
+  try {
+    const rows = await cloudApi('/rest/v1/rpc/device_ping', { method: 'POST', body: {
+      p_shop: Cloud.conf.shopId, p_device: Cloud.conf.deviceId, p_code: Cloud.conf.deviceCode || null,
+      p_label: deviceLabel(), p_user: ui.user?.name || null } });
+    if (Array.isArray(rows)) { Cloud.devices = rows; Cloud.devicesAt = Date.now(); }
+  } catch (e) {
+    if (e.signedOut) throw e;
+    Cloud.devices = null; // not available yet (database not updated) — no list
+  }
+}
+
+const isOnline = d => Date.now() - new Date(d.last_seen) < ONLINE_MS;
+const onlineDevices = () => (Cloud.devices || []).filter(isOnline);
+
+/** Settings → Cloud sync: who is signed in, and when each device was last seen. */
+function devicesHtml() {
+  const list = Cloud.devices;
+  if (!list || !list.length) return '';
+  const me = Cloud.conf?.deviceId;
+  const n = onlineDevices().length;
+  return `<div class="dev-head"><span class="dev-dot on"></span><strong>${n} device${n === 1 ? '' : 's'} online now</strong> <span class="muted small">· ${list.length} used in the last 30 days</span></div>
+    <ul class="dev-list">${list.map(d => {
+      const on = isOnline(d);
+      return `<li><span class="dev-dot ${on ? 'on' : ''}"></span>
+        <span class="grow"><strong>${d.code ? `Till ${esc(d.code)}` : 'Device'}</strong> · ${esc(d.label || 'Device')}${d.user_name ? ` · ${esc(d.user_name)}` : ''}${d.device === me ? ' <span class="muted">(this device)</span>' : ''}</span>
+        <span class="small ${on ? 'dev-on' : 'muted'}">${on ? 'online now' : `seen ${esc(agoText(d.last_seen))}`}</span></li>`;
+    }).join('')}</ul>`;
 }
 
 function scheduleSync(ms = 1500) {
@@ -4548,6 +4600,7 @@ function renderCloudStatus() {
     text = p ? 'Saving…' : 'Synced';
     if (!p && Cloud.conf.lastSyncAt) more = ' ' + agoText(Cloud.conf.lastSyncAt);
     title = Cloud.conf.lastSyncAt ? `Last synced ${fmtDT(Cloud.conf.lastSyncAt)}` : 'Synced';
+    if (Cloud.devices?.length) { const n = onlineDevices().length; title += ` · ${n} device${n === 1 ? '' : 's'} online now (see Settings)`; }
   }
   el.innerHTML = esc(text) + (more ? `<span class="net-more">${esc(more)}</span>` : '');
   text += more;
@@ -4555,6 +4608,7 @@ function renderCloudStatus() {
   el.title = title;
   el.setAttribute('aria-label', `${text}. ${title}`);
   if (ui.view === 'settings' && document.getElementById('cloudStatusLine')) $('#cloudStatusLine').innerHTML = cloudStatusLine();
+  if (ui.view === 'settings' && document.getElementById('cloudDevices')) $('#cloudDevices').innerHTML = devicesHtml();
 }
 
 function cloudStatusLine() {
@@ -4579,6 +4633,7 @@ function cloudCardHtml() {
       <p style="margin-top:0"><strong>${esc(c.shopName || 'Your shop')}</strong> · ${esc(c.email || '')}</p>
       <p class="small muted">This device is <strong>till ${esc(c.deviceCode)}</strong> (receipts ${esc(c.deviceCode)}-00001…). Sales, stock, products, settings and users are shared by all devices of the shop and kept safe online. Each till cashes up its own drawer.</p>
       <p class="small" id="cloudStatusLine">${cloudStatusLine()}</p>
+      <div id="cloudDevices" class="dev-box">${devicesHtml()}</div>
       ${Cloud.status === 'signedout' ? `${form}<div class="row gap-s wrap" style="margin-bottom:10px"><button class="btn primary" data-action="cloud-signin">Sign in again</button></div>` : ''}
       <div class="row gap-s wrap">
         <button class="btn primary" data-action="cloud-sync">Sync now</button>

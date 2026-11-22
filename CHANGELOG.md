@@ -17,6 +17,15 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v37 — 2026-11-22 · See which devices are signed in 🗄️
+
+- ✨ **Settings → Cloud sync** now lists the shop's devices: till letter, type (iPad, iPhone, Android phone, Windows PC…), who is signed in on it, and "online now" or when it was last seen. At the top: "3 devices online now · 4 used in the last 30 days". The header pill's tooltip shows the same count.
+- ✨ **Supplier admin page:** each shop shows how many devices are online now (admin files `?v=28`).
+- 🗄️ Needs the Supabase SQL file re-run: new `devices` table and `device_ping` function; `vendor_list_shops` gets `online_now`. Until it is re-run, the app simply doesn't show the list.
+- How it works: each device checks in while it syncs (at most once a minute, only while the app is open). A device counts as online if it checked in within the last 3 minutes.
+
+---
+
 ## v36 — 2026-11-22 · Android icon and full check
 
 - 🐞 Android home-screen icon: a separate "maskable" icon (`icon-maskable-512.png`) with the logo inside the safe area, so Android no longer cuts off the edges of the hanger and "POS".

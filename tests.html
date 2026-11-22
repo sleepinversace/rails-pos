@@ -1277,7 +1277,7 @@ function fakeCloud() {
       if (fn === 'vendor_list_shops') return json(db.shops.map(s => ({ shop_id: s.id, shop_name: s.name, email: owner(s), plan: s.plan || 'trial', active_until: s.active_until,
         created_at: new Date().toISOString(), last_seen: null, tills: s.next_device - 1, records: 0, deactivated: !!s.deactivated, deactivated_reason: s.deactivated_reason || null,
         paid_total: pays(s.id).reduce((a, p) => a + p.amount_cents, 0), paid_this_month: 0, last_payment: pays(s.id).map(p => p.paid_on).sort().pop() || null,
-        devices_30d: s.devices_30d ?? 1, billed_devices: s.billed_devices ?? null })));
+        devices_30d: s.devices_30d ?? 1, billed_devices: s.billed_devices ?? null, online_now: s.online_now ?? 0 })));
       if (fn === 'vendor_audit_log') return json(db.audit.slice().reverse());
       if (fn === 'vendor_shop_payments') return json(pays(body.p_shop).slice().reverse());
       const shop = db.shops.find(s => s.id === body.p_shop);
@@ -1329,6 +1329,12 @@ function fakeCloud() {
     }
     const shop = mine.find(s => s.id === (body?.p_shop || param('shop_id') || body?.[0]?.shop_id));
     if (p === '/rest/v1/rpc/claim_device') { shop.next_device++; return json(shop.next_device - 1); }
+    if (p === '/rest/v1/rpc/device_ping') {
+      if (!shop) return json({ message: 'Not your shop' }, 400);
+      db.devices ||= new Map();
+      db.devices.set(shop.id + '|' + body.p_device, { shop_id: shop.id, device: body.p_device, code: body.p_code, label: body.p_label, user_name: body.p_user, last_seen: new Date().toISOString() });
+      return json([...db.devices.values()].filter(d => d.shop_id === shop.id).map(({ shop_id, ...d }) => d));
+    }
     if (p === '/rest/v1/rpc/reset_shop') {
       shop.generation++;
       for (const k of [...db.records.keys()]) if (k.startsWith(shop.id + '|')) db.records.delete(k);
@@ -1429,6 +1435,13 @@ test('Cloud sync: two tills share sales, stock and settings; a wiped device gets
   await openDeviceB(cloud);
   await waitFor(() => P.Cloud.conf?.deviceCode === 'B' && P.state.sales.length === nSales, 4000, 'B to have the shop');
   eq(variant(product('Test <b>Tee</b>'), 'S', 'Red').stock, stock0, 'B has the same stock');
+  // Devices signed in: B checks in and sees both tills online
+  await w.devicePing(true);
+  eq(P.Cloud.devices.map(x => x.code).sort(), ['A', 'B'], 'both tills checked in');
+  ok(P.Cloud.devices.every(x => Date.now() - new Date(x.last_seen) < 60000), 'both online now');
+  await nav('settings'); await tick(100);
+  ok($('#cloudDevices').textContent.includes('2 devices online now') && $('#cloudDevices').textContent.includes('(this device)'), 'Settings lists the devices: ' + $('#cloudDevices').textContent.replace(/\s+/g, ' ').slice(0, 120));
+  await nav('sell');
 
   // Both tills sell the same shirt while offline, and A changes the address
   cloud.offline = true;
@@ -1498,7 +1511,7 @@ test('Supplier admin page: shop logins refused; admin signs in with password; re
   cloud.users['owner@example.test'] = 'shop-pass-1';
   cloud.users['boss@example.test'] = 'admin-pass-1';
   cloud.admins.add('user-boss@example.test');
-  cloud.shops.push({ id: 'shop-x', owner: 'user-owner@example.test', name: '<img src=x onerror=alert(1)> Bridal', generation: 1, next_device: 3, active_until: '2030-01-15', plan: 'trial', devices_30d: 2 });
+  cloud.shops.push({ id: 'shop-x', owner: 'user-owner@example.test', name: '<img src=x onerror=alert(1)> Bridal', generation: 1, next_device: 3, active_until: '2030-01-15', plan: 'trial', devices_30d: 2, online_now: 1 });
   const B = document.getElementById('app2');
   await blank(B);
   sessionStorage.removeItem('rails-pos-admin-session');
@@ -1525,6 +1538,7 @@ test('Supplier admin page: shop logins refused; admin signs in with password; re
   const origConfirm = w.confirm; w.confirm = () => true;
   // Billing: R380 + R50 per extra device (2 devices used in the last 30 days)
   eq($('[data-k="fee-shop-x"]').textContent, 'R430.00', 'monthly fee from the devices used');
+  eq($('[data-k="online-shop-x"]')?.textContent, '1 device online now', 'devices online now shown');
   const origPrompt0 = w.prompt; w.prompt = () => '3';
   click('[data-act="devices"][data-id="shop-x"]'); await tick(400);
   w.prompt = origPrompt0;

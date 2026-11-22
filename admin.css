@@ -54,3 +54,8 @@
 .inv .inv-paid { display: inline-block; border: 3px solid #0b6b34; color: #0b6b34; font-weight: 800; font-size: 14pt; padding: 6px 14px; border-radius: 6px; transform: rotate(-3deg); margin: 6px 0 10px; }
 .inv .inv-foot { margin-top: 24px; font-weight: 600; }
 .inv-details textarea { width: 100%; }
+
+/* v37: devices online now */
+.online { font-weight: 600; }
+.online.on { color: var(--ok); }
+.online.on::before { content: "\25CF  "; }

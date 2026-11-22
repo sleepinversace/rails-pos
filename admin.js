@@ -214,7 +214,7 @@ function shopCard(s) {
     <div>
       <h3>${esc(s.shop_name)}<span class="st st-${k}">${esc(label)}</span></h3>
       <div class="shop-meta">${esc(s.email)} · joined ${esc(fmtDay(String(s.created_at || '').slice(0, 10)))}</div>
-      <div class="shop-meta">Paid until <strong>${esc(s.active_until ? fmtDay(s.active_until) : 'no end date')}</strong> · ${s.tills} till${s.tills === 1 ? '' : 's'} · last activity ${esc(fmtWhen(s.last_seen))}</div>
+      <div class="shop-meta">Paid until <strong>${esc(s.active_until ? fmtDay(s.active_until) : 'no end date')}</strong> · ${s.tills} till${s.tills === 1 ? '' : 's'} · last activity ${esc(fmtWhen(s.last_seen))}${s.online_now != null ? ` · <span class="online ${s.online_now ? 'on' : ''}" data-k="online-${id}">${s.online_now} device${s.online_now === 1 ? '' : 's'} online now</span>` : ''}</div>
       <div class="shop-meta">Fee <strong data-k="fee-${id}">${esc(randStr(feeOf(s)))}</strong> a month · billed for ${devicesBilled(s)} device${devicesBilled(s) === 1 ? '' : 's'}
         (${s.billed_devices ? 'set by you' : 'automatic'}; ${devicesUsed(s)} used in the last 30 days)
         · <button class="link" data-act="devices" data-id="${id}">Change</button></div>
