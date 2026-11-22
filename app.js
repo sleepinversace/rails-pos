@@ -6806,7 +6806,7 @@ const actions = {
   'st-print': () => printStocktakeA4(),
   'event-msg': el => messageEvent(el.dataset.id),
   'bs-open': () => openBestSellers(),
-  'r-jump': el => { const t = document.getElementById(el.dataset.to); if (t) t.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); },
+  'r-jump': el => { const t = document.getElementById(el.dataset.to); if (t) t.scrollIntoView({ block: 'start' }); },
   'bs-sort': el => { ui.bs.sort = el.dataset.v; renderBestSellers(); },
   'bs-by': el => { ui.bs.by = el.dataset.v; renderBestSellers(); },
   'bs-print': () => printA4('best'),

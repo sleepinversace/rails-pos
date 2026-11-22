@@ -961,6 +961,74 @@ test('Park a sale, petty cash, daily summary, returns policy, activity log, stoc
   ok(url.startsWith('https://wa.me/27823334444') && bride.eventMessaged, 'WhatsApp opened and noted');
 });
 
+test('New look: header, tiles, empty cart, Charge, sale complete, sync pill, side menu, reports (stock health, sizes, weekdays)', async () => {
+  const S = P.state;
+  await nav('sell');
+  P.ui.cart = w.emptyCart('cash'); w.renderAll(); await tick();
+  // Header: Rails POS name next to the shop's own name
+  eq([$('.brand-name').textContent, $('#storeNameLabel').textContent], ['Rails POS', S.settings.storeName], 'header names');
+  // Tiles: a category colour, an icon or photo, and a stock badge in words
+  const cards = [...d.querySelectorAll('#productGrid .product-card')];
+  ok(cards.length && cards.every(c => c.style.getPropertyValue('--cat') && (c.querySelector('.cat-icon') || c.querySelector('.thumb'))), 'every tile has a colour and icon/photo');
+  ok(cards.every(c => /in stock|^Only \d+ left$|^Out of stock$/.test(c.querySelector('.badge').textContent)), 'stock badges in words');
+  eq([w.catColour('Tops'), w.catColour(' tops ')], [w.catColour('Tops'), w.catColour('Tops')], 'same category, same colour');
+  ok(w.catIcon('Jeans').includes('i-cat-pants') && w.catIcon('Evening Dresses').includes('i-cat-dress') && w.catIcon('Misc').includes('i-cat-hanger'), 'category icons from words');
+  // Empty cart: logo, today's sales, the rand total only with Reports permission
+  ok($('#cartItems .cart-welcome img') && /sales? today|No sales yet today/.test($('#cartItems').textContent), 'welcome in the empty cart');
+  eq([$('#chargeBtn').disabled, $('#chargeBtn').textContent], [true, 'Add items to charge'], 'Charge switched off');
+  const perms = P.ui.user.perms;
+  P.ui.user.perms = perms.filter(x => x !== 'reports'); w.renderCart();
+  ok(!$('#cartItems .cart-welcome .money'), 'no rand total without Reports');
+  P.ui.user.perms = perms; w.renderCart();
+  // Cash sale → Sale complete with the change in large numbers
+  const p = S.products.find(x => !x.name.includes('Tee') && x.variants.some(v => v.stock >= 2)) || S.products.find(x => x.variants.some(v => v.stock >= 5));
+  const v = p.variants.filter(x => x.stock >= 2 && !(p.name.includes('Tee') && x.size === 'S' && x.colour === 'Red')).sort((a, b) => b.stock - a.stock)[0];
+  w.addToCart(v.id, 1); await tick();
+  ok($('#chargeBtn').querySelector('.charge-amt') && !$('#chargeBtn').disabled, 'Charge shows the amount');
+  await pay('cash', '2000');
+  const s = lastSale();
+  ok($('#modal .sold-hero') && $('#modal .sold-title').textContent === 'Sale complete', 'sale complete screen');
+  eq($('#modal .sold-change strong').textContent, w.money(s.change), 'change due in large numbers');
+  ok(receiptText().length > 50 && $('#modal details.sold-receipt') && !$('#modal details.sold-receipt').open, 'slip folded under Show receipt');
+  ok($('#modal .sold-new.primary[autofocus]'), 'New sale is the main button');
+  click('#modal .sold-new'); await tick();
+  ok($('#modal').hidden && $('#cartItems .cart-welcome'), 'New sale closes it; cart is empty again');
+  // Card sale: no change box
+  w.addToCart(v.id, 1); await tick();
+  await pay('card');
+  ok($('#modal .sold-hero') && !$('#modal .sold-change'), 'no change box for card');
+  closeModal(); await tick();
+  // Header pill: calm "Saved" without cloud sync
+  if (!P.state.meta.cloud && navigator.onLine) ok($('#netStatus').classList.contains('local') && $('#netStatus').textContent.startsWith('Saved'), 'calm Saved pill: ' + $('#netStatus').textContent);
+  // Side menu: a spacer puts Settings and Admin at the bottom
+  ok($('.app-nav .nav-spacer')?.nextElementSibling?.dataset.view === 'settings', 'spacer before Settings');
+  // Reports: jump bar, new sections, no NaN
+  await nav('reports');
+  click('[data-action="range"][data-range="30"]'); await tick(200);
+  ok(d.querySelectorAll('.r-jump [data-action="r-jump"]').length >= 8, 'jump bar');
+  for (const id of ['r-sec-overview', 'r-sec-pay', 'r-sec-cat', 'r-sec-top', 'r-sec-staff', 'r-sec-stock', 'r-sec-reorder', 'r-sec-recent']) ok(d.getElementById(id), 'section ' + id);
+  click('[data-action="r-jump"][data-to="r-sec-stock"]'); await tick(100);
+  ok(!/NaN|undefined/.test($('#reportBody').textContent), 'no NaN/undefined in Reports');
+  ok($('#reportBody').textContent.includes('Sizes that sell') && $('#reportBody').textContent.includes('Slow movers'), 'stock health cards');
+  const r = w.buildReport(w.reportRange('30'));
+  const mix = w.sizeMix(r);
+  ok(mix.every(c => c.total === c.sizes.reduce((a, x) => a + x.qty, 0)), 'size shares add up');
+  const wk = w.weekdayPattern(r);
+  eq(wk.reduce((a, x) => a + x.days, 0), 30, 'weekdays cover all 30 days');
+  eq(wk.reduce((a, x) => a + x.amount, 0), r.revenue, 'weekday takings add up to net takings');
+  // Slow movers: an old product that never sold shows, with the money tied up at cost
+  const old = { id: 'p-old', name: 'Old Coat', category: 'Outerwear', price: 100000, cost: 50000, created: Date.now() - 90 * 864e5,
+    variants: [{ id: 'v-old', size: 'M', colour: 'Red', sku: 'OC-M', stock: 3 }] };
+  S.products.push(old);
+  try {
+    const row = w.slowMovers().rows.find(x => x.product.id === 'p-old');
+    eq([row?.why, row?.tied, row?.units], ['Never sold', 150000, 3], 'old unsold coat is a slow mover');
+    old.created = Date.now() - 5 * 864e5;
+    ok(!w.slowMovers().rows.some(x => x.product.id === 'p-old'), 'a new product is not slow yet');
+  } finally { S.products.splice(S.products.indexOf(old), 1); }
+  eq(w.agoText(new Date(Date.now() - 5 * 60000).toISOString()), '5 min ago', 'synced time text');
+});
+
 test('Only one tab at a time; the other can take over', async () => {
   const main = document.getElementById('app'), second = document.getElementById('app2');
   await loadApp(second);

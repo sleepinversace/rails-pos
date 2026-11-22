@@ -17,6 +17,14 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v36 — 2026-11-22 · Android icon and full check
+
+- 🐞 Android home-screen icon: a separate "maskable" icon (`icon-maskable-512.png`) with the logo inside the safe area, so Android no longer cuts off the edges of the hanger and "POS".
+- 🐞 The Reports jump bar now jumps straight to the section. Smooth scrolling did not always finish on some devices.
+- 🔧 New automated test for this session's changes (header, tiles, empty cart, Charge, sale complete, sync pill, side menu, stock health, sizes, weekdays, slow movers): 42 tests in total.
+
+---
+
 ## v35 — 2026-11-22 · Reports: stock health, sizes that sell, busiest days
 
 - ✨ **Stock health** section: stock on hand, stock value at cost and at selling price, and how much money is tied up in slow stock.

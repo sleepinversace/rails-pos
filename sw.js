@@ -13,7 +13,7 @@
    the outbox when the connection comes back.
    ========================================================================= */
 
-const CACHE_VERSION = 'rails-pos-v35';
+const CACHE_VERSION = 'rails-pos-v36';
 const APP_SHELL = [
   './',
   './index.html',
@@ -22,6 +22,7 @@ const APP_SHELL = [
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
+  './icon-maskable-512.png',
 ];
 
 self.addEventListener('install', event => {
