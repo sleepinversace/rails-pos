@@ -17,6 +17,10 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v28 — 2026-11-22 · Full check; sharing fix for iPhone / iPad
+- 🐞 **Email me my data** and **Share backup** on iPhone / iPad: Safari can refuse to open the share sheet because preparing the file takes a moment. The app now shows "Your file is ready" with a **Share** button; that tap always works.
+- 🔧 Full check of the app: all screens at phone and tablet size, every slip type at 80 mm, 58 mm and WhatsApp width, all six A4 reports, statements, A4 and label-printer labels, import, reminders and the data export — no errors found.
+
 ## v27 — 2026-11-21 · Billing on the admin page; terms, subscription and privacy policy
 - ✨ **Admin page billing:** each shop's **monthly fee** (R380 + R50 per extra device). Devices = those used in the last 30 days, or a number you set per shop (**Change**). "Monthly fees" total for paying shops.
 - ✨ **Record payment** suggests the amount (fee × months covered) and can include the once-off **setup fee (R1 500, with 1 hour training)**.

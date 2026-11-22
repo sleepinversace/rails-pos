@@ -2768,10 +2768,45 @@ async function backupCopy() {
 }
 async function backupShare() {
   const file = new File([await backupJson()], `rails-pos-backup-${stamp()}.json`, { type: 'application/json' });
-  if (navigator.canShare?.({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: 'Rails POS backup' }); await markBackedUp(); }
-    catch { /* user cancelled */ }
-  } else toast('Sharing files is not supported here — use Download', true);
+  if (!navigator.canShare?.({ files: [file] })) return toast('Sharing files is not supported here — use Download', true);
+  const r = await shareFiles({ files: [file], title: 'Rails POS backup' });
+  if (r === 'shared') await markBackedUp();
+}
+
+/* iPhone / iPad (Safari) only open the share sheet straight after a tap. Making a
+   backup or export takes a moment, so Safari may refuse ("NotAllowedError").
+   Then the file is offered again with a "Share" button: that fresh tap always works.
+   Returns 'shared', 'cancelled', 'later' (button shown) or 'failed'. */
+async function shareFiles(data, onShared = null) {
+  try {
+    await navigator.share(data);
+    return 'shared';
+  } catch (e) {
+    if (e?.name === 'AbortError') return 'cancelled';
+    if (e?.name !== 'NotAllowedError') return 'failed';
+  }
+  ui.pendingShare = { data, onShared };
+  openModal({
+    title: 'Your file is ready',
+    body: `<p style="margin-top:0"><strong>${esc(data.files[0].name)}</strong> (${Math.max(1, Math.round(data.files[0].size / 1024))} KB)</p>
+      <p class="small muted">Tap Share, then choose Mail, Gmail, Outlook, WhatsApp or Files.</p>`,
+    foot: '<button class="btn" data-action="close-modal">Cancel</button><button class="btn primary" data-action="share-pending">Share</button>',
+  });
+  return 'later';
+}
+
+async function sharePending() {
+  const p = ui.pendingShare;
+  if (!p) return closeModal();
+  try {
+    await navigator.share(p.data); // runs straight from the tap, so Safari allows it
+    ui.pendingShare = null;
+    closeModal();
+    if (p.onShared) await p.onShared();
+    else await markBackedUp();
+  } catch (e) {
+    if (e?.name !== 'AbortError') toast('Sharing didn\'t work here — use Download instead', true);
+  }
 }
 
 async function restoreFromText(text) {
@@ -2886,13 +2921,9 @@ async function emailMyData() {
   const file = new File([exp.blob], exp.name, { type: 'application/zip' });
   const text = `${state.settings.storeName}: all shop data from Rails POS (stock, sales, clients, lay-bys, cash-ups and a full backup).`;
   if (navigator.canShare?.({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file], title: `Rails POS data · ${state.settings.storeName}`, text });
-      await markBackedUp();
-      return toast('Data shared — choose your email app to send it to yourself');
-    } catch (e) {
-      if (e?.name === 'AbortError') return; // cancelled
-    }
+    const r = await shareFiles({ files: [file], title: `Rails POS data · ${state.settings.storeName}`, text });
+    if (r === 'shared') { await markBackedUp(); return toast('Data shared — choose your email app to send it to yourself'); }
+    if (r === 'cancelled' || r === 'later') return;
   }
   // No share sheet: save the file, then open the email app addressed to the shop.
   const url = URL.createObjectURL(exp.blob);
@@ -5826,6 +5857,7 @@ const actions = {
   'backup-copy': () => backupCopy(),
   'backup-share': () => backupShare(),
   'email-data': () => emailMyData(),
+  'share-pending': () => sharePending(),
   'restore-paste': () => restoreFromText($('#restoreText').value),
   'export-csv': () => exportCsv(),
   'start-fresh': () => startFresh(),
@@ -5895,7 +5927,7 @@ const ACTION_PERMS = {
   'add-variant': 'stock', 'edit-variant': 'stock', 'variant-save': 'stock', 'delete-variant': 'stock', 'delete-product': 'stock',
   'stock-d': 'stock', receive: 'stock', 'receive-save': 'stock', history: 'stock',
   range: 'reports', cashup: 'reports', 'cashup-save': 'reports', 'print-menu': 'reports', 'print-a4': 'reports',
-  'backup-download': 'settings', 'backup-copy': 'settings', 'backup-share': 'settings', 'restore-paste': 'settings', 'email-data': 'settings',
+  'backup-download': 'settings', 'backup-copy': 'settings', 'backup-share': 'settings', 'restore-paste': 'settings', 'email-data': 'settings', 'share-pending': 'settings',
   'export-csv': 'settings', 'start-fresh': 'settings', 'load-demo': 'settings',
   'user-add': 'admin', 'user-edit': 'admin', 'user-save': 'admin', 'user-delete': 'admin',
   'cloud-signin': 'settings', 'cloud-signup': 'settings', 'cloud-disconnect': 'settings', 'cloud-create': 'settings', 'cloud-join': 'settings',

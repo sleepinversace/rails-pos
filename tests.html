@@ -824,6 +824,15 @@ test('Email me my data: one zip with Excel files and a full backup; the stock li
   click('[data-action="email-data"]'); await tick(400);
   delete w.navigator.canShare; delete w.navigator.share;
   ok(shared && shared.files[0].name.endsWith('.zip') && shared.files[0].size > 1000, 'zip handed to the share sheet');
+  // iPhone / iPad: Safari refuses the share sheet after the wait → a "Share" button gives a fresh tap
+  let calls = 0; shared = null;
+  w.navigator.canShare = () => true;
+  w.navigator.share = async d => { calls++; if (calls === 1) throw new w.DOMException('needs a tap', 'NotAllowedError'); shared = d; };
+  click('[data-action="email-data"]'); await tick(400);
+  ok($('#modal [data-action="share-pending"]') && !shared, 'Safari refused: "Your file is ready" with a Share button');
+  click('[data-action="share-pending"]'); await tick(200);
+  delete w.navigator.canShare; delete w.navigator.share;
+  ok(shared && shared.files[0].name.endsWith('.zip') && !$('#modal [data-action="share-pending"]'), 'Share button shares the file');
   // Terms, prices and privacy policy: linked from Settings, and the page has the agreed prices
   ok($('#settingsBody a[href="legal.html"]'), 'Settings links to the terms page');
   const legal = await (await fetch('legal.html', { cache: 'no-store' })).text();
