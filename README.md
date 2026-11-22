@@ -8,6 +8,9 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - Search by name or SKU. A barcode scanner works too: it types the SKU and presses Enter, and the item is added.
   - Pick size and colour, change quantities, give a discount in rand or percent, and take cash, card or EFT with change worked out.
   - You can't sell more than is in stock.
+  - Product tiles have a colour and a clothing icon per category, and say "58 in stock", "Only 2 left" or "Out of stock".
+  - The empty cart shows today's sales (the rand total only for staff who may see reports) and any parked sales.
+  - After charging, a **Sale complete** screen shows the change due in large numbers, with Print, WhatsApp, Email, Copy and New sale.
 - **Tax-correct slips**
   - A VAT-registered shop prints a TAX INVOICE with its VAT number.
   - Sales over R5,000 ask for the buyer's name and address (needed for a full tax invoice).
@@ -22,14 +25,15 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - Every stock change is kept in a history: sold, returned, adjusted, counted, received.
 - **Reports and cash-up**
   - Reports for today, yesterday, 7 days, 30 days, this month or any dates you choose, with refunds counted on the day they happen.
-  - Money in green (refunds and losses in red), comparison with the previous period, takings per hour or per day, profit margin, payment split, categories, top sellers, cashiers and a VAT summary.
+  - Money in green (refunds and losses in red), ▲/▼ comparison with the previous period on every headline number, takings per hour or per day (with average line, best and quietest day), busiest weekdays, profit margin, payment split, categories with profit and margin, top sellers, cashiers and a VAT summary. A jump bar at the top goes straight to each section.
+  - **Stock health:** stock value at cost and selling price, **slow movers** (not sold in 60 days, or far more stock than sales) with the money tied up, and **sizes that sell** per category.
   - A4 printouts (or PDF from the print screen): sales summary, sales list for the bookkeeper, stock on hand with cost and selling value, and cash-ups.
   - Cash-up at the end of a shift: expected cash vs counted cash, over/short, the float for the next shift, and a printable Z-report.
 - **Receipts**
   - Every receipt, credit note and Z-report can be sent on WhatsApp, copied or printed.
 - **Cloud sync and backup** (Supabase)
   - Every device of a shop shares sales, stock, products, settings and staff users. Changes arrive within about 20 seconds, and straight away when you open Reports or Sales.
-  - Works offline: sales are queued and sent when the connection returns. The header shows Synced, Syncing…, Offline · 3 waiting, or Sync problem.
+  - Works offline: sales are queued and sent when the connection returns. The header shows Synced 2 min ago, Syncing…, Offline · 3 waiting, or Sync problem (and a calm grey "Saved on this device" when cloud sync isn't on).
   - Stock stays right when two tills sell the same item at once: devices sync stock *movements* (−1, +1 …) and each device adds them up.
   - Each device is a till with its own letter, so receipt numbers never clash (A-00012, B-00003). Each till cashes up its own drawer, and Reports show the whole shop.
   - A new, lost or wiped device signs in with the shop email and gets everything back.
@@ -107,7 +111,7 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
 | `app.js` | All app logic, in numbered sections (see the map at the top) |
 | `sw.js` | Service worker: caches the app so it opens offline |
 | `manifest.json` | Makes the app installable |
-| `icon-192.png`, `icon-512.png` | App icons |
+| `icon-192.png`, `icon-512.png`, `icon-maskable-512.png` | App icons (the maskable one keeps the logo inside Android's round crop) |
 | `admin.html`, `admin.js`, `admin.css` | Supplier admin page (subscriptions, billing, invoices, receipts, deactivation) |
 | `legal.html` | Terms, prices, subscription and POPIA privacy policy (linked in the app) |
 | `cloud/supabase-setup.sql` | The whole cloud database; safe to re-run after each change |
@@ -135,7 +139,7 @@ Then open http://localhost:8000. Offline mode only works over `http://localhost`
 
 With the server running, open **http://localhost:8000/tests.html** and click **Run all tests**, or open `tests.html?auto` to run them straight away.
 
-The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 36 tests should pass (one runs two "devices" against a fake Supabase to test syncing; one reads drawn barcodes that are blurred, noisy and upside down). They cover:
+The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 42 tests should pass (one runs two "devices" against a fake Supabase to test syncing; one reads drawn barcodes that are blurred, noisy and upside down). They cover:
 - sign-in, lock and changing the PIN
 - admin: adding, editing and deleting users, and what a cashier can't do
 - selling and stock
@@ -161,7 +165,7 @@ Phones only allow offline mode and home-screen install over **HTTPS**, so host t
 
 ### Cloudflare Pages (easiest)
 1. Sign up at https://pages.cloudflare.com
-2. Choose **Create a project, then Direct Upload**, and drag in: `index.html`, `app.css`, `app.js`, `sw.js`, `manifest.json`, `icon-192.png`, `icon-512.png`. Leave out `tools/`, `.claude/` and `tests.html`.
+2. Choose **Create a project, then Direct Upload**, and drag in: `index.html`, `app.css`, `app.js`, `sw.js`, `manifest.json`, `icon-192.png`, `icon-512.png`, `icon-maskable-512.png`. Leave out `tools/`, `.claude/` and `tests.html`.
 3. You get a URL like `https://rails-pos.pages.dev`.
 
 ### GitHub Pages
