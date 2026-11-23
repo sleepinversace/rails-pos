@@ -23,6 +23,13 @@ const APP_SHELL = [
   './icon-192.png',
   './icon-512.png',
   './icon-maskable-512.png',
+  // Profit checker add-on (opens inside Reports; copied from Rails Profit checker by tools/copy-profit-checker.sh)
+  './profit/index.html',
+  './profit/styles.css',
+  './profit/app.js',
+  './profit/calculations.js',
+  './profit/importers.js',
+  './profit/icons/icon.svg',
 ];
 
 self.addEventListener('install', event => {
@@ -61,7 +68,7 @@ self.addEventListener('fetch', event => {
     }
     const cache = await caches.open(CACHE_VERSION);
     // Page navigations get the cached app shell (works offline).
-    const key = req.mode === 'navigate' ? './index.html' : req;
+    const key = req.mode === 'navigate' ? (url.pathname.includes('/profit/') ? './profit/index.html' : './index.html') : req;
     const cached = await cache.match(key, { ignoreSearch: true });
     if (cached) return cached;
     try {

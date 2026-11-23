@@ -59,3 +59,5 @@
 .online { font-weight: 600; }
 .online.on { color: var(--ok); }
 .online.on::before { content: "\25CF  "; }
+.st-none { background: var(--surface-2); color: var(--muted); }
+.link.danger-text { color: var(--danger); }

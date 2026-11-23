@@ -1083,13 +1083,15 @@ test('Export for Rails Profit checker: one file whose profit matches Gross profi
   ok(Math.abs(revenue * 100 - rep.exVat) <= rows.length, `revenue = net takings excl. VAT (${(revenue * 100).toFixed(0)} vs ${rep.exVat})`);
   ok(Math.abs(cost * 100 - rep.cost) <= rows.length, `cost of goods matches (${(cost * 100).toFixed(0)} vs ${rep.cost})`);
   ok(Math.abs((revenue - cost) * 100 - rep.profit) <= rows.length * 2, `profit = Gross profit (${((revenue - cost) * 100).toFixed(0)} vs ${rep.profit})`);
-  // The button on the Reports screen downloads it
-  let name = '', text = '';
-  const orig = w.downloadFile; w.downloadFile = (n, t) => { name = n; text = t; };
-  P.ui.reportRange = '30'; await nav('reports');
-  click('[data-action="profit-export"]'); await tick();
-  w.downloadFile = orig;
-  ok(/^rails-pos-profit-checker-\d{4}-\d\d-\d\d-to-\d{4}-\d\d-\d\d\.csv$/.test(name) && text.includes(',stock,'), `button downloads ${name}`);
+  // The built-in Profit checker gets the same file, covering everything from the first sale
+  const feed = w.RailsProfitHost.tillCsv();
+  ok(feed.text.includes(',stock,') && feed.text.split('\r\n').length >= lines.length, 'the add-on gets every sale, refund and stock line');
+  // Without a shop account the Reports button is locked and explains why
+  await nav('reports');
+  ok($('[data-action="profit-open"] .pc-lock'), 'Profit checker button shows a lock');
+  click('[data-action="profit-open"]'); await tick(150);
+  ok(!$('#modal').hidden && $('#modal').textContent.includes('shop account') && !$('[data-action="profit-trial"]'), 'no shop account: explains, no trial button');
+  closeModal(); await tick();
 });
 
 test('Accessibility: focus is kept in dialogs; nav has aria-current; colours have enough contrast', async () => {
@@ -1305,7 +1307,8 @@ function fakeCloud() {
       if (fn === 'vendor_list_shops') return json(db.shops.map(s => ({ shop_id: s.id, shop_name: s.name, email: owner(s), plan: s.plan || 'trial', active_until: s.active_until,
         created_at: new Date().toISOString(), last_seen: null, tills: s.next_device - 1, records: 0, deactivated: !!s.deactivated, deactivated_reason: s.deactivated_reason || null,
         paid_total: pays(s.id).reduce((a, p) => a + p.amount_cents, 0), paid_this_month: 0, last_payment: pays(s.id).map(p => p.paid_on).sort().pop() || null,
-        devices_30d: s.devices_30d ?? 1, billed_devices: s.billed_devices ?? null, online_now: s.online_now ?? 0 })));
+        devices_30d: s.devices_30d ?? 1, billed_devices: s.billed_devices ?? null, online_now: s.online_now ?? 0,
+        profit_trial_until: s.profit_trial_until ?? null, profit_paid: !!s.profit_paid, profit_until: s.profit_until ?? null, profit_blocked: !!s.profit_blocked })));
       if (fn === 'vendor_audit_log') return json(db.audit.slice().reverse());
       if (fn === 'vendor_shop_payments') return json(pays(body.p_shop).slice().reverse());
       const shop = db.shops.find(s => s.id === body.p_shop);
@@ -1315,6 +1318,11 @@ function fakeCloud() {
         shop.billed_devices = body.p_devices;
         db.audit.push({ at: new Date().toISOString(), shop_name: shop.name, action: 'Devices billed: ' + (body.p_devices ?? 'automatic'), old_until: old, new_until: old });
         return json(body.p_devices);
+      }
+      if (fn === 'vendor_set_profit') {
+        Object.assign(shop, { profit_trial_until: body.p_trial_until, profit_paid: !!body.p_paid, profit_until: body.p_paid ? body.p_until : null, profit_blocked: !!body.p_blocked });
+        db.audit.push({ at: new Date().toISOString(), shop_name: shop.name, action: body.p_action, old_until: null, new_until: body.p_until || body.p_trial_until });
+        return json(true);
       }
       if (fn === 'vendor_set_active') {
         shop.deactivated = !body.p_active; shop.deactivated_reason = body.p_active ? null : (body.p_reason || null);
@@ -1357,6 +1365,15 @@ function fakeCloud() {
     }
     const shop = mine.find(s => s.id === (body?.p_shop || param('shop_id') || body?.[0]?.shop_id));
     if (p === '/rest/v1/rpc/claim_device') { shop.next_device++; return json(shop.next_device - 1); }
+    if (p === '/rest/v1/rpc/profit_start_trial') {   // same rules as supabase-setup.sql
+      if (!shop) return json({ message: 'Not your shop' }, 400);
+      if (shop.profit_blocked) return json({ message: 'Profit checker is switched off for this shop. Contact Rails POS.' }, 400);
+      if (shop.plan !== 'paid') return json({ message: 'The free trial starts once your monthly Rails POS subscription is active' }, 400);
+      if (shop.profit_trial_until) return json({ message: 'The free trial has already been used' }, 400);
+      const d = new Date(Date.now() + 14 * 864e5);
+      shop.profit_trial_until = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      return json(shop.profit_trial_until);
+    }
     if (p === '/rest/v1/rpc/device_ping') {
       if (!shop) return json({ message: 'Not your shop' }, 400);
       db.devices ||= new Map();
@@ -1464,6 +1481,44 @@ test('Cloud sync: two tills share sales, stock and settings; a wiped device gets
   shop.deactivated = false; shop.deactivated_reason = null; await synced();
   eq(P.sellingAllowed(), true, 'reactivated: selling again');
 
+  // Profit checker add-on: trial only on a paid plan, opens with the till's data, a block closes it
+  eq(w.profitAccess().state, 'pos-trial', 'shop still on its POS trial: add-on not available yet');
+  shop.plan = 'paid'; await synced();
+  await nav('reports'); await tick(100);
+  ok($('[data-action="profit-open"] .pc-tag')?.textContent === 'Try free', 'paid shop: button offers the free trial');
+  click('[data-action="profit-open"]'); await waitFor(() => $('[data-action="profit-trial"]'), 3000, 'trial offer');
+  ok($('#modal').textContent.includes('R150 a month'), 'price shown');
+  click('[data-action="profit-trial"]');
+  await waitFor(() => $('#profitView') && !$('#profitView').hidden, 4000, 'Profit checker to open');
+  ok(shop.profit_trial_until && w.profitAccess().state === 'trial' && w.profitAccess().left === 14, 'trial started for 14 days: ' + shop.profit_trial_until);
+  const frame = $('#profitView iframe');
+  await waitFor(() => frame.contentDocument?.getElementById('results') && !frame.contentDocument.getElementById('results').hidden, 8000, 'Profit checker to load the till data');
+  const fd = frame.contentDocument;
+  ok(fd.getElementById('data-chip').textContent.startsWith('Till data') && fd.getElementById('use-sample').hidden, 'loaded from the till, no sample data: ' + fd.getElementById('data-chip').textContent);
+  ok(fd.documentElement.classList.contains('in-till'), 'runs inside the till');
+  ok($('.app-header').inert && $('.app-nav').inert, 'till behind it is inactive');
+  ok(!JSON.stringify(frame.contentWindow.localStorage.getItem('pc-data') || '').includes(',stock,'), "till's file isn't stored in the Profit checker");
+  // The supplier blocks it: the open Profit checker closes at the next sync
+  shop.profit_blocked = true; await synced();
+  ok($('#profitView').hidden && $('#toast').textContent.includes('Profit checker closed'), 'blocked: closes at once');
+  eq(w.profitAccess().state, 'blocked', 'stays locked');
+  click('[data-action="profit-open"]'); await tick(300);
+  ok($('#modal').textContent.includes('switched the Profit checker off') && !$('[data-action="profit-trial"]'), 'blocked: explains, no trial');
+  closeModal(); await tick();
+  shop.profit_blocked = false; shop.profit_trial_until = day(-1); await synced();
+  eq(w.profitAccess().state, 'trial-over', 'trial ended: locked again');
+  shop.profit_paid = true; shop.profit_until = day(30); await synced();
+  eq([w.profitAccess().ok, w.profitAccess().state], [true, 'on'], 'turned on by the supplier');
+  const checked = P.Cloud.conf.licenceCheckedAt; P.Cloud.conf.licenceCheckedAt = new Date(Date.now() - 4 * 864e5).toISOString();
+  eq(w.profitAccess().state, 'stale', 'not checked for 4 days (offline): locked until it can check');
+  P.Cloud.conf.licenceCheckedAt = checked;
+  // A direct visit to the add-on page (not from the till) is refused
+  const lone = document.createElement('iframe'); document.body.append(lone);   // the test page itself: no till around it
+  lone.src = 'profit/index.html?test'; await new Promise(r => { lone.onload = r; });
+  ok(lone.contentDocument.body.textContent.includes('Open it from Rails POS'), 'opened on its own: refused');
+  lone.remove();
+  Object.assign(shop, { plan: 'trial', profit_paid: false, profit_until: null, profit_trial_until: null }); await synced();
+
   // Till B: a brand-new device joins and downloads the shop
   await openDeviceB(cloud);
   await waitFor(() => P.Cloud.conf?.deviceCode === 'B' && P.state.sales.length === nSales, 4000, 'B to have the shop');
@@ -1480,7 +1535,7 @@ test('Cloud sync: two tills share sales, stock and settings; a wiped device gets
   await w.devicePing(true); w.renderCloudStatus();
   eq($('#devPill').textContent.trim(), 'Devices online 1', 'a closed device drops off at once');
   // B's own goodbye reaches the cloud (sent when the app is hidden or closed)
-  w.deviceBye(); await tick(100);
+  w.deviceBye(); await waitFor(() => [...cloud.devices.values()].find(x => x.code === 'B').left_at, 3000, 'goodbye to arrive').catch(() => {});
   ok([...cloud.devices.values()].find(x => x.code === 'B').left_at, 'goodbye recorded');
   await w.devicePing(true);
   ok(![...cloud.devices.values()].find(x => x.code === 'B').left_at, 'checking in again clears it');
@@ -1637,6 +1692,34 @@ test('Supplier admin page: shop logins refused; admin signs in with password; re
   $('[data-pay-form="shop-x"]').requestSubmit(); await tick(300);
   eq(cloud.payments.length, 1, 'a payment date in the future is refused');
   click('[data-act="pay-close"]'); await tick(100);
+
+  // Profit checker add-on: trial date, block / unblock, and a payment that turns it on
+  const pcText = () => $('[data-k="profit-shop-x"]').textContent;
+  ok(pcText().startsWith('Off'), 'add-on off at first: ' + pcText());
+  click('[data-act="profit-edit"][data-id="shop-x"]'); await tick(150);
+  $('[data-profit-form="shop-x"] [name="trial"]').value = '2030-01-01';
+  $('[data-profit-form="shop-x"]').requestSubmit(); await tick(400);
+  eq([cloud.shops[0].profit_trial_until, cloud.shops[0].profit_paid], ['2030-01-01', false], 'trial date set by the supplier');
+  ok(/^Trial until 0?1 Jan 2030/.test(pcText()), 'shown as trial: ' + pcText());
+  click('[data-act="profit-block"][data-id="shop-x"]'); await tick(400);
+  eq([cloud.shops[0].profit_blocked, pcText()], [true, 'Blocked'], 'blocked at once');
+  ok($('.audit').textContent.includes('Profit checker: blocked'), 'block logged');
+  click('[data-act="profit-unblock"][data-id="shop-x"]'); await tick(400);
+  eq([cloud.shops[0].profit_blocked, cloud.shops[0].profit_trial_until], [false, '2030-01-01'], 'unblocked, trial date kept');
+  click('[data-act="pay-open"][data-id="shop-x"]'); await tick(150);
+  const pf = $('[data-pay-form="shop-x"]');
+  ok(pf.querySelector('[name="profit"]').checked && pf.querySelector('[data-pay-hint]').textContent.includes('incl. Profit checker R150.00'), 'payment form adds the R150 add-on for a shop that tried it');
+  pf.querySelector('[name="paid_until"]').value = '2027-03-31'; pf.querySelector('[name="paid_until"]').dispatchEvent(new w.Event('input', { bubbles: true }));
+  pf.requestSubmit(); await tick(500);
+  eq([cloud.shops[0].profit_paid, cloud.shops[0].profit_until, cloud.payments.length], [true, '2027-03-31', 2], 'the payment turns the add-on on until the same date');
+  ok(pcText().includes('paid until 31 Mar 2027') && /incl\. Profit checker/.test(cloud.payments[1].note), 'shown as on; payment note says so');
+  eq($('[data-k="expected"]').textContent, 'R630.00', 'monthly fees include the add-on (R480 + R150)');
+  w.print = () => {};
+  click('[data-act="inv-open"][data-id="shop-x"]'); await tick(150);
+  $('[data-inv-form="shop-x"]').requestSubmit(); await tick(150);
+  ok(doc().includes('Profit checker add-on') && doc().includes('R630.00'), 'invoice has the add-on line: ' + doc().slice(0, 300));
+  w.print = origPrint;
+  click('[data-act="inv-close"]'); await tick(100);
 
   // Deactivate and reactivate
   const origPrompt = w.prompt; w.prompt = () => 'Unpaid account';

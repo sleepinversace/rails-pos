@@ -1514,13 +1514,6 @@ function profitCheckerCsv(range) {
   return { csv: toCsv(head, rows), sold: rows.filter(r => r[3] === 'sale').length, refunds: rows.filter(r => r[3] === 'refund').length };
 }
 
-function profitCheckerExport() {
-  const range = reportRange();
-  const out = profitCheckerCsv(range);
-  downloadFile(`rails-pos-profit-checker-${toDateInput(range.from)}-to-${toDateInput(addDays(range.to, -1))}.csv`, out.csv, 'text/csv');
-  toast(`Downloaded ${range.label}: ${out.sold} item line${out.sold === 1 ? '' : 's'}${out.refunds ? `, ${out.refunds} refund${out.refunds === 1 ? '' : 's'}` : ''}. Open it in Rails Profit checker.`);
-}
-
 /** Money movements for a shift (from the last cash-up until now) on THIS till.
     With cloud sync, other devices' sales are in the data too, but each till
     counts only its own cash drawer. */
@@ -2176,14 +2169,17 @@ function updateInert() {
   $('#setup').inert = tabBlocked;
   $('#scanner').inert = tabBlocked;
   const sheet = $('#cartPanel').classList.contains('open') && !isWide();
-  const back = blocked || modal || sheet;
+  const pv = $('#profitView');
+  const profit = !!pv && !pv.hidden;            // Profit checker add-on, full screen
+  if (pv) pv.inert = blocked || modal;
+  const back = blocked || modal || sheet || profit;
   $('.app-header').inert = back;
   $('.app-nav').inert = back;
   $('#banners').inert = back;
   $('.sell-products').inert = back;
   $('#cartBar').inert = back;
   $$('.view:not(#view-sell)').forEach(v => { v.inert = back; });
-  $('#cartPanel').inert = blocked || modal || (!isWide() && !sheet);
+  $('#cartPanel').inert = blocked || modal || profit || (!isWide() && !sheet);
   $('#modal').inert = blocked;
 }
 
@@ -2781,6 +2777,7 @@ function saleRow(s) {
 /* ----- Reports ----- */
 
 function renderReports() {
+  const pcb = $("#pcBadge"); if (pcb) pcb.innerHTML = profitBadge(); // Profit checker add-on tag
   // Cash-up card for the current shift
   const sh = computeShift(state.meta.lastCashupAt, new Date().toISOString());
   const recentZ = state.cashups.slice(-5).reverse();
@@ -3801,6 +3798,7 @@ function writeSession(userId) {
   try { if (userId) sessionStorage.setItem(SESSION_KEY, userId); else sessionStorage.removeItem(SESSION_KEY); } catch { /* private mode */ }
 }
 function setUser(u) {
+  if (!u || !(u.perms || []).includes('reports')) profitClose(); // locked or a user without Reports: close the Profit checker
   ui.user = u ? { id: u.id, name: u.name, role: u.role, perms: [...u.perms] } : null;
   $('#userLabel').textContent = u ? u.name : '';
   $('#lockBtn').hidden = !u;
@@ -4367,6 +4365,7 @@ async function syncNow() {
       Cloud.conf.deactivated = off; Cloud.conf.deactivatedReason = shop.deactivated_reason || ''; Cloud.licenceChanged = true;
     }
     if (until !== Cloud.conf.activeUntil) { Cloud.conf.activeUntil = until; Cloud.licenceChanged = true; }
+    if (applyProfitFields(shop)) Cloud.licenceChanged = true; // Profit checker add-on (v39)
     Cloud.conf.licenceCheckedAt = new Date().toISOString();
     await flushAllAdjust();
     if (shop.generation !== Cloud.conf.generation) {
@@ -4387,6 +4386,7 @@ async function syncNow() {
     await devicePing();
     setCloudStatus('ok');
     if (Cloud.licenceChanged) { Cloud.licenceChanged = false; renderAfterSync(); }
+    profitGuard();
   } catch (e) {
     console.warn('Sync failed:', e);
     setCloudStatus(e.offline ? 'offline' : e.signedOut ? 'signedout' : 'error', e.message);
@@ -4824,6 +4824,190 @@ function licenceBanner() {
     return `<div class="banner"><p><strong>${esc(l.text)}.</strong> Create your shop account to keep selling after the trial.</p>${connect}</div>`;
   }
   return '';
+}
+
+/* ===== 14c-3. Profit checker add-on (paid extra) ===========================
+   Reports → Profit checker opens Rails Profit checker (the profit/ folder,
+   copied from the separate app by tools/copy-profit-checker.sh) full screen,
+   with this shop's sales, refunds, cost prices and stock already loaded.
+   • Needs a shop account. A shop on a paid monthly plan can start a 14-day
+     free trial itself, once (profit_start_trial). After that the supplier
+     turns it on (paid until a date, or no end), changes the trial date, or
+     blocks it from the admin page. Shops can't change these themselves.
+   • Every sync (about every 20 s) reads the shop's add-on columns, and so does
+     every tap on the button when online, so a block shows within seconds: an
+     open Profit checker closes.
+   • Offline it keeps working for PROFIT_OFFLINE_DAYS after the last check.
+   Like the subscription itself, this check runs on the shop's own device.
+   ======================================================================== */
+const PROFIT_OFFLINE_DAYS = 3;
+const PROFIT_PRICE = 'R150 a month';
+
+/** Copy the add-on columns from the shop's cloud row; true when anything changed. */
+function applyProfitFields(shop) {
+  const pf = {
+    plan: shop.plan || 'trial',
+    profitTrialUntil: shop.profit_trial_until ?? null,
+    profitPaid: shop.profit_paid === true,
+    profitUntil: shop.profit_until ?? null,
+    profitBlocked: shop.profit_blocked === true,
+  };
+  const changed = Object.keys(pf).some(k => pf[k] !== (Cloud.conf[k] ?? (k === 'profitPaid' || k === 'profitBlocked' ? false : null)));
+  Object.assign(Cloud.conf, pf);
+  return changed;
+}
+
+/** May this device open the Profit checker now? { ok, state, text, left? } */
+function profitAccess() {
+  if (!cloudOn()) return { ok: false, state: 'no-cloud', text: 'Needs a shop account' };
+  const c = Cloud.conf;
+  if (['deactivated', 'expired'].includes(licence().state)) return { ok: false, state: 'pos-off', text: 'Rails POS subscription not active' };
+  if (c.profitBlocked) return { ok: false, state: 'blocked', text: `Switched off by ${SUPPLIER.name}` };
+  const today = startOfDay();
+  const daysTo = iso => { const d = fromDateInput(iso); return d ? Math.round((startOfDay(d) - today) / DAY_MS) : -1; };
+  let res;
+  if (c.profitPaid && (c.profitUntil == null || daysTo(c.profitUntil) >= 0)) {
+    res = { ok: true, state: 'on', text: c.profitUntil ? `On until ${fmtLong(fromDateInput(c.profitUntil))}` : 'On' };
+  } else if (c.profitTrialUntil && daysTo(c.profitTrialUntil) >= 0) {
+    const left = daysTo(c.profitTrialUntil);
+    res = { ok: true, state: 'trial', left, text: left === 0 ? 'Free trial: last day' : `Free trial: ${left} day${left === 1 ? '' : 's'} left` };
+  } else if (c.profitPaid) res = { ok: false, state: 'ended', text: `Ended ${fmtLong(fromDateInput(c.profitUntil))}` };
+  else if (c.profitTrialUntil) res = { ok: false, state: 'trial-over', text: 'Free trial ended' };
+  else if (c.plan !== 'paid') res = { ok: false, state: 'pos-trial', text: 'Free trial once your subscription starts' };
+  else res = { ok: false, state: 'can-trial', text: '14-day free trial' };
+  const checked = c.licenceCheckedAt ? new Date(c.licenceCheckedAt).getTime() : 0;
+  if (res.ok && Date.now() - checked > PROFIT_OFFLINE_DAYS * DAY_MS) {
+    return { ok: false, state: 'stale', text: 'Connect to the internet to check the add-on' };
+  }
+  return res;
+}
+
+/** The little tag on the Reports button. */
+function profitBadge() {
+  const a = profitAccess();
+  if (a.state === 'on') return '';
+  if (a.state === 'trial') return `<span class="pc-tag">${a.left === 0 ? 'last day' : `${a.left} day${a.left === 1 ? '' : 's'}`}</span>`;
+  if (a.state === 'can-trial') return '<span class="pc-tag">Try free</span>';
+  return '<svg class="ico-sm pc-lock" aria-label="locked"><use href="#i-lock"/></svg>';
+}
+
+/** Ask the cloud for the newest add-on status (when online). */
+async function refreshProfitStatus() {
+  if (!cloudOn() || !navigator.onLine) return false;
+  try {
+    const [shop] = await cloudApi(`/rest/v1/shops?select=*&id=eq.${encodeURIComponent(Cloud.conf.shopId)}`);
+    if (!shop) return false;
+    const changed = applyProfitFields(shop);
+    if (shop.deactivated !== !!Cloud.conf.deactivated) { Cloud.conf.deactivated = shop.deactivated === true; Cloud.licenceChanged = true; }
+    Cloud.conf.licenceCheckedAt = new Date().toISOString();
+    await saveCloudConf();
+    return changed;
+  } catch (e) {
+    console.warn('Add-on check failed:', e);
+    return false;
+  }
+}
+
+/** Reports → Profit checker. */
+async function profitOpen() {
+  await refreshProfitStatus();
+  if (ui.view === 'reports') renderReports();
+  const a = profitAccess();
+  if (a.ok) return profitShow();
+  const wa = SUPPLIER.whatsapp ? `<a class="btn" href="https://wa.me/${esc(SUPPLIER.whatsapp)}?text=${encodeURIComponent(`Hi, I'd like the Profit checker add-on for ${state.settings.storeName}`)}" target="_blank" rel="noopener">Ask on WhatsApp</a>` : '';
+  const why = {
+    'no-cloud': `The Profit checker comes with a shop account. Create one under <strong>Settings → Cloud sync</strong> first.`,
+    'pos-off': 'Your Rails POS subscription isn\'t active, so add-ons are paused too. Your data is safe.',
+    blocked: `${esc(SUPPLIER.name)} has switched the Profit checker off for this shop. Contact us to turn it back on.`,
+    stale: `This device hasn't checked the add-on for over ${PROFIT_OFFLINE_DAYS} days. Connect to the internet and try again.`,
+    ended: `Your Profit checker add-on ended on ${Cloud.conf?.profitUntil ? esc(fmtLong(fromDateInput(Cloud.conf.profitUntil))) : "its end date"}. Renew it to keep using it (${PROFIT_PRICE}).`,
+    'trial-over': `Your free trial has ended. Turn the Profit checker on for ${PROFIT_PRICE}, added to your Rails POS invoice.`,
+    'pos-trial': 'The 14-day free trial can be started once your monthly Rails POS subscription is active.',
+    'can-trial': `Try it free for 14 days, no card needed. After that it's ${PROFIT_PRICE}, added to your Rails POS invoice. If you don't turn it on, it simply locks again.`,
+  }[a.state] || '';
+  const canStart = a.state === 'can-trial' && can('settings');
+  openModal({
+    title: 'Profit checker',
+    body: `<div class="pc-pitch">
+        <p class="pc-lead">See where your profit really goes, in plain English.</p>
+        <ul class="pc-points">
+          <li>Profit per product, and the ones that lose money, with their break-even price</li>
+          <li>Slow stock and the cash tied up in it, plus when best sellers run out</li>
+          <li>Returns, the best day to promote, and a price slider to test new prices</li>
+          <li>Add your Takealot or Amazon files too: fees, returns and ads in one place</li>
+          <li>A weekly WhatsApp summary and a printable report</li>
+        </ul>
+        <p class="pc-why">${why}</p>
+        ${a.state === 'can-trial' && !canStart ? '<p class="small muted">Ask the owner (or someone who may change Settings) to start the trial.</p>' : ''}
+      </div>`,
+    foot: `${canStart ? '<button class="btn primary" data-action="profit-trial" autofocus>Start 14-day free trial</button>' : ''}${a.state !== 'no-cloud' ? wa : ''}
+      ${a.state === 'no-cloud' && can('settings') ? '<button class="btn primary" data-action="go-settings">Open Settings</button>' : ''}
+      <button class="btn" data-action="close-modal">Not now</button>`,
+  });
+}
+
+async function profitStartTrial(el) {
+  if (el) el.disabled = true;
+  try {
+    const until = await cloudApi('/rest/v1/rpc/profit_start_trial', { method: 'POST', body: { p_shop: Cloud.conf.shopId } });
+    await refreshProfitStatus();
+    closeModal();
+    toast(`Free trial started: Profit checker is yours until ${fmtLong(fromDateInput(typeof until === 'string' ? until : Cloud.conf.profitTrialUntil))}`);
+    if (ui.view === 'reports') renderReports();
+    if (profitAccess().ok) profitShow();
+  } catch (e) {
+    if (el) el.disabled = false;
+    toast(/function|404|PGRST202/i.test(e.message || '') ? `Couldn't start the trial: ask ${SUPPLIER.name} to update the cloud (SQL).` : (e.message || 'Couldn\'t start the trial'), true);
+  }
+}
+
+/* The Profit checker page (in the frame) reads what it needs from here. */
+window.RailsProfitHost = {
+  allowed: () => profitAccess().ok,
+  theme: () => document.documentElement.dataset.theme || '',
+  tillCsv() {
+    // Everything this device knows: from the first sale or refund to the end of today
+    const dates = state.sales.map(s => s.date).concat(allReturns().map(r => r.ret.date)).filter(Boolean).sort();
+    const from = dates.length ? startOfDay(new Date(dates[0])) : startOfDay();
+    const to = addDays(startOfDay(), 1);
+    const out = profitCheckerCsv({ from, to });
+    return { name: `${state.settings.storeName || 'Rails POS'} till (Rails POS)`, text: out.sold || out.refunds ? out.csv : '' };
+  },
+};
+
+function profitShow() {
+  let v = $('#profitView');
+  if (!v) { v = document.createElement('div'); v.id = 'profitView'; v.className = 'profit-view'; v.setAttribute('role', 'dialog'); v.setAttribute('aria-label', 'Profit checker'); document.body.append(v); }
+  const a = profitAccess();
+  v.innerHTML = `<div class="profit-bar">
+      <button class="btn sm" data-action="profit-close"><svg class="ico-sm" aria-hidden="true"><use href="#i-back"/></svg>Reports</button>
+      <h2>Profit checker</h2>
+      <span class="profit-state" data-k="profit-state">${esc(a.text)}</span>
+    </div>
+    <iframe class="profit-frame" title="Profit checker" src="profit/index.html${TEST_MODE ? '?test' : ''}"></iframe>`;
+  v.hidden = false;
+  updateInert();
+  setTimeout(() => v.querySelector('[data-action="profit-close"]')?.focus(), 30);
+}
+
+function profitClose(msg) {
+  const v = $('#profitView');
+  if (!v || v.hidden) return;
+  v.hidden = true;
+  v.innerHTML = '';   // unloads the frame
+  updateInert();
+  if (msg) toast(msg, true);
+  if (ui.view === 'reports') { renderReports(); $('[data-action="profit-open"]')?.focus(); }
+}
+
+/** After a sync: a blocked or ended add-on closes an open Profit checker straight away. */
+function profitGuard() {
+  const v = $('#profitView');
+  if (!v || v.hidden) return;
+  const a = profitAccess();
+  if (!a.ok) return profitClose(`Profit checker closed: ${a.text}`);
+  const tag = v.querySelector('[data-k="profit-state"]');
+  if (tag) tag.textContent = a.text;
 }
 
 /* ===== 14d. First-time setup ============================================
@@ -6968,7 +7152,9 @@ const actions = {
   'bs-by': el => { ui.bs.by = el.dataset.v; renderBestSellers(); },
   'bs-print': () => printA4('best'),
   'bs-csv': () => bestSellersCsv(),
-  'profit-export': () => profitCheckerExport(),
+  'profit-open': () => profitOpen(),
+  'profit-trial': el => profitStartTrial(el),
+  'profit-close': () => profitClose(),
   'restore-paste': () => restoreFromText($('#restoreText').value),
   'export-csv': () => exportCsv(),
   'start-fresh': () => startFresh(),
@@ -7037,7 +7223,7 @@ const ACTION_PERMS = {
   'toggle-low': '', 'add-product': 'products', 'np-all': 'products', 'np-save': 'products', 'edit-product': 'products', 'ep-save': 'products',
   'add-variant': 'products', 'edit-variant': 'products', 'variant-save': 'products', 'delete-variant': 'products', 'delete-product': 'products', 'photo-remove': 'products',
   'stock-d': 'stock', receive: 'stock', 'receive-save': 'stock', history: 'stock',
-  range: 'reports', 'r-jump': 'reports', 'bs-open': 'reports', 'bs-sort': 'reports', 'bs-by': 'reports', 'bs-print': 'reports', 'bs-csv': 'reports', 'profit-export': 'reports', cashup: 'cashup', 'cashup-save': 'cashup', petty: 'petty', 'petty-type': 'petty', 'petty-cat': 'petty', 'petty-save': 'petty', 'petty-del': 'petty', 'owner-summary': 'reports', 'print-menu': 'reports', 'print-a4': 'reports',
+  range: 'reports', 'r-jump': 'reports', 'bs-open': 'reports', 'bs-sort': 'reports', 'bs-by': 'reports', 'bs-print': 'reports', 'bs-csv': 'reports', 'profit-open': 'reports', 'profit-trial': 'settings', 'profit-close': 'reports', cashup: 'cashup', 'cashup-save': 'cashup', petty: 'petty', 'petty-type': 'petty', 'petty-cat': 'petty', 'petty-save': 'petty', 'petty-del': 'petty', 'owner-summary': 'reports', 'print-menu': 'reports', 'print-a4': 'reports',
   'backup-download': 'settings', 'backup-copy': 'settings', 'backup-share': 'settings', 'restore-paste': 'settings', 'email-data': 'settings', 'share-pending': 'settings',
   'export-csv': 'settings', 'start-fresh': 'settings', 'load-demo': 'settings',
   'user-add': 'admin', 'user-edit': 'admin', 'user-save': 'admin', 'user-delete': 'admin',

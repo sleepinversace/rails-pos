@@ -23,7 +23,7 @@ const IDLE_MS = 15 * 60 * 1000;
 const SESSION_KEY = 'rails-pos-admin-session';
 
 /* Prices in cents (set by the owner on 2026-11-21). Change them here. */
-const PRICES = { monthly: 38000, device: 5000, setup: 150000 };
+const PRICES = { monthly: 38000, device: 5000, setup: 150000, profit: 15000 }; // profit: Profit checker add-on (set 2026-11-23)
 // Your details printed on invoices and receipts (trading name, contact, bank details).
 // Kept only in this browser — never in the code, because the code is public.
 const INVOICE_KEY = 'rails-pos-admin-invoice';
@@ -38,6 +38,27 @@ function invoiceDetails() {
 const devicesUsed = s => Math.max(1, Number(s.devices_30d ?? s.tills ?? 1) || 1);
 const devicesBilled = s => Number(s.billed_devices) || devicesUsed(s);
 const feeOf = s => PRICES.monthly + PRICES.device * (devicesBilled(s) - 1);
+
+/* Profit checker add-on (v39): R150 a month on top. The shop can start a 14-day
+   trial itself (once, on a paid plan); you set the trial date, turn it on (paid
+   until a date, or no end) or block it. A block reaches open tills within ~20 s. */
+const profitOn = s => !!s.profit_paid && !s.profit_blocked;                   // billed every month
+const profitFee = s => (profitOn(s) ? PRICES.profit : 0);
+/** Tick "Profit checker" on payments and invoices when the shop pays for it or has tried it. */
+const profitSuggested = s => !s.profit_blocked && (!!s.profit_paid || !!s.profit_trial_until);
+function profitStatusOf(s) {
+  const today = isoDay(new Date());
+  const left = d => Math.round((new Date(d + 'T12:00:00') - new Date(today + 'T12:00:00')) / 864e5);
+  if (s.profit_blocked) return ['off', 'Blocked'];
+  if (s.profit_paid && (!s.profit_until || s.profit_until >= today)) return ['paid', s.profit_until ? `On · paid until ${fmtDay(s.profit_until)}` : 'On · no end date'];
+  if (s.profit_trial_until && s.profit_trial_until >= today) {
+    const n = left(s.profit_trial_until);
+    return [n <= 3 ? 'ending' : 'trial', `Trial until ${fmtDay(s.profit_trial_until)} (${n === 0 ? 'last day' : `${n} day${n === 1 ? '' : 's'} left`})`];
+  }
+  if (s.profit_paid) return ['expired', `Ended ${fmtDay(s.profit_until)}`];
+  if (s.profit_trial_until) return ['expired', `Trial ended ${fmtDay(s.profit_trial_until)}`];
+  return ['none', s.plan === 'paid' ? 'Off · the shop can start its free trial' : 'Off · free trial once the POS is paid'];
+}
 /** Whole months between two YYYY-MM-DD dates (at least 1). */
 function monthsBetween(from, to) {
   const a = new Date(from + 'T12:00:00'), b = new Date(to + 'T12:00:00');
@@ -165,12 +186,13 @@ function showDashboard() {
   const month = shops.reduce((a, s) => a + Number(s.paid_this_month || 0), 0);
   const total = shops.reduce((a, s) => a + Number(s.paid_total || 0), 0);
   const paying = shops.filter(s => !s.deactivated && s.plan === 'paid');
-  const expected = paying.reduce((a, s) => a + feeOf(s), 0);
+  const expected = paying.reduce((a, s) => a + feeOf(s) + profitFee(s), 0);
+  const withProfit = paying.filter(profitOn).length;
   $('#root').innerHTML = `
     <div class="admin-kpis">
       <div class="kpi"><div class="label">Shops</div><div class="value num">${shops.length}</div><div class="sub">${counts.paid} paying · ${counts.trial} on trial</div></div>
       <div class="kpi"><div class="label">Paid this month</div><div class="value money">${randStr(month)}</div><div class="sub">all time ${randStr(total)}</div></div>
-      <div class="kpi"><div class="label">Monthly fees</div><div class="value money" data-k="expected">${randStr(expected)}</div><div class="sub">${paying.length} paying shop${paying.length === 1 ? '' : 's'}</div></div>
+      <div class="kpi"><div class="label">Monthly fees</div><div class="value money" data-k="expected">${randStr(expected)}</div><div class="sub">${paying.length} paying shop${paying.length === 1 ? '' : 's'}${withProfit ? ` · ${withProfit} with Profit checker` : ''}</div></div>
       <div class="kpi"><div class="label">Need attention</div><div class="value num ${counts.attention ? 'err-text' : ''}">${counts.attention}</div><div class="sub">ending, grace or expired</div></div>
       <div class="kpi"><div class="label">Deactivated</div><div class="value num">${counts.off}</div></div>
     </div>
@@ -198,7 +220,7 @@ function invoiceDetailsCard() {
       </div>
       <label class="field"><span>Bank details for EFT (bank, account name, number, branch code)</span><textarea name="bank" class="plain" rows="3" maxlength="400">${esc(d.bank)}</textarea></label>
       <label class="field"><span>Footer line</span><input name="footer" class="input" maxlength="160" value="${esc(d.footer)}"></label>
-      <p class="small muted">Saved in this browser only (the code is public, so your bank details are never put in it). Prices: ${randStr(PRICES.monthly)} a month, ${randStr(PRICES.device)} per extra device, setup ${randStr(PRICES.setup)}.</p>
+      <p class="small muted">Saved in this browser only (the code is public, so your bank details are never put in it). Prices: ${randStr(PRICES.monthly)} a month, ${randStr(PRICES.device)} per extra device, setup ${randStr(PRICES.setup)}, Profit checker add-on ${randStr(PRICES.profit)} a month.</p>
       <button class="btn" type="submit">Save my details</button>
     </form>`;
 }
@@ -220,6 +242,11 @@ function shopCard(s) {
         · <button class="link" data-act="devices" data-id="${id}">Change</button></div>
       <div class="shop-meta">Payments: <strong>${esc(randStr(s.paid_total))}</strong> in total${s.last_payment ? ` · last on ${esc(fmtDay(s.last_payment))}` : ''}
         · <button class="link" data-act="history" data-id="${id}">${hist ? 'Hide history' : 'Payment history'}</button></div>
+      <div class="shop-meta">Profit checker: <span class="st st-${esc(profitStatusOf(s)[0])}" data-k="profit-${id}">${esc(profitStatusOf(s)[1])}</span>
+        · <button class="link" data-act="profit-edit" data-id="${id}">${openProfit === s.shop_id ? 'Close' : 'Change'}</button>
+        · ${s.profit_blocked
+          ? `<button class="link" data-act="profit-unblock" data-id="${id}">Unblock</button>`
+          : `<button class="link danger-text" data-act="profit-block" data-id="${id}">Block now</button>`}</div>
       ${s.deactivated ? `<div class="shop-meta err-text">Deactivated${s.deactivated_reason ? `: ${esc(s.deactivated_reason)}` : ''}</div>` : ''}
     </div>
     <div class="shop-actions">
@@ -234,11 +261,49 @@ function shopCard(s) {
     </div>
     ${openPay === s.shop_id ? payForm(s) : ''}
     ${openInv === s.shop_id ? invForm(s) : ''}
+    ${openProfit === s.shop_id ? profitForm(s) : ''}
     ${hist ? `<div class="pay-history">${hist.length ? `<table class="list-table"><tr><th>Paid on</th><th>Paid until</th><th>Amount</th><th>Method</th><th>Note</th><th></th></tr>
       ${hist.map((p, i) => `<tr><td>${esc(fmtDay(p.paid_on))}</td><td>${esc(p.paid_until ? fmtDay(p.paid_until) : p.months ? `+${p.months} month${p.months > 1 ? 's' : ''}` : '')}</td><td>${esc(randStr(p.amount_cents))}</td><td>${esc(p.method || '')}</td><td>${esc(p.note || '')}</td>
         <td><button class="btn sm" data-act="receipt" data-id="${id}" data-i="${i}">Receipt</button></td></tr>`).join('')}</table>`
       : '<p class="small muted">No payments recorded yet.</p>'}</div>` : ''}
   </div>`;
+}
+
+let openProfit = null; // shop id whose "Profit checker" form is open
+
+/** Inline form: everything about the Profit checker add-on for one shop. */
+function profitForm(s) {
+  const id = esc(s.shop_id);
+  const today = isoDay(new Date());
+  return `<form class="pay-form" data-profit-form="${id}" novalidate>
+    <label class="field"><span>Free trial until (empty = trial not started)</span><input type="date" name="trial" class="input" value="${esc(s.profit_trial_until || '')}"></label>
+    <label class="check pay-note"><input type="checkbox" name="paid" ${s.profit_paid ? 'checked' : ''}><span>On (paid, ${esc(randStr(PRICES.profit))} a month)</span></label>
+    <label class="field"><span>Paid until (empty = no end date)</span><input type="date" name="until" class="input" value="${esc(s.profit_until || (s.profit_paid ? '' : (s.active_until && s.active_until >= today ? s.active_until : '')))}"></label>
+    <label class="check pay-note"><input type="checkbox" name="blocked" ${s.profit_blocked ? 'checked' : ''}><span>Blocked: switched off on all the shop's devices, whatever the dates say</span></label>
+    <p class="small muted pay-hint">The shop's open tills pick up a change within about 20 seconds. Tip: when you record a payment, tick "Profit checker" there and it is turned on until the same date.</p>
+    <div class="row gap-s"><button class="btn primary" type="submit">Save Profit checker</button><button class="btn" type="button" data-act="profit-edit" data-id="${id}">Cancel</button></div>
+  </form>`;
+}
+
+async function setProfit(s, { trial = s.profit_trial_until || null, paid = !!s.profit_paid, until = s.profit_until || null, blocked = !!s.profit_blocked }, action) {
+  await rpc('vendor_set_profit', { p_shop: s.shop_id, p_trial_until: trial, p_paid: paid, p_until: paid ? until : null, p_blocked: blocked, p_action: action });
+}
+
+async function saveProfit(form) {
+  const s = shops.find(x => x.shop_id === form.dataset.profitForm);
+  if (!s) return;
+  const f = new FormData(form);
+  const trial = String(f.get('trial') || '') || null;
+  const until = String(f.get('until') || '') || null;
+  const paid = !!f.get('paid'), blocked = !!f.get('blocked');
+  if (trial && !/^\d{4}-\d{2}-\d{2}$/.test(trial)) return toast('Choose a trial date, or leave it empty', true);
+  if (until && !/^\d{4}-\d{2}-\d{2}$/.test(until)) return toast('Choose a paid-until date, or leave it empty', true);
+  const what = blocked ? 'blocked' : paid ? `on, ${until ? `paid until ${fmtDay(until)}` : 'no end date'}` : trial ? `trial until ${fmtDay(trial)}` : 'off';
+  if (!confirm(`Profit checker for ${shopName(s.shop_id)}: ${what}?`)) return;
+  await setProfit(s, { trial, paid, until, blocked }, `Profit checker: ${what}`);
+  openProfit = null;
+  await loadData();
+  toast(`Saved. ${shopName(s.shop_id)}'s Profit checker: ${what}`);
 }
 
 /** Inline form: record a subscription payment, which may be backdated. */
@@ -252,31 +317,35 @@ function suggestUntil(s) {
 }
 
 /** Amount for a payment: the monthly fee × the months it covers (+ the setup fee if ticked). */
-function suggestedAmount(s, until, setup) {
+function suggestedAmount(s, until, setup, profit = false) {
   const today = isoDay(new Date());
   const from = s.active_until && s.active_until > today ? s.active_until : today;
   const months = until > from ? monthsBetween(from, until) : 1;
-  return { months, cents: feeOf(s) * months + (setup ? PRICES.setup : 0) };
+  return { months, profit, cents: (feeOf(s) + (profit ? PRICES.profit : 0)) * months + (setup ? PRICES.setup : 0) };
 }
 
 function payForm(s) {
   const id = esc(s.shop_id);
   const today = isoDay(new Date());
   const until = suggestUntil(s);
-  const sug = suggestedAmount(s, until, false);
+  const sug = suggestedAmount(s, until, false, profitSuggested(s));
   return `<form class="pay-form" data-pay-form="${id}" novalidate>
     <label class="field"><span>Paid on (can be in the past)</span><input type="date" name="paid_on" class="input" value="${today}" max="${today}"></label>
     <label class="field"><span>Paid until (you choose)</span><input type="date" name="paid_until" class="input" value="${until}" min="${today}"></label>
     <label class="field"><span>Amount (R)</span><input name="amount" class="input" inputmode="decimal" value="${(sug.cents / 100).toFixed(2)}"></label>
     <label class="field"><span>Method</span><select name="method"><option>EFT</option><option>Cash</option><option>Card</option><option>Other</option></select></label>
     <label class="check pay-note"><input type="checkbox" name="setup"><span>Includes the once-off setup fee (${esc(randStr(PRICES.setup))}, with 1 hour training)</span></label>
+    <label class="check pay-note"><input type="checkbox" name="profit" ${profitSuggested(s) ? 'checked' : ''} ${s.profit_blocked ? 'disabled' : ''}><span>Includes the Profit checker add-on (${esc(randStr(PRICES.profit))} a month): turns it on until the same date${s.profit_blocked ? ' (blocked: unblock it first)' : ''}</span></label>
     <label class="field pay-note"><span>Note (optional)</span><input name="note" class="input" maxlength="200" placeholder="e.g. invoice number"></label>
     <p class="small muted pay-hint" data-pay-hint>${payHint(s, sug)}</p>
     <div class="row gap-s"><button class="btn primary" type="submit">Save payment</button><button class="btn" type="button" data-act="pay-close">Cancel</button></div>
   </form>`;
 }
 
-const payHint = (s, sug) => `Suggested: ${sug.months} month${sug.months === 1 ? '' : 's'} × ${randStr(feeOf(s))}${sug.cents > feeOf(s) * sug.months ? ` + setup ${randStr(PRICES.setup)}` : ''} = <strong>${randStr(sug.cents)}</strong>. The shop can sell up to and including the “Paid until” date.`;
+const payHint = (s, sug) => {
+  const monthly = feeOf(s) + (sug.profit ? PRICES.profit : 0);
+  return `Suggested: ${sug.months} month${sug.months === 1 ? '' : 's'} × ${randStr(monthly)}${sug.profit ? ` (incl. Profit checker ${randStr(PRICES.profit)})` : ''}${sug.cents > monthly * sug.months ? ` + setup ${randStr(PRICES.setup)}` : ''} = <strong>${randStr(sug.cents)}</strong>. The shop can sell up to and including the “Paid until” date.`;
+};
 
 /** Keep the suggested amount in step with the dates (until the amount is typed by hand). */
 function onPayFormChange(form, target) {
@@ -286,7 +355,7 @@ function onPayFormChange(form, target) {
   const f = new FormData(form);
   const until = String(f.get('paid_until') || '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) return;
-  const sug = suggestedAmount(s, until, !!f.get('setup'));
+  const sug = suggestedAmount(s, until, !!f.get('setup'), !!f.get('profit'));
   if (!form.dataset.typed) form.querySelector('[name="amount"]').value = (sug.cents / 100).toFixed(2);
   form.querySelector('[data-pay-hint]').innerHTML = payHint(s, sug);
 }
@@ -302,6 +371,7 @@ function invForm(s) {
     <label class="field"><span>Months</span><select name="months">${[1, 2, 3, 6, 12].map(m => `<option value="${m}">${m} month${m > 1 ? 's' : ''}</option>`).join('')}</select></label>
     <label class="field"><span>Due date</span><input type="date" name="due" class="input" value="${esc(s.active_until && s.active_until > isoDay(new Date()) ? s.active_until : isoDay(new Date()))}"></label>
     <label class="check pay-note"><input type="checkbox" name="setup" ${firstPaid ? 'checked' : ''}><span>Add the once-off setup fee (${esc(randStr(PRICES.setup))}, with 1 hour training)</span></label>
+    <label class="check pay-note"><input type="checkbox" name="profit" ${profitSuggested(s) ? 'checked' : ''}><span>Add the Profit checker add-on (${esc(randStr(PRICES.profit))} a month)</span></label>
     <p class="small muted pay-hint">${devicesBilled(s)} device${devicesBilled(s) === 1 ? '' : 's'} · ${esc(randStr(feeOf(s)))} a month. The period starts the day after the current paid-until date (or today).</p>
     <div class="row gap-s"><button class="btn primary" type="submit">Print invoice</button><button class="btn" type="button" data-act="inv-close">Cancel</button></div>
   </form>`;
@@ -337,6 +407,7 @@ function printInvoice(form) {
   const dev = devicesBilled(s);
   const lines = [[`Rails POS subscription — ${months} month${months > 1 ? 's' : ''} (${fmtDay(start)} to ${fmtDay(end)})`, months, PRICES.monthly]];
   if (dev > 1) lines.push([`Extra device${dev > 2 ? 's' : ''} (${dev - 1}) — ${months} month${months > 1 ? 's' : ''}`, months * (dev - 1), PRICES.device]);
+  if (f.get('profit')) lines.push([`Profit checker add-on — ${months} month${months > 1 ? 's' : ''}`, months, PRICES.profit]);
   if (f.get('setup')) lines.push(['Once-off setup: shop, staff logins and stock loaded, plus 1 hour training', 1, PRICES.setup]);
   const total = lines.reduce((a, [, q, p]) => a + q * p, 0);
   const no = `INV-${today.replace(/-/g, '')}-${String(s.shop_id).replace(/[^a-z0-9]/gi, '').slice(0, 4).toUpperCase()}`;
@@ -392,12 +463,16 @@ async function savePayment(form) {
   if (!amountTxt || !Number.isFinite(amount) || amount < 0) return toast('Enter the amount paid', true);
   let note = String(f.get('note') || '').trim();
   if (f.get('setup') && !/setup/i.test(note)) note = (note ? note + ' · ' : '') + 'incl. setup fee';
+  const withProfit = !!f.get('profit');
+  if (withProfit && !/profit/i.test(note)) note = (note ? note + ' · ' : '') + 'incl. Profit checker';
   f.set('note', note);
-  if (!confirm(`Record ${randStr(amount)} paid on ${fmtDay(paidOn)}, paid until ${fmtDay(until)}, for ${shopName(id)}?`)) return;
+  if (!confirm(`Record ${randStr(amount)} paid on ${fmtDay(paidOn)}, paid until ${fmtDay(until)}, for ${shopName(id)}?${withProfit ? `\n\nThe Profit checker add-on is turned on until ${fmtDay(until)} too.` : ''}`)) return;
   await rpc('vendor_record_payment_until', {
     p_shop: id, p_paid_on: paidOn, p_until: until, p_amount_cents: amount,
     p_method: String(f.get('method') || ''), p_note: String(f.get('note') || '').trim(),
   });
+  const s = shops.find(x => x.shop_id === id);
+  if (withProfit && s) await setProfit(s, { paid: true, until, blocked: false }, `Profit checker: paid until ${fmtDay(until)}`);
   openPay = null;
   if (payHistory[id]) payHistory[id] = await rpc('vendor_shop_payments', { p_shop: id });
   await loadData();
@@ -446,6 +521,17 @@ async function act(el) {
     if (a === 'inv-open') { openInv = openInv === id ? null : id; openPay = null; return showDashboard(); }
     if (a === 'inv-close') { openInv = null; return showDashboard(); }
     if (a === 'receipt') return printReceipt(id, Number(el.dataset.i));
+    if (a === 'profit-edit') { openProfit = openProfit === id ? null : id; openPay = openInv = null; return showDashboard(); }
+    if (a === 'profit-block' || a === 'profit-unblock') {
+      const s = shops.find(x => x.shop_id === id);
+      const block = a === 'profit-block';
+      if (!confirm(block
+        ? `Block the Profit checker for ${shopName(id)} now?\n\nIt closes on their devices within about 20 seconds, whatever the trial or paid dates say. You can unblock any time.`
+        : `Unblock the Profit checker for ${shopName(id)}? It works again if their trial or paid date is still running.`)) return;
+      await setProfit(s, { blocked: block }, block ? 'Profit checker: blocked' : 'Profit checker: unblocked');
+      await loadData();
+      return toast(block ? `Profit checker blocked for ${shopName(id)}` : `Profit checker unblocked for ${shopName(id)}`);
+    }
     if (a === 'devices') {
       const s = shops.find(x => x.shop_id === id);
       const v = prompt(`How many devices should ${shopName(id)} be billed for?\n\n${devicesUsed(s)} used in the last 30 days. Leave empty to count automatically.\n(${randStr(PRICES.monthly)} a month for the first device, ${randStr(PRICES.device)} for each extra one.)`, s.billed_devices ? String(s.billed_devices) : '');
@@ -507,6 +593,7 @@ document.addEventListener('submit', async e => {
     }
     if (e.target.dataset.payForm) await savePayment(e.target);
     if (e.target.dataset.invForm) printInvoice(e.target);
+    if (e.target.dataset.profitForm) await saveProfit(e.target);
     if (e.target.id === 'invDetails') {
       const f = new FormData(e.target);
       const d = Object.fromEntries(['name', 'contact', 'bank', 'footer'].map(k => [k, String(f.get(k) || '').trim()]));

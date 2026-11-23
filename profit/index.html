@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en-ZA">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rails Profit checker</title>
+  <meta name="theme-color" content="#0e6b46">
+  <meta name="description" content="Plain-English profit answers for online sellers.">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script>window.PC_REQUIRE_HOST = true;</script>
+</head>
+<body>
+  <header class="appbar">
+    <div class="shell appbar-inner">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">R</span>
+        <div>
+          <h1>Rails Profit checker</h1>
+          <p>Plain-English answers for online sellers</p>
+        </div>
+      </div>
+      <div class="appbar-actions" id="appbar-actions" hidden>
+        <span class="data-chip" id="data-chip"></span>
+        <button class="btn btn-ghost btn-sm" id="open-mapping" type="button" title="Match your column names">Match columns</button>
+        <button class="btn btn-ghost btn-sm" id="print" type="button" title="Print or save as PDF">Print / PDF</button>
+        <button class="btn btn-ghost btn-sm open-reset" type="button" title="Delete all saved data and settings on this device">Reset</button>
+        <label class="btn btn-sm" for="files-top" title="Add more files: they add up with what's loaded (e.g. next month). Duplicates are skipped.">Add files
+          <input type="file" id="files-top" accept=".csv,.pdf,.xlsx,.xls,.xlsm,.ods,text/csv,application/pdf" multiple hidden>
+        </label>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell">
+    <!-- Empty state: shown until data is loaded -->
+    <section class="empty" id="load">
+      <div class="dropzone" id="dropzone">
+        <h2>See where your profit goes, in one minute</h2>
+        <p>Drop your <b>sales</b>, <b>returns</b>, <b>stock</b> and <b>products</b> (cost price) files here, in any order: <b>CSV, Excel or PDF</b>. <b>Ads</b> is optional. Or try it with sample data from a made-up shop.</p>
+        <div class="load-actions">
+          <label class="btn btn-primary" for="files">Choose files
+            <input type="file" id="files" accept=".csv,.pdf,.xlsx,.xls,.xlsm,.ods,text/csv,application/pdf" multiple hidden>
+          </label>
+          <button class="btn" id="use-sample" type="button">Use sample data</button>
+        </div>
+        <ul class="file-status" id="file-status"></ul>
+        <p class="privacy">🔒 Your files stay on this device. Nothing is uploaded. · <button type="button" class="link-btn open-reset">Reset everything</button></p>
+      </div>
+    </section>
+
+    <div id="results" hidden>
+      <!-- Print-only title -->
+      <div class="print-title"><h2>Rails Profit checker report</h2><p id="print-range"></p></div>
+
+      <!-- Date range + channel -->
+      <section class="rangebar" aria-label="Date range and channel">
+        <div class="chips" id="chips" role="group" aria-label="Quick ranges"></div>
+        <div class="range-right">
+          <label class="channel" id="channel-wrap">
+            <span class="sr-only">Sales channel</span>
+            <select id="channel"></select>
+          </label>
+          <div class="custom-range">
+            <label>From <input type="date" id="from"></label>
+            <span class="dash" aria-hidden="true">→</span>
+            <label>To <input type="date" id="to"></label>
+          </div>
+        </div>
+      </section>
+
+      <!-- Headline numbers -->
+      <section class="kpis" id="kpis"></section>
+      <div class="warnings" id="warnings"></div>
+
+      <!-- Answers first -->
+      <section class="main-grid">
+        <div>
+          <div class="section-head">
+            <h2>What you need to know</h2>
+            <p id="period-range"></p>
+          </div>
+          <ol class="findings" id="findings"></ol>
+          <div id="extra-wrap">
+            <div class="section-head extra-head"><h2>Also worth knowing</h2></div>
+            <ol class="findings" id="findings-extra"></ol>
+          </div>
+        </div>
+
+        <aside class="side">
+          <div class="card share">
+            <div class="card-head">
+              <h3>Weekly WhatsApp summary</h3>
+              <p>Last 7 days, all channels, ready to paste</p>
+            </div>
+            <pre class="wa-preview" id="wa-preview"></pre>
+            <div class="share-actions">
+              <button class="btn btn-primary" id="copy-wa" type="button">Copy weekly WhatsApp summary</button>
+              <a class="btn" id="open-wa" href="#" target="_blank" rel="noopener">Open in WhatsApp</a>
+            </div>
+          </div>
+
+          <div class="card chart">
+            <div class="card-head">
+              <h3>Sales by weekday</h3>
+              <p id="weekday-note"></p>
+            </div>
+            <div id="chart-weekday"></div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="charts-grid">
+        <div class="card chart">
+          <div class="card-head">
+            <h3>Sales by product</h3>
+            <p>Net sales after refunds · tap a product for details</p>
+          </div>
+          <div id="chart-sales"></div>
+        </div>
+        <div class="card chart">
+          <div class="card-head">
+            <h3>Profit by product</h3>
+            <p>After fees, stock cost, returns and ads · <span class="neg-key">red = lost money</span></p>
+          </div>
+          <div id="chart-profit"></div>
+        </div>
+      </section>
+
+      <section class="card table-card">
+        <div class="table-head">
+          <div class="card-head">
+            <h3>All products</h3>
+            <p>Tap a column to sort, tap a row for details and the price calculator</p>
+          </div>
+          <button class="btn btn-sm" id="download-csv" type="button">Download CSV</button>
+        </div>
+        <div class="table-scroll"><table class="ptable" id="ptable"></table></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- Product detail drawer -->
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="drawer" id="drawer" aria-hidden="true" aria-labelledby="d-title" role="dialog">
+    <div class="drawer-head">
+      <div>
+        <p class="d-sub" id="d-sub"></p>
+        <h2 id="d-title"></h2>
+      </div>
+      <button class="icon-btn" id="d-close" type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="drawer-body" id="d-body"></div>
+  </aside>
+
+  <!-- Column matching -->
+  <dialog class="modal" id="mapping">
+    <form method="dialog" class="modal-inner" id="mapping-form">
+      <div class="modal-head">
+        <div>
+          <h2>Match your columns</h2>
+          <p>Tell Rails Profit checker which column in your file holds each piece of information. Saved on this device for next time.</p>
+        </div>
+        <button class="icon-btn" value="cancel" aria-label="Close">✕</button>
+      </div>
+      <div id="mapping-body"></div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" type="button" id="mapping-reset">Reset to defaults</button>
+        <button class="btn btn-primary" value="save" id="mapping-save">Save and recalculate</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Your files: everything loaded, what each added, remove -->
+  <dialog class="modal" id="files-dlg" aria-labelledby="files-title">
+    <form method="dialog" class="modal-inner">
+      <div class="modal-head">
+        <div>
+          <h2 id="files-title">Your files</h2>
+          <p>Files add up, for example month 1 plus month 2. Rows that are already loaded from another file are skipped, so nothing is counted twice.</p>
+        </div>
+        <button class="icon-btn" value="cancel" aria-label="Close">✕</button>
+      </div>
+      <div id="files-body"></div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" value="cancel">Close</button>
+        <label class="btn btn-primary" for="files-more">Add more files
+          <input type="file" id="files-more" accept=".csv,.pdf,.xlsx,.xls,.xlsm,.ods,text/csv,application/pdf" multiple hidden>
+        </label>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Reset everything: the user must type YES -->
+  <dialog class="modal modal-sm" id="reset-dlg" aria-labelledby="reset-title">
+    <form method="dialog" class="modal-inner" id="reset-form">
+      <div class="modal-head">
+        <div>
+          <h2 id="reset-title">Reset everything?</h2>
+          <p>This puts Rails Profit checker back to how it was the first time you opened it, on this device. It deletes:</p>
+        </div>
+        <button class="icon-btn" value="cancel" aria-label="Close">✕</button>
+      </div>
+      <div class="reset-body">
+        <ul>
+          <li>your loaded and remembered files</li>
+          <li>your column matches</li>
+          <li>your date range, channel and table sort choices</li>
+          <li>the offline copy of the app</li>
+        </ul>
+        <p>Your original files on your computer are <b>not</b> touched. This can't be undone.</p>
+        <label for="reset-confirm">Type <b>YES</b> to confirm</label>
+        <input id="reset-confirm" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="YES">
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" value="cancel">Cancel</button>
+        <button class="btn btn-danger" type="button" id="reset-go" disabled>Reset everything</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="calculations.js"></script>
+  <script src="importers.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

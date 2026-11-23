@@ -17,12 +17,22 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
-## v39 — 2026-11-23 · Export for Rails Profit checker
+## v39 — 2026-11-23 · Profit checker add-on (paid extra, 14-day free trial) 🗄️
 
-- ✨ **Reports → Export for Profit checker** downloads the chosen period as one CSV file for **Rails Profit checker** (the separate profit app): every item sold, every refund (as negative lines), each product's cost price, and one stock line per product with the stock on hand now. Open the file in Rails Profit checker and it gives per-product profit, returns, slow stock, run-out dates and the best weekday, with no column matching.
-- Sizes and colours of a product are added together, so the answers are per product.
-- Revenue is excluding VAT and after sale discounts, and the cost is the product's average over what sold, so Rails Profit checker's profit equals this app's **Gross profit** for the same period.
-- No SQL changes.
+- ✨ **Reports → Profit checker** opens **Rails Profit checker** full screen inside the till, with the shop's own sales, refunds, cost prices and stock already loaded. There's nothing to export or upload. It shows profit per product, which products lose money and their break-even price, slow stock and the cash tied up in it, run-out dates, returns, the best day to promote, a price slider, a weekly WhatsApp summary and a printable report. Shops that also sell online can add their Takealot, Amazon, Excel or PDF files with **Add files**. Those files stay on the device; the till's own data is read fresh every time and never stored there.
+- 💰 **A paid add-on: R150 a month.**
+  - A shop on a paid monthly plan taps **Start 14-day free trial** (owner, or anyone who may change Settings). The trial can be used once.
+  - Without the add-on, the button shows a lock (or "Try free"). Tapping it explains what the add-on does and why it's locked.
+- 🔒 **Supplier admin page:** every shop has a **Profit checker** line showing its status. It has **Change** (trial date, on/paid until, blocked) and **Block now / Unblock**.
+  - Ticking **Profit checker** when recording a payment turns it on until the same date.
+  - Invoices get a "Profit checker add-on" line.
+  - **Monthly fees** include it.
+  - Every change goes in the audit log. Admin files are now `?v=29`.
+- 🔒 **Blocks take effect within seconds.** Tills read the add-on status on every sync (about every 20 seconds) and again on every tap of the button, so a block closes an open Profit checker straight away. Offline, it keeps working for up to 3 days after the last check. Shops can't change their add-on status; only the supplier's admin functions can.
+- 🔧 The Profit checker files live in `profit/`, copied from the separate app with `tools/copy-profit-checker.sh`, and open offline like the rest of the till. Opening `profit/` directly (not from the till) is refused.
+- 🔧 Terms page: the add-on and its price are listed.
+- 🔧 Replaces the **Export for Profit checker** button from an earlier v39 draft, which was never released.
+- 🗄️ Needs the Supabase SQL file re-run: new `profit_*` columns on shops, `profit_start_trial`, `vendor_set_profit`, and `vendor_list_shops` returns the add-on columns.
 
 ---
 

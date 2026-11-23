@@ -96,7 +96,7 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - Tick or untick each permission: discounts, refunds and exchanges (incl. cancelling lay-bys), sales history, clients and lay-bys, stock counts and deliveries, products and prices, cash-up, petty cash, reports, activity log, settings and backups, admin. Selling is always allowed.
   - **Blind cash-up:** someone with Cash-up but not Reports counts the drawer without seeing the expected cash or over / short.
   - **Best sellers** report (Reports → Top sellers → See all, A4, Excel): ranked by items sold, value or profit, by product or size & colour.
-  - **Export for Profit checker** (Reports, v39): one CSV per period for the Rails Profit checker app. It holds sale lines, refunds as negative lines, cost price, and a stock line per product. Revenue is excl. VAT after discounts, so its profit equals Gross profit here.
+  - **Profit checker add-on** (Reports, v39, R150 a month): opens Rails Profit checker full screen with the shop's own sales, refunds, cost prices and stock loaded (profit per product, loss-makers and break-even prices, slow stock, run-out dates, best day to promote, price slider, WhatsApp summary). Online sellers can add Takealot/Amazon/Excel/PDF files too. A shop on a paid plan can start a 14-day free trial once; the supplier turns it on, changes the trial date or blocks it from the admin page, and tills pick that up within about 20 seconds (offline: up to 3 days after the last check). Reading PDF or Excel files downloads their readers from cdnjs/jsDelivr the first time; files are never uploaded.
   - Screens and buttons a user may not use are hidden, and every action is checked again when tapped. A cashier's cart ignores any discount.
   - You can't delete yourself, and there is always at least one user with Admin access.
   - This keeps staff and customers out of the till. It is not copy protection: a licence check needs a server (see *What to build next*).
@@ -120,9 +120,11 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
 | `cloud/supabase-setup.sql` | The whole cloud database; safe to re-run after each change |
 | `CHANGELOG.md` | Every release, newest first |
 | `tests.html` | Automated tests that run in any browser |
+| `profit/` | Rails Profit checker (the paid add-on), copied from the separate app. Don't edit here: change it in `Rails - Charts`, then run `sh tools/copy-profit-checker.sh` |
+| `tools/copy-profit-checker.sh` | Copies Rails Profit checker into `profit/` |
 | `tools/serve.ps1` | A tiny local web server for Windows when Python isn't installed |
 
-There is no build step, framework, CDN or web font.
+There is no build step, framework, CDN or web font. (The Profit checker add-on loads PDF and Excel readers from a CDN only when a shop opens such a file there.)
 
 ## Run it locally
 
@@ -142,7 +144,7 @@ Then open http://localhost:8000. Offline mode only works over `http://localhost`
 
 With the server running, open **http://localhost:8000/tests.html** and click **Run all tests**, or open `tests.html?auto` to run them straight away.
 
-The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 42 tests should pass (one runs two "devices" against a fake Supabase to test syncing; one reads drawn barcodes that are blurred, noisy and upside down). They cover:
+The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 43 tests should pass (one runs two "devices" against a fake Supabase to test syncing; one reads drawn barcodes that are blurred, noisy and upside down). They cover:
 - sign-in, lock and changing the PIN
 - admin: adding, editing and deleting users, and what a cashier can't do
 - selling and stock
@@ -159,7 +161,7 @@ The tests drive the real app (clicks, typing, reloads, a second tab) using a **s
 - accessibility and colour contrast
 - clients and lay-bys (payments, overdue, collect, cancel)
 - barcodes, labels, photos and the licence check
-- cloud sync and the supplier admin page (against a fake Supabase)
+- cloud sync and the supplier admin page (against a fake Supabase), including the Profit checker add-on: trial, block, payments and invoices
 - upgrading data from version 1
 
 ## Put it on a phone (free hosting)
@@ -168,7 +170,7 @@ Phones only allow offline mode and home-screen install over **HTTPS**, so host t
 
 ### Cloudflare Pages (easiest)
 1. Sign up at https://pages.cloudflare.com
-2. Choose **Create a project, then Direct Upload**, and drag in: `index.html`, `app.css`, `app.js`, `sw.js`, `manifest.json`, `icon-192.png`, `icon-512.png`, `icon-maskable-512.png`. Leave out `tools/`, `.claude/` and `tests.html`.
+2. Choose **Create a project, then Direct Upload**, and drag in: `index.html`, `app.css`, `app.js`, `sw.js`, `manifest.json`, `icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, and the `profit` folder. Leave out `tools/`, `.claude/` and `tests.html`.
 3. You get a URL like `https://rails-pos.pages.dev`.
 
 ### GitHub Pages

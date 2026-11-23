@@ -252,33 +252,9 @@ begin
     'aal', coalesce(auth.jwt() ->> 'aal', ''));
 end $$;
 
-drop function if exists public.vendor_list_shops(); -- its columns changed in v21, v27 and v37
-create or replace function public.vendor_list_shops()
-returns table (shop_id uuid, shop_name text, email text, plan text, active_until date,
-               created_at timestamptz, last_seen timestamptz, tills int, records bigint,
-               deactivated boolean, deactivated_reason text,
-               paid_total bigint, paid_this_month bigint, last_payment date,
-               devices_30d int, billed_devices int, online_now int)
-language plpgsql security definer set search_path = public as $$
-begin
-  perform public.vendor_check();
-  return query
-    select s.id, s.name, u.email::text, s.plan, s.active_until, s.created_at,
-           (select max(r.updated_at) from public.records r where r.shop_id = s.id),
-           greatest(s.next_device - 1, 0),
-           (select count(*) from public.records r where r.shop_id = s.id),
-           s.deactivated, s.deactivated_reason,
-           (select coalesce(sum(p.amount_cents), 0) from public.vendor_payments p where p.shop_id = s.id)::bigint,
-           (select coalesce(sum(p.amount_cents), 0) from public.vendor_payments p
-             where p.shop_id = s.id and date_trunc('month', p.paid_on) = date_trunc('month', current_date))::bigint,
-           (select max(p.paid_on) from public.vendor_payments p where p.shop_id = s.id),
-           (select count(distinct r.device) from public.records r
-             where r.shop_id = s.id and r.device is not null and r.updated_at > now() - interval '30 days')::int,
-           s.billed_devices,
-           (select count(*) from public.devices d where d.shop_id = s.id and d.left_at is null and d.last_seen > now() - interval '90 seconds')::int
-    from public.shops s join auth.users u on u.id = s.owner
-    order by s.created_at;
-end $$;
+-- vendor_list_shops() is defined further down (v39 section): its columns changed in v21, v27, v37 and v39.
+drop function if exists public.vendor_list_shops();
+create function public.vendor_list_shops() returns void language sql as $$ select null $$; -- placeholder so the grants below work; replaced in the v39 section
 
 -- Record a subscription payment (may be backdated). The paid-until date runs
 -- from the payment date, or from the current end date if that is later.
@@ -424,3 +400,94 @@ grant execute on function public.vendor_whoami(), public.vendor_list_shops(),
   public.vendor_record_payment(uuid, date, int, int, text, text), public.vendor_shop_payments(uuid),
   public.vendor_record_payment_until(uuid, date, date, int, text, text),
   public.vendor_set_active(uuid, boolean, text), public.vendor_set_devices(uuid, int) to authenticated;
+
+-- =========================================================================
+-- v39: PROFIT CHECKER ADD-ON (paid extra, R150 a month)
+--   • A shop on a paid monthly plan can start a 14-day free trial itself, once
+--     (profit_start_trial). Everything else only the supplier can change.
+--   • profit_paid + profit_until: paid for the add-on until that date (null = no end).
+--   • profit_blocked: switched off by the supplier, overrides trial and paid.
+--   Shops can read these columns but not change them (their update grant is
+--   only name, generation, next_device).
+-- =========================================================================
+alter table public.shops add column if not exists profit_trial_until date;   -- null = trial never started
+alter table public.shops add column if not exists profit_paid boolean not null default false;
+alter table public.shops add column if not exists profit_until date;         -- with profit_paid: null = no end date
+alter table public.shops add column if not exists profit_blocked boolean not null default false;
+
+-- The shop starts its own free trial (once, only on a paid monthly plan).
+create or replace function public.profit_start_trial(p_shop uuid) returns date
+language plpgsql security definer set search_path = public as $$
+declare s public.shops; d date;
+begin
+  select * into s from public.shops where id = p_shop and owner = auth.uid() for update;
+  if not found then raise exception 'Not your shop'; end if;
+  if s.deactivated then raise exception 'This shop is deactivated'; end if;
+  if s.profit_blocked then raise exception 'Profit checker is switched off for this shop. Contact Rails POS.'; end if;
+  if s.plan <> 'paid' then raise exception 'The free trial starts once your monthly Rails POS subscription is active'; end if;
+  if s.profit_trial_until is not null then raise exception 'The free trial has already been used'; end if;
+  if s.profit_paid then raise exception 'Profit checker is already on'; end if;
+  d := current_date + 14;
+  update public.shops set profit_trial_until = d where id = p_shop;
+  insert into public.vendor_audit (admin_id, shop_id, action, old_until, new_until)
+    values (auth.uid(), p_shop, 'Profit checker: shop started 14-day trial', null, d);
+  return d;
+end $$;
+
+-- The supplier sets everything at once: trial end date, paid (and until), blocked.
+create or replace function public.vendor_set_profit(p_shop uuid, p_trial_until date, p_paid boolean,
+  p_until date, p_blocked boolean, p_action text default 'Profit checker changed')
+returns boolean
+language plpgsql security definer set search_path = public as $$
+declare s public.shops;
+begin
+  perform public.vendor_check();
+  select * into s from public.shops where id = p_shop for update;
+  if not found then raise exception 'Shop not found'; end if;
+  if p_until is not null and p_until > current_date + interval '5 years' then raise exception 'Paid until can''t be more than 5 years ahead'; end if;
+  update public.shops set profit_trial_until = p_trial_until, profit_paid = coalesce(p_paid, false),
+    profit_until = case when coalesce(p_paid, false) then p_until else null end,
+    profit_blocked = coalesce(p_blocked, false)
+  where id = p_shop;
+  insert into public.vendor_audit (admin_id, shop_id, action, old_until, new_until)
+    values (auth.uid(), p_shop, left(coalesce(nullif(p_action, ''), 'Profit checker changed'), 60),
+      coalesce(s.profit_until, s.profit_trial_until),
+      case when coalesce(p_paid, false) then p_until else p_trial_until end);
+  return true;
+end $$;
+
+-- vendor_list_shops with the add-on columns (its columns changed again in v39)
+drop function if exists public.vendor_list_shops();
+create or replace function public.vendor_list_shops()
+returns table (shop_id uuid, shop_name text, email text, plan text, active_until date,
+               created_at timestamptz, last_seen timestamptz, tills int, records bigint,
+               deactivated boolean, deactivated_reason text,
+               paid_total bigint, paid_this_month bigint, last_payment date,
+               devices_30d int, billed_devices int, online_now int,
+               profit_trial_until date, profit_paid boolean, profit_until date, profit_blocked boolean)
+language plpgsql security definer set search_path = public as $$
+begin
+  perform public.vendor_check();
+  return query
+    select s.id, s.name, u.email::text, s.plan, s.active_until, s.created_at,
+           (select max(r.updated_at) from public.records r where r.shop_id = s.id),
+           greatest(s.next_device - 1, 0),
+           (select count(*) from public.records r where r.shop_id = s.id),
+           s.deactivated, s.deactivated_reason,
+           (select coalesce(sum(p.amount_cents), 0) from public.vendor_payments p where p.shop_id = s.id)::bigint,
+           (select coalesce(sum(p.amount_cents), 0) from public.vendor_payments p
+             where p.shop_id = s.id and date_trunc('month', p.paid_on) = date_trunc('month', current_date))::bigint,
+           (select max(p.paid_on) from public.vendor_payments p where p.shop_id = s.id),
+           (select count(distinct r.device) from public.records r
+             where r.shop_id = s.id and r.device is not null and r.updated_at > now() - interval '30 days')::int,
+           s.billed_devices,
+           (select count(*) from public.devices d where d.shop_id = s.id and d.left_at is null and d.last_seen > now() - interval '90 seconds')::int,
+           s.profit_trial_until, s.profit_paid, s.profit_until, s.profit_blocked
+    from public.shops s join auth.users u on u.id = s.owner
+    order by s.created_at;
+end $$;
+
+revoke execute on function public.profit_start_trial(uuid), public.vendor_list_shops(),
+  public.vendor_set_profit(uuid, date, boolean, date, boolean, text) from public, anon;
+grant execute on function public.profit_start_trial(uuid), public.vendor_list_shops(),
+  public.vendor_set_profit(uuid, date, boolean, date, boolean, text) to authenticated;
