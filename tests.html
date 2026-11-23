@@ -1064,6 +1064,34 @@ test('CSV export has refunds and blocks spreadsheet formulas', async () => {
   ok(csv.split('\r\n').some(r => r.startsWith('refund,CN00001')), 'refund rows');
 });
 
+test('Export for Rails Profit checker: one file whose profit matches Gross profit', async () => {
+  const range = w.reportRange('30');
+  const rep = w.buildReport(range);
+  const out = w.profitCheckerCsv(range);
+  const lines = out.csv.replace(/^﻿/, '').split('\r\n');
+  const head = lines[0].split(',');
+  eq(head.join(','), 'date,time,doc_no,line_type,channel,sku,product_name,category,size,colour,units_sold,selling_price,revenue,cost_price,stock_on_hand,payment', 'column names Rails Profit checker knows');
+  // (no commas inside the test shop's names, so a plain split is fine here)
+  const rows = lines.slice(1).map(l => l.split(',')), col = n => head.indexOf(n);
+  const byType = t => rows.filter(r => r[col('line_type')] === t);
+  ok(byType('sale').length > 0 && byType('refund').length > 0, `sale and refund lines (${byType('sale').length} / ${byType('refund').length})`);
+  ok(byType('refund').every(r => +r[col('units_sold')] < 0 && +r[col('revenue')] < 0), 'refunds have negative units and revenue');
+  ok(!out.csv.includes(",'-"), 'negative numbers are numbers, not text');
+  eq(byType('stock').length, P.state.products.filter(p => p.variants.length).length, 'one stock line per product');
+  const revenue = rows.reduce((a, r) => a + Number(r[col('revenue')]), 0);
+  const cost = rows.reduce((a, r) => a + Number(r[col('cost_price')]) * Number(r[col('units_sold')]), 0);
+  ok(Math.abs(revenue * 100 - rep.exVat) <= rows.length, `revenue = net takings excl. VAT (${(revenue * 100).toFixed(0)} vs ${rep.exVat})`);
+  ok(Math.abs(cost * 100 - rep.cost) <= rows.length, `cost of goods matches (${(cost * 100).toFixed(0)} vs ${rep.cost})`);
+  ok(Math.abs((revenue - cost) * 100 - rep.profit) <= rows.length * 2, `profit = Gross profit (${((revenue - cost) * 100).toFixed(0)} vs ${rep.profit})`);
+  // The button on the Reports screen downloads it
+  let name = '', text = '';
+  const orig = w.downloadFile; w.downloadFile = (n, t) => { name = n; text = t; };
+  P.ui.reportRange = '30'; await nav('reports');
+  click('[data-action="profit-export"]'); await tick();
+  w.downloadFile = orig;
+  ok(/^rails-pos-profit-checker-\d{4}-\d\d-\d\d-to-\d{4}-\d\d-\d\d\.csv$/.test(name) && text.includes(',stock,'), `button downloads ${name}`);
+});
+
 test('Accessibility: focus is kept in dialogs; nav has aria-current; colours have enough contrast', async () => {
   await nav('sell');
   ok($('[data-view="sell"]').getAttribute('aria-current') === 'page', 'aria-current');

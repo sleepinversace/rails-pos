@@ -17,6 +17,15 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v39 — 2026-11-23 · Export for Rails Profit checker
+
+- ✨ **Reports → Export for Profit checker** downloads the chosen period as one CSV file for **Rails Profit checker** (the separate profit app): every item sold, every refund (as negative lines), each product's cost price, and one stock line per product with the stock on hand now. Open the file in Rails Profit checker and it gives per-product profit, returns, slow stock, run-out dates and the best weekday, with no column matching.
+- Sizes and colours of a product are added together, so the answers are per product.
+- Revenue is excluding VAT and after sale discounts, and the cost is the product's average over what sold, so Rails Profit checker's profit equals this app's **Gross profit** for the same period.
+- No SQL changes.
+
+---
+
 ## v38 — 2026-11-22 · "Devices online" in the header; closed devices drop off at once 🗄️
 
 - ✨ On tablets and computers, the header shows **Devices online 2** (the live number of the shop's devices with Rails POS open) next to the sync status. Tap it to open the device list in Settings. Hidden on phones to keep the header tidy, and when cloud sync is off.

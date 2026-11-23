@@ -1448,6 +1448,79 @@ function bestSellersCsv() {
   toast(`Downloaded ${bs.rows.length} line${bs.rows.length === 1 ? '' : 's'}`);
 }
 
+/* ----- Export for Rails Profit checker -----
+   One CSV for the report period that Rails Profit checker reads with no setup
+   (its column names match that app's defaults):
+   - "sale" lines: every item sold, one line per item
+   - "refund" lines: every item refunded, with NEGATIVE units and revenue (refunds go back in stock)
+   - "stock" lines: one per product on the period's last day, units 0, with stock on hand
+     (so slow stock and run-out dates work, also for products that didn't sell)
+   One code per PRODUCT (sizes and colours together), so the checker answers per product.
+   revenue = the line's share of the sale total EXCLUDING VAT, after any sale discount;
+   cost_price = the product's average cost per unit over the units sold (net of refunds) in the
+   period, the same on every line of that product. Together these make the checker's profit
+   match this app's "Gross profit", even when sizes have different cost prices. */
+function profitCheckerCsv(range) {
+  const { from, to } = range;
+  const inRange = iso => { const d = new Date(iso); return d >= from && d < to; };
+  const r2 = cents => Math.round(cents) / 100;              // cents → rand as a NUMBER (so negatives aren't treated as text)
+  const r4 = cents => Math.round(cents * 100) / 10000;      // cost per unit, kept to 4 decimals so totals add up exactly
+  const prod = it => findProduct(it.productId);
+  const code = (p, it) => (p ? `P-${p.id}` : `X-${it.sku || it.name}`);
+  const head = ['date', 'time', 'doc_no', 'line_type', 'channel', 'sku', 'product_name', 'category', 'size', 'colour',
+    'units_sold', 'selling_price', 'revenue', 'cost_price', 'stock_on_hand', 'payment'];
+  const rows = [];
+  const costs = new Map();   // code → { cost, units } over the period (sales minus refunds), for the average cost
+  const lineRow = (type, iso, doc, p, it, units, revenueCents, payment) => {
+    const c = costs.get(code(p, it)) || { cost: 0, units: 0, gross: 0, grossUnits: 0 };
+    c.cost += it.unitCost * units; c.units += units;
+    if (units > 0) { c.gross += it.unitCost * units; c.grossUnits += units; }
+    costs.set(code(p, it), c);
+    return [toDateInput(new Date(iso)), fmtTime(iso), doc, type, 'Shop', code(p, it), p?.name || it.name, p?.category || 'Other',
+      it.size || '', it.colour || '', units, r2(it.unitPrice), r2(revenueCents), null, '', PAY_LABEL[payment] || payment || ''];
+  };
+  for (const s of state.sales) {
+    if (!inRange(s.date)) continue;
+    const lines = sum(s.items, it => it.unitPrice * it.qty);
+    const exVat = lines > 0 ? (s.total - s.vat) / lines : 0;   // discount and VAT spread over the lines
+    for (const it of s.items) rows.push(lineRow('sale', s.date, saleNo(s), prod(it), it, it.qty, it.unitPrice * it.qty * exVat, s.payment));
+  }
+  for (const { sale, ret } of allReturns()) {
+    if (!inRange(ret.date)) continue;
+    const exVat = ret.amount > 0 ? (ret.amount - ret.vat) / ret.amount : 0;
+    for (const ri of ret.items) {
+      const it = sale.items[ri.idx];
+      rows.push(lineRow('refund', ret.date, retNo(ret), prod(it), it, -ri.qty, -ri.amount * exVat, ret.method));
+    }
+  }
+  const last = toDateInput(addDays(to, -1));
+  for (const p of state.products) {
+    const v = p.variants || [];
+    if (!v.length) continue;
+    const onHand = sum(v, x => Math.max(0, Number(x.stock) || 0));
+    if (!costs.has(`P-${p.id}`)) {
+      // Not sold in the period: average cost of the sizes in stock (the first size if none are)
+      const avg = onHand ? sum(v, x => costOf(p, x) * Math.max(0, Number(x.stock) || 0)) / onHand : costOf(p, v[0]);
+      costs.set(`P-${p.id}`, { cost: avg, units: 1 });
+    }
+    rows.push([last, '', '', 'stock', 'Shop', `P-${p.id}`, p.name, p.category || 'Other', '', '', 0, r2(priceOf(p, v[0])), 0, null, onHand, '']);
+  }
+  // Fill in each product's average cost (net units; all units sold if everything came back)
+  for (const row of rows) {
+    const c = costs.get(row[5]);
+    row[13] = r4(c.units > 0 ? c.cost / c.units : c.grossUnits ? c.gross / c.grossUnits : 0);
+  }
+  rows.sort((a, b) => (a[0] + a[1]).localeCompare(b[0] + b[1]));
+  return { csv: toCsv(head, rows), sold: rows.filter(r => r[3] === 'sale').length, refunds: rows.filter(r => r[3] === 'refund').length };
+}
+
+function profitCheckerExport() {
+  const range = reportRange();
+  const out = profitCheckerCsv(range);
+  downloadFile(`rails-pos-profit-checker-${toDateInput(range.from)}-to-${toDateInput(addDays(range.to, -1))}.csv`, out.csv, 'text/csv');
+  toast(`Downloaded ${range.label}: ${out.sold} item line${out.sold === 1 ? '' : 's'}${out.refunds ? `, ${out.refunds} refund${out.refunds === 1 ? '' : 's'}` : ''}. Open it in Rails Profit checker.`);
+}
+
 /** Money movements for a shift (from the last cash-up until now) on THIS till.
     With cloud sync, other devices' sales are in the data too, but each till
     counts only its own cash drawer. */
@@ -6895,6 +6968,7 @@ const actions = {
   'bs-by': el => { ui.bs.by = el.dataset.v; renderBestSellers(); },
   'bs-print': () => printA4('best'),
   'bs-csv': () => bestSellersCsv(),
+  'profit-export': () => profitCheckerExport(),
   'restore-paste': () => restoreFromText($('#restoreText').value),
   'export-csv': () => exportCsv(),
   'start-fresh': () => startFresh(),
@@ -6963,7 +7037,7 @@ const ACTION_PERMS = {
   'toggle-low': '', 'add-product': 'products', 'np-all': 'products', 'np-save': 'products', 'edit-product': 'products', 'ep-save': 'products',
   'add-variant': 'products', 'edit-variant': 'products', 'variant-save': 'products', 'delete-variant': 'products', 'delete-product': 'products', 'photo-remove': 'products',
   'stock-d': 'stock', receive: 'stock', 'receive-save': 'stock', history: 'stock',
-  range: 'reports', 'r-jump': 'reports', 'bs-open': 'reports', 'bs-sort': 'reports', 'bs-by': 'reports', 'bs-print': 'reports', 'bs-csv': 'reports', cashup: 'cashup', 'cashup-save': 'cashup', petty: 'petty', 'petty-type': 'petty', 'petty-cat': 'petty', 'petty-save': 'petty', 'petty-del': 'petty', 'owner-summary': 'reports', 'print-menu': 'reports', 'print-a4': 'reports',
+  range: 'reports', 'r-jump': 'reports', 'bs-open': 'reports', 'bs-sort': 'reports', 'bs-by': 'reports', 'bs-print': 'reports', 'bs-csv': 'reports', 'profit-export': 'reports', cashup: 'cashup', 'cashup-save': 'cashup', petty: 'petty', 'petty-type': 'petty', 'petty-cat': 'petty', 'petty-save': 'petty', 'petty-del': 'petty', 'owner-summary': 'reports', 'print-menu': 'reports', 'print-a4': 'reports',
   'backup-download': 'settings', 'backup-copy': 'settings', 'backup-share': 'settings', 'restore-paste': 'settings', 'email-data': 'settings', 'share-pending': 'settings',
   'export-csv': 'settings', 'start-fresh': 'settings', 'load-demo': 'settings',
   'user-add': 'admin', 'user-edit': 'admin', 'user-save': 'admin', 'user-delete': 'admin',

@@ -96,6 +96,7 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - Tick or untick each permission: discounts, refunds and exchanges (incl. cancelling lay-bys), sales history, clients and lay-bys, stock counts and deliveries, products and prices, cash-up, petty cash, reports, activity log, settings and backups, admin. Selling is always allowed.
   - **Blind cash-up:** someone with Cash-up but not Reports counts the drawer without seeing the expected cash or over / short.
   - **Best sellers** report (Reports → Top sellers → See all, A4, Excel): ranked by items sold, value or profit, by product or size & colour.
+  - **Export for Profit checker** (Reports, v39): one CSV per period for the Rails Profit checker app. It holds sale lines, refunds as negative lines, cost price, and a stock line per product. Revenue is excl. VAT after discounts, so its profit equals Gross profit here.
   - Screens and buttons a user may not use are hidden, and every action is checked again when tapped. A cashier's cart ignores any discount.
   - You can't delete yourself, and there is always at least one user with Admin access.
   - This keeps staff and customers out of the till. It is not copy protection: a licence check needs a server (see *What to build next*).
