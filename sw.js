@@ -13,7 +13,7 @@
    the outbox when the connection comes back.
    ========================================================================= */
 
-const CACHE_VERSION = 'rails-pos-v39';
+const CACHE_VERSION = 'rails-pos-v40';
 const APP_SHELL = [
   './',
   './index.html',
@@ -29,6 +29,7 @@ const APP_SHELL = [
   './profit/app.js',
   './profit/calculations.js',
   './profit/importers.js',
+  './profit/till-insights.js',
   './profit/icons/icon.svg',
 ];
 

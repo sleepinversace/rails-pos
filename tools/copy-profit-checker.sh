@@ -7,7 +7,7 @@
 set -e
 SRC="${1:-../Rails - Charts}"
 mkdir -p profit/icons
-cp "$SRC/app.js" "$SRC/calculations.js" "$SRC/importers.js" "$SRC/styles.css" profit/
+cp "$SRC/app.js" "$SRC/calculations.js" "$SRC/importers.js" "$SRC/till-insights.js" "$SRC/styles.css" profit/
 cp "$SRC/icons/icon.svg" profit/icons/
 # index.html: no install/offline files of its own (the till's service worker keeps it
 # offline), no sample data, and it only opens from inside Rails POS (PC_REQUIRE_HOST).

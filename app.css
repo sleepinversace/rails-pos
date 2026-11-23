@@ -1019,3 +1019,4 @@ input:disabled { opacity: .5; }
 .profit-bar .profit-state { font-size: 12px; color: var(--muted); }
 .profit-frame { flex: 1; width: 100%; border: 0; background: var(--bg); }
 @media print { .profit-view { display: none !important; } }
+.seg.ret-reason { flex-wrap: wrap; }

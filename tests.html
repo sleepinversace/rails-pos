@@ -244,9 +244,11 @@ test('Partial return: 1 of 2 items, cash refund, credit note', async () => {
   click('[data-action="open-return"]'); await tick();
   click('[data-action="ret-qty"][data-idx="0"][data-d="1"]'); await tick(30);
   click('[data-action="ret-method"][data-m="cash"]'); await tick(30);
+  click('[data-action="ret-reason"][data-r="size"]'); await tick(30);
+  ok($('[data-action="ret-reason"][data-r="size"]').classList.contains('on'), 'reason chosen');
   click('[data-action="ret-go"][data-mode="refund"]'); await tick(400);
   const r = s1.returns[0];
-  eq([r.number, r.amount, r.vat, r.method, s1.status], [1, 23000, 3000, 'cash', 'partial'], 'return');
+  eq([r.number, r.amount, r.vat, r.method, s1.status, r.reason], [1, 23000, 3000, 'cash', 'partial', 'size'], 'return, with its reason');
   eq(variant(product('Test <b>Tee</b>'), 'M', 'Red').stock, 4, 'stock back');
   ok(receiptText().includes('CREDIT NOTE') && receiptText().includes('CN00001'), 'credit note shown');
   closeModal();
@@ -1070,7 +1072,7 @@ test('Export for Rails Profit checker: one file whose profit matches Gross profi
   const out = w.profitCheckerCsv(range);
   const lines = out.csv.replace(/^﻿/, '').split('\r\n');
   const head = lines[0].split(',');
-  eq(head.join(','), 'date,time,doc_no,line_type,channel,sku,product_name,category,size,colour,units_sold,selling_price,revenue,cost_price,stock_on_hand,payment', 'column names Rails Profit checker knows');
+  eq(head.join(','), 'date,time,doc_no,line_type,channel,sku,product_name,category,size,colour,units_sold,selling_price,revenue,cost_price,stock_on_hand,payment,till_refund_reason', 'column names Rails Profit checker knows');
   // (no commas inside the test shop's names, so a plain split is fine here)
   const rows = lines.slice(1).map(l => l.split(',')), col = n => head.indexOf(n);
   const byType = t => rows.filter(r => r[col('line_type')] === t);
@@ -1092,6 +1094,32 @@ test('Export for Rails Profit checker: one file whose profit matches Gross profi
   click('[data-action="profit-open"]'); await tick(150);
   ok(!$('#modal').hidden && $('#modal').textContent.includes('shop account') && !$('[data-action="profit-trial"]'), 'no shop account: explains, no trial button');
   closeModal(); await tick();
+
+  // A faulty return: the reason is kept and the item is NOT put back in stock
+  const rq = (x, i) => x.returns.reduce((a, r) => a + r.items.filter(z => z.idx === i).reduce((b, z) => b + z.qty, 0), 0);
+  const s = P.state.sales.find(x => x.items.some((it, i) => it.qty - rq(x, i) > 0 && w.findVariant(it.variantId)));
+  const idx = s.items.findIndex((it, i) => it.qty - rq(s, i) > 0 && w.findVariant(it.variantId));
+  const fv = w.findVariant(s.items[idx].variantId).variant, before = fv.stock;
+  await nav('sales');
+  click(`[data-action="open-doc"][data-doc="sale:${s.id}"]`); await tick();
+  click('[data-action="open-return"]'); await tick();
+  click(`[data-action="ret-qty"][data-idx="${idx}"][data-d="1"]`); await tick(30);
+  click('[data-action="ret-reason"][data-r="faulty"]'); await tick(30);
+  ok($('#retBody').textContent.includes('not put back in stock'), 'the dialog says faulty items stay out of stock');
+  click('[data-action="ret-go"][data-mode="refund"]'); await tick(400);
+  closeModal(); await tick();
+  eq([s.returns[s.returns.length - 1].reason, fv.stock], ['faulty', before], 'faulty: reason kept, stock unchanged');
+  // What the till hands the Profit checker on top of the file
+  const all = await w.RailsProfitHost.tillData();
+  ok(all.text.includes(',Faulty or damaged'), 'the till file carries the refund reason');
+  const x = all.extras;
+  ok(x.variants.length === P.state.products.reduce((a, p) => a + p.variants.length, 0), 'one entry per size/colour');
+  ok(x.lines.some(l => l.qty < 0 && l.faulty && l.reason === 'Faulty or damaged') && x.lines.some(l => l.qty < 0 && l.reason === 'Wrong size or fit'), 'refund lines carry their reasons');
+  ok(x.lines.some(l => l.discount > 0), 'discounts are passed on (the 10% card sale)');
+  ok(x.variants.some(v => v.received.length), 'deliveries are passed on for stock age');
+  const disc = x.lines.filter(l => l.sale === P.state.sales.find(z => z.discount).id).reduce((a, l) => a + l.discount, 0);
+  const ds = P.state.sales.find(z => z.discount);
+  ok(Math.abs(disc * 100 - ds.discount * (ds.total - ds.vat) / ds.total) < 2, `discount excl. VAT adds up (${disc})`);
 });
 
 test('Accessibility: focus is kept in dialogs; nav has aria-current; colours have enough contrast', async () => {
@@ -1496,6 +1524,14 @@ test('Cloud sync: two tills share sales, stock and settings; a wiped device gets
   const fd = frame.contentDocument;
   ok(fd.getElementById('data-chip').textContent.startsWith('Till data') && fd.getElementById('use-sample').hidden, 'loaded from the till, no sample data: ' + fd.getElementById('data-chip').textContent);
   ok(fd.documentElement.classList.contains('in-till'), 'runs inside the till');
+  await waitFor(() => !fd.getElementById('till-wrap').hidden, 4000, '"From your till" section');
+  ok(fd.getElementById('findings-till').children.length >= 3 && fd.getElementById('net-card').textContent.includes('Real profit'),
+    '"From your till": ' + [...fd.querySelectorAll('#findings-till .tag')].map(t => t.textContent).join(', '));
+  ok(fd.getElementById('findings-till').textContent.includes('Wrong size or fit'), 'return reasons from the till show up');
+  fd.getElementById('net-fixed').value = '18000';
+  fd.getElementById('net-form').requestSubmit();
+  await waitFor(() => P.state.settings.profitFixedCosts === 18000, 3000, 'running costs saved in Settings');
+  await waitFor(() => fd.getElementById('net-card').textContent.includes('break even') || fd.getElementById('net-card').textContent.includes('in sales a month'), 3000, 'break-even shown');
   ok($('.app-header').inert && $('.app-nav').inert, 'till behind it is inactive');
   ok(!JSON.stringify(frame.contentWindow.localStorage.getItem('pc-data') || '').includes(',stock,'), "till's file isn't stored in the Profit checker");
   // The supplier blocks it: the open Profit checker closes at the next sync

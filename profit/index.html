@@ -110,6 +110,18 @@
         </aside>
       </section>
 
+      <!-- Only inside Rails POS: what only the till knows (till-insights.js) -->
+      <section class="till-section" id="till-wrap" hidden>
+        <div class="section-head">
+          <h2>From your till</h2>
+          <p>Sizes, stock age, missed sales, discounts, returns, staff and clients · same dates as above</p>
+        </div>
+        <div class="till-grid">
+          <ol class="findings" id="findings-till"></ol>
+          <aside class="card net-card" id="net-card"></aside>
+        </div>
+      </section>
+
       <section class="charts-grid">
         <div class="card chart">
           <div class="card-head">
@@ -223,6 +235,7 @@
 
   <script src="calculations.js"></script>
   <script src="importers.js"></script>
+  <script src="till-insights.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

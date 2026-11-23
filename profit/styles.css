@@ -482,3 +482,23 @@ h3 { font-size: 1rem; }
 .in-till .appbar .brand { display: none; }               /* the till's own bar shows the name */
 .in-till .appbar-inner { justify-content: flex-end; }
 .locked-page { padding-top: 48px; max-width: 640px; }
+
+/* ---------- From your till (inside Rails POS) ---------- */
+.till-section { margin-top: 28px; }
+.till-grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 24px; align-items: start; }
+.net-card .net-row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: .95rem; }
+.net-card .net-row.total { border-bottom: 0; font-size: 1.1rem; padding-top: 10px; }
+.net-card .neg { color: var(--bad); }
+.net-card .net-note { color: var(--text-2); font-size: .88rem; margin: 10px 0 0; }
+.net-form { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.net-form label { display: block; font-size: .85rem; font-weight: 600; margin-bottom: 6px; }
+.net-form-row { display: flex; gap: 8px; }
+.net-form input { flex: 1; min-width: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; }
+.size-wrap { overflow-x: auto; }
+.size-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.size-table th, .size-table td { white-space: nowrap; }
+.size-table th { text-align: left; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: 6px; border-bottom: 1px solid var(--border); }
+.size-table td { padding: 6px; border-bottom: 1px solid var(--border); }
+.size-table .r { text-align: right; }
+.size-table .warn-row td { color: var(--warn); font-weight: 600; }
+@media (max-width: 980px) { .till-grid { grid-template-columns: 1fr; } }

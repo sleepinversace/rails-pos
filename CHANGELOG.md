@@ -17,6 +17,24 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v40 — 2026-11-23 · Profit checker reads much more from the till
+
+- ✨ **Profit checker → "From your till"**, a new section that follows the chosen dates:
+  - **Sizes:** sizes that sell but are sold out (reorder these), and sizes that sit while the others sell. Each product's panel has a **Size by size** table: sold, returned, in stock, days sold out, and how old the stock is.
+  - **Stock age:** how much stock (at cost) has been on the rail for over 90 days. It's worked out from the deliveries recorded in the till, oldest sold first.
+  - **Missed sales:** an estimate of the sales lost while sizes were sold out (selling speed while in stock × days sold out).
+  - **Discounts:** what they cost, as a share of sales, and per staff member.
+  - **Why things come back:** returns by reason, and faulty items written off at cost.
+  - **Staff and busy hours:** the busiest two hours, plus sales and average sale per staff member.
+  - **Clients:** the share of sales from clients you know by name, how many came back more than once, and the top clients.
+- ✨ **Real profit:** profit on sales, minus petty cash paid out, minus the shop's **monthly running costs** (rent, wages…), plus the sales needed each month to break even. The owner enters the running costs once in the Profit checker. They're saved in Settings, so every device has them.
+- ✨ **Return reasons:** refunds and exchanges have an optional **Why is it coming back?** choice: Wrong size or fit, Changed mind, Faulty or damaged, or Other. **Faulty items are not put back in stock.** The reason appears in the activity log and goes to the Profit checker.
+- 🔧 The till file the Profit checker reads has a `till_refund_reason` column. Faulty refunds count as returns that can't be resold.
+- 🔧 `tools/serve.ps1 -Root "../Rails - Charts"` serves the Profit checker folder for its own tests (130 checks).
+- No SQL changes.
+
+---
+
 ## v39 — 2026-11-23 · Profit checker add-on (paid extra, 14-day free trial) 🗄️
 
 - ✨ **Reports → Profit checker** opens **Rails Profit checker** full screen inside the till, with the shop's own sales, refunds, cost prices and stock already loaded. There's nothing to export or upload. It shows profit per product, which products lose money and their break-even price, slow stock and the cash tied up in it, run-out dates, returns, the best day to promote, a price slider, a weekly WhatsApp summary and a printable report. Shops that also sell online can add their Takealot, Amazon, Excel or PDF files with **Add files**. Those files stay on the device; the till's own data is read fresh every time and never stored there.

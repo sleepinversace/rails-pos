@@ -41,6 +41,7 @@
   let channel = store.get('pc-channel', 'all');
   let sort = store.get('pc-sort', { key: 'netSales', dir: -1 });
   let lastRes = null;
+  let tillExtras = null;   // inside Rails POS: what only the till knows (till-insights.js)
 
   /** Your saved column matches apply to your own files; the sample data always uses the defaults. */
   function useColumns(sample) {
@@ -257,8 +258,10 @@
 
   /* =================== Main render =================== */
 
-  const ICON = { losers: '📉', returns: '↩️', fees: '💸', stock: '📦', weekday: '📅', event: '🛍️', slow: '🐢', ads: '📣' };
-  const TAG = { losers: 'Profit', returns: 'Returns', fees: 'Fees', stock: 'Stock', weekday: 'Promotions', event: 'Sales event', slow: 'Slow stock', ads: 'Ads' };
+  const ICON = { losers: '📉', returns: '↩️', fees: '💸', stock: '📦', weekday: '📅', event: '🛍️', slow: '🐢', ads: '📣',
+    sizes: '👕', age: '⏳', missed: '🚫', discounts: '🏷️', reasons: '🔁', team: '🕑', clients: '⭐' };
+  const TAG = { losers: 'Profit', returns: 'Returns', fees: 'Fees', stock: 'Stock', weekday: 'Promotions', event: 'Sales event', slow: 'Slow stock', ads: 'Ads',
+    sizes: 'Sizes', age: 'Stock age', missed: 'Missed sales', discounts: 'Discounts', reasons: 'Why things come back', team: 'Staff & busy hours', clients: 'Clients' };
   const TONE = { bad: 'Needs attention', warn: 'Watch', good: 'Good', info: 'Info' };
 
   function findingHTML(f) {
@@ -271,6 +274,54 @@
       ${f.action ? `<p class="action"><b>What to do:</b> ${esc(f.action)}</p>` : ''}
     </li>`;
   }
+
+  /* =================== From your till (inside Rails POS only) =================== */
+  const tillChannelOk = () => channel === 'all' || channel === 'Shop';
+
+  function renderTill(res) {
+    const wrap = $('till-wrap');
+    if (!wrap) return;
+    const t = tillExtras && window.PCTill && tillChannelOk()
+      ? PCTill.build(tillExtras, res.period, { grossProfit: res.totals.profit, netSales: res.totals.netSales, margin: res.totals.margin, fixedCosts: HOST && HOST.fixedCosts ? HOST.fixedCosts() : null })
+      : null;
+    wrap.hidden = !t;
+    if (!t) return;
+    $('findings-till').innerHTML = t.findings.map(findingHTML).join('');
+    $('net-card').innerHTML = netCardHTML(t.net, res.period);
+  }
+
+  function netCardHTML(n, p) {
+    const canEdit = !!(HOST && HOST.canSetFixedCosts && HOST.canSetFixedCosts());
+    const row = (label, v, cls = '') => `<div class="net-row ${cls}"><span>${label}</span><b class="${v < 0 ? 'neg' : ''}">${R(v)}</b></div>`;
+    return `<div class="card-head"><h3>Real profit</h3><p>${esc(p.range)} · after petty cash and running costs</p></div>
+      ${row('Profit on sales', n.gross)}
+      ${row(`Petty cash paid out`, -n.petty)}
+      ${n.monthly != null ? row(`Running costs (${R(n.monthly)} a month × ${p.days} days)`, -n.fixed) : ''}
+      ${row('Real profit', n.net, 'total')}
+      ${n.pettyByCat.length ? `<p class="net-note">Petty cash: ${n.pettyByCat.slice(0, 4).map(([c, v]) => `${esc(c)} ${R(v)}`).join(' · ')}</p>` : ''}
+      ${n.monthly == null
+        ? `<p class="net-note">Add your monthly running costs (rent, wages, electricity, Rails POS…) to see your real profit and the sales you need to break even.</p>`
+        : n.breakEven != null
+          ? `<p class="net-note">To cover your running costs you need about <b>${R(n.breakEven)}</b> in sales a month (excl. VAT) at your ${PC.pct(n.margin)} margin. You're on track for <b>${R(n.salesPerMonth)}</b>${n.salesPerMonth >= n.breakEven ? ' ✅' : ' ⚠️'}.</p>`
+          : ''}
+      ${canEdit ? `<form class="net-form" id="net-form">
+          <label for="net-fixed">Monthly running costs (R)</label>
+          <div class="net-form-row"><input id="net-fixed" inputmode="numeric" placeholder="e.g. 18000" value="${n.monthly != null ? n.monthly : ''}">
+          <button class="btn btn-sm" type="submit">Save</button></div>
+          <p class="net-note">Saved in Rails POS Settings, for all your devices.</p>
+        </form>` : (n.monthly == null ? '<p class="net-note">The owner can add them here.</p>' : '')}`;
+  }
+
+  document.addEventListener('submit', async e => {
+    if (e.target.id !== 'net-form') return;
+    e.preventDefault();
+    const txt = $('net-fixed').value.replace(/[R\s,]/gi, '');
+    const n = txt === '' ? null : Number(txt);
+    if (n !== null && !(Number.isFinite(n) && n >= 0)) return toast('Enter the amount in rand, e.g. 18000');
+    try { await HOST.setFixedCosts(n); } catch (err) { return toast('Couldn\'t save it'); }
+    toast(n === null ? 'Running costs cleared' : `Saved: ${R(n)} a month`);
+    if (lastRes) renderTill(lastRes);
+  });
 
   function render() {
     const res = PC.buildFindings(data, opts());
@@ -295,6 +346,7 @@
     const extras = res.findings.filter(f => f.extra);
     $('findings-extra').innerHTML = extras.map(findingHTML).join('');
     $('extra-wrap').hidden = !extras.length;
+    renderTill(res);
 
     const wa = PC.buildWhatsAppText(data);
     $('wa-preview').textContent = wa;
@@ -494,6 +546,20 @@
       </div>`;
     } else {
       html += `<div class="card"><p>No sales of this product in this period${channel !== 'all' ? ' on ' + esc(channel) : ''}.</p></div>`;
+    }
+
+    // Size by size (inside Rails POS only)
+    const sz = tillExtras && window.PCTill && tillChannelOk() ? PCTill.sizesFor(tillExtras, d.period, sku) : [];
+    if (sz.length > 1 || (sz.length === 1 && (sz[0].size || sz[0].colour))) {
+      // Only the columns that say something for this product
+      const cols = [['Sold', v => v.sold, true], ['Back', v => v.back || '', sz.some(v => v.back)], ['In stock', v => v.stock, true],
+        ['Sold out', v => (v.outDays ? `${v.outDays} d` : ''), sz.some(v => v.outDays)], ['Oldest', v => (v.age ? `${v.age.oldest} d` : ''), sz.some(v => v.age)]]
+        .filter(c => c[2]);
+      html += `<div class="card"><div class="card-head"><h3>Size by size</h3><p>Sold in this period, and what's on the rail now${cols.some(c => c[0] === 'Oldest') ? ' (oldest = days since its oldest delivery still on the rail)' : ''}</p></div>
+        <div class="size-wrap"><table class="size-table"><thead><tr><th>Size / colour</th>${cols.map(c => `<th class="r">${c[0]}</th>`).join('')}</tr></thead><tbody>
+        ${sz.map(v => `<tr class="${v.stock === 0 && v.sold ? 'warn-row' : ''}"><td>${esc([v.size, v.colour].filter(Boolean).join(' / ') || 'One size')}</td>
+          ${cols.map(c => `<td class="r">${c[1](v)}</td>`).join('')}</tr>`).join('')}
+        </tbody></table></div></div>`;
     }
 
     // Trend
@@ -760,12 +826,14 @@
   // v2 keeps every file ("sources"); the older format kept one file per kind ("files")
   let savedSources = saved && (saved.sources
     || Object.entries(saved.files || {}).map(([type, text]) => ({ id: newId(), type, name: `${FILE_LABELS[type] || type} file`, text, addedAt: saved.savedAt })));
+  (async () => {
   if (HOST) {
     // Inside Rails POS: no sample data; the till's file first, then any files uploaded here before
     $('use-sample').hidden = true;
     const kept = saved && !saved.sample ? (savedSources || []).filter(s => s.id !== TILL_ID) : [];
     let till = null;
-    try { till = HOST.tillCsv(); } catch (e) { till = null; }
+    try { till = HOST.tillData ? await HOST.tillData() : HOST.tillCsv(); } catch (e) { till = null; }
+    tillExtras = till && till.extras ? till.extras : null;
     const tillType = till && till.text ? PC.detectFileType(PC.parseCSV(till.text).headers) : null;
     savedSources = (tillType ? [{ id: TILL_ID, type: tillType, name: till.name, text: till.text, addedAt: new Date().toISOString() }] : []).concat(kept);
     if (!tillType) showFileStatus(['No till sales yet. Make a few sales in Rails POS, or add files here.']);
@@ -788,4 +856,5 @@
   try {
     if (sessionStorage.getItem('pc-was-reset')) { sessionStorage.removeItem('pc-was-reset'); toast('Everything was reset. Rails Profit checker is back to its defaults.', 4000); }
   } catch (e) {}
+  })();
 })();

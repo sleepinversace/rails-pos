@@ -890,6 +890,11 @@ function renderReturn() {
       </div>`;
     }).join('')}
     <div class="row gap-s" style="margin:12px 0"><button class="btn sm" data-action="ret-all">Select everything</button></div>
+    <div class="small-label">Why is it coming back? <span class="muted">(optional)</span></div>
+    <div class="seg ret-reason" role="group" aria-label="Return reason" style="margin:4px 0 4px">
+      ${Object.entries(RETURN_REASONS).map(([k, label]) => `<button data-action="ret-reason" data-r="${k}" class="${ui.ret.reason === k ? 'on' : ''}" aria-pressed="${ui.ret.reason === k}">${esc(label)}</button>`).join('')}
+    </div>
+    <p class="small muted" style="margin:0 0 12px">${ui.ret.reason === 'faulty' ? '<strong>Faulty items are not put back in stock.</strong>' : 'Items are put back in stock.'}</p>
     <div class="small-label">Refund money by</div>
     <div class="seg" role="group" aria-label="Refund method" style="margin:4px 0 12px">
       ${['cash', 'card', 'eft'].map(m => `<button data-action="ret-method" data-m="${m}" class="${ui.ret.method === m ? 'on' : ''}" aria-pressed="${ui.ret.method === m}">${PAY_LABEL[m]}</button>`).join('')}
@@ -902,6 +907,9 @@ function renderReturn() {
     <button class="btn primary" data-action="ret-go" data-mode="refund" ${none ? 'disabled' : ''}>Refund ${money(pv.amount)}</button>`;
 }
 
+/** Why an item came back (v40, optional). Faulty items aren't put back in stock. */
+const RETURN_REASONS = { size: 'Wrong size or fit', mind: 'Changed mind', faulty: 'Faulty or damaged', other: 'Other' };
+
 async function processReturn(asExchange) {
   const sale = state.sales.find(s => s.id === ui.ret?.saleId);
   if (!sale) return;
@@ -911,12 +919,15 @@ async function processReturn(asExchange) {
   const ret = {
     id: uid('r'), number: state.meta.nextCreditNo, date: new Date().toISOString(),
     method: asExchange ? 'credit' : ui.ret.method, ...pv,
+    ...(ui.ret.reason ? { reason: ui.ret.reason } : {}),   // v40: why it came back (Profit checker reads it)
     cashier: ui.user?.name || '', ...deviceStamp(),
   };
+  const faulty = ret.reason === 'faulty';                    // faulty items stay out of stock
   const ops = [];
   const restocked = [];
   const missing = [];
   for (const ri of ret.items) {
+    if (faulty) break;
     const it = sale.items[ri.idx];
     const f = findVariant(it.variantId);
     if (!f) { missing.push(it.name); continue; }
@@ -929,7 +940,7 @@ async function processReturn(asExchange) {
   sale.status = saleStatus(sale);
   state.meta.nextCreditNo += 1;
   ops.push(opPut('sales', sale), opKv('meta', state.meta));
-  ops.push(logOp(asExchange ? 'exchange' : 'refund', `${asExchange ? 'Exchange credit' : `Refund (${PAY_LABEL[ret.method]})`} ${money(ret.amount)} on sale #${saleNo(sale)} of ${fmtDate(sale.date)}${outsideReturnPeriod(sale) ? ` — OUTSIDE the ${state.settings.returnDays}-day return period` : ''}`, { amount: -ret.amount, ref: `ret:${sale.id}:${ret.id}` }));
+  ops.push(logOp(asExchange ? 'exchange' : 'refund', `${asExchange ? 'Exchange credit' : `Refund (${PAY_LABEL[ret.method]})`} ${money(ret.amount)} on sale #${saleNo(sale)} of ${fmtDate(sale.date)}${outsideReturnPeriod(sale) ? ` — OUTSIDE the ${state.settings.returnDays}-day return period` : ''}${ret.reason ? ` · ${RETURN_REASONS[ret.reason]}${faulty ? ' (not put back in stock)' : ''}` : ''}`, { amount: -ret.amount, ref: `ret:${sale.id}:${ret.id}` }));
   try {
     await persist(ops);
   } catch {
@@ -1468,7 +1479,7 @@ function profitCheckerCsv(range) {
   const prod = it => findProduct(it.productId);
   const code = (p, it) => (p ? `P-${p.id}` : `X-${it.sku || it.name}`);
   const head = ['date', 'time', 'doc_no', 'line_type', 'channel', 'sku', 'product_name', 'category', 'size', 'colour',
-    'units_sold', 'selling_price', 'revenue', 'cost_price', 'stock_on_hand', 'payment'];
+    'units_sold', 'selling_price', 'revenue', 'cost_price', 'stock_on_hand', 'payment', 'till_refund_reason'];
   const rows = [];
   const costs = new Map();   // code → { cost, units } over the period (sales minus refunds), for the average cost
   const lineRow = (type, iso, doc, p, it, units, revenueCents, payment) => {
@@ -1477,7 +1488,7 @@ function profitCheckerCsv(range) {
     if (units > 0) { c.gross += it.unitCost * units; c.grossUnits += units; }
     costs.set(code(p, it), c);
     return [toDateInput(new Date(iso)), fmtTime(iso), doc, type, 'Shop', code(p, it), p?.name || it.name, p?.category || 'Other',
-      it.size || '', it.colour || '', units, r2(it.unitPrice), r2(revenueCents), null, '', PAY_LABEL[payment] || payment || ''];
+      it.size || '', it.colour || '', units, r2(it.unitPrice), r2(revenueCents), null, '', PAY_LABEL[payment] || payment || '', ''];
   };
   for (const s of state.sales) {
     if (!inRange(s.date)) continue;
@@ -1490,7 +1501,7 @@ function profitCheckerCsv(range) {
     const exVat = ret.amount > 0 ? (ret.amount - ret.vat) / ret.amount : 0;
     for (const ri of ret.items) {
       const it = sale.items[ri.idx];
-      rows.push(lineRow('refund', ret.date, retNo(ret), prod(it), it, -ri.qty, -ri.amount * exVat, ret.method));
+      { const row = lineRow('refund', ret.date, retNo(ret), prod(it), it, -ri.qty, -ri.amount * exVat, ret.method); row[16] = RETURN_REASONS[ret.reason] || ''; rows.push(row); }
     }
   }
   const last = toDateInput(addDays(to, -1));
@@ -1503,7 +1514,7 @@ function profitCheckerCsv(range) {
       const avg = onHand ? sum(v, x => costOf(p, x) * Math.max(0, Number(x.stock) || 0)) / onHand : costOf(p, v[0]);
       costs.set(`P-${p.id}`, { cost: avg, units: 1 });
     }
-    rows.push([last, '', '', 'stock', 'Shop', `P-${p.id}`, p.name, p.category || 'Other', '', '', 0, r2(priceOf(p, v[0])), 0, null, onHand, '']);
+    rows.push([last, '', '', 'stock', 'Shop', `P-${p.id}`, p.name, p.category || 'Other', '', '', 0, r2(priceOf(p, v[0])), 0, null, onHand, '', '']);
   }
   // Fill in each product's average cost (net units; all units sold if everything came back)
   for (const row of rows) {
@@ -4973,7 +4984,82 @@ window.RailsProfitHost = {
     const out = profitCheckerCsv({ from, to });
     return { name: `${state.settings.storeName || 'Rails POS'} till (Rails POS)`, text: out.sold || out.refunds ? out.csv : '' };
   },
+  /** The till file plus what only the till knows (see profitExtras). */
+  async tillData() { return { ...this.tillCsv(), extras: await profitExtras() }; },
+  /** The shop's monthly running costs (rent, wages…), kept in Settings so every device shares them. */
+  fixedCosts: () => (Number.isFinite(state.settings.profitFixedCosts) ? state.settings.profitFixedCosts : null),
+  canSetFixedCosts: () => can('settings'),
+  async setFixedCosts(rand) {
+    if (!can('settings')) return false;
+    const n = rand === null || rand === '' ? NaN : Number(rand);   // empty = clear
+    state.settings.profitFixedCosts = Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+    await persist([opKv('settings', state.settings)]);
+    return true;
+  },
 };
+
+/* What only the till knows, for the Profit checker's "From your till" section (v40).
+   Money is in rand, excluding VAT; dates are ISO.
+   • variants: every size/colour with its stock now, cost, price, the deliveries
+     that came in (receive / new / opening / import movements) and the spells it
+     was sold out (from the stock history's "after" counts)
+   • lines: every item sold (qty > 0) or refunded (qty < 0) with its share of the
+     sale's discount, the cost, who rang it up, the client and the refund reason
+   • expenses: petty cash paid out; clients: names of the clients in the lines */
+async function profitExtras() {
+  const r2 = c => Math.round(c) / 100;
+  const day = iso => (iso ? toDateInput(new Date(iso)) : '');           // the shop's local date
+  const code = it => (it.productId ? `P-${it.productId}` : `X-${it.sku || it.name}`);
+  let moves = [];
+  try { moves = await DB.getAll('movements'); } catch { moves = []; }
+  const byVar = new Map();
+  for (const m of moves) { if (!byVar.has(m.variantId)) byVar.set(m.variantId, []); byVar.get(m.variantId).push(m); }
+  const IN = new Set(['receive', 'new', 'opening', 'import']);
+  const variants = [];
+  for (const p of state.products) {
+    for (const v of p.variants || []) {
+      const ms = (byVar.get(v.id) || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+      const received = ms.filter(m => IN.has(m.reason) && m.change > 0).map(m => ({ date: day(m.date), qty: m.change }));
+      const out = [];
+      let since = null;
+      for (const m of ms) {
+        if (!Number.isFinite(m.after)) continue;
+        if (m.after <= 0 && since === null) since = day(m.date);
+        else if (m.after > 0 && since !== null) { out.push({ from: since, to: day(m.date) }); since = null; }
+      }
+      const stock = Math.max(0, Number(v.stock) || 0);
+      if (since !== null && stock <= 0) out.push({ from: since, to: null });
+      variants.push({ code: `P-${p.id}`, product: p.name, category: p.category || 'Other', size: v.size || '', colour: v.colour || '',
+        stock, cost: r2(costOf(p, v)), price: r2(priceOf(p, v)), received, out });
+    }
+  }
+  const lines = [];
+  for (const s of state.sales) {
+    const gross = sum(s.items, it => it.unitPrice * it.qty);
+    const exVat = gross > 0 ? (s.total - s.vat) / gross : 0;            // discount and VAT spread over the lines
+    const discExVat = s.total > 0 ? (s.discount || 0) * (s.total - s.vat) / s.total : 0;
+    for (const it of s.items) {
+      const g = it.unitPrice * it.qty;
+      lines.push({ date: s.date, code: code(it), product: it.name, size: it.size || '', colour: it.colour || '', qty: it.qty,
+        net: r2(g * exVat), discount: r2(gross > 0 ? discExVat * g / gross : 0), cost: r2(it.unitCost), staff: s.cashier || '',
+        customer: s.customerId || '', sale: s.id });
+    }
+    for (const ret of s.returns || []) {
+      const ex = ret.amount > 0 ? (ret.amount - ret.vat) / ret.amount : 0;
+      for (const ri of ret.items) {
+        const it = s.items[ri.idx];
+        if (!it) continue;
+        lines.push({ date: ret.date, code: code(it), product: it.name, size: it.size || '', colour: it.colour || '', qty: -ri.qty,
+          net: -r2(ri.amount * ex), discount: 0, cost: r2(it.unitCost), staff: ret.cashier || '', customer: s.customerId || '',
+          sale: s.id, reason: RETURN_REASONS[ret.reason] || '', faulty: ret.reason === 'faulty' });
+      }
+    }
+  }
+  const expenses = state.expenses.filter(x => x.type !== 'in').map(x => ({ date: x.date, amount: r2(x.amount), category: x.category || 'Other' }));
+  const ids = new Set(lines.map(l => l.customer).filter(Boolean));
+  const clients = Object.fromEntries(state.customers.filter(c => ids.has(c.id)).map(c => [c.id, c.name]));
+  return { v: 1, today: toDateInput(new Date()), variants, lines, expenses, clients };
+}
 
 function profitShow() {
   let v = $('#profitView');
@@ -7100,6 +7186,7 @@ const actions = {
     renderReturn();
   },
   'ret-method': el => { ui.ret.method = el.dataset.m; renderReturn(); },
+  'ret-reason': el => { ui.ret.reason = ui.ret.reason === el.dataset.r ? '' : el.dataset.r; renderReturn(); },
   'ret-go': el => processReturn(el.dataset.mode === 'exchange'),
   'toggle-low': () => { ui.lowOnly = !ui.lowOnly; renderStock(); },
   'add-product': () => openAddProduct(),
@@ -7219,7 +7306,7 @@ const actions = {
 /* Actions that need a permission. Buttons are hidden too, but this is the real check. */
 const ACTION_PERMS = {
   'import-stock': 'products', 'imp-template': 'products', 'imp-paste': 'products', 'imp-save': 'products',
-  'open-return': 'returns', 'ret-qty': 'returns', 'ret-all': 'returns', 'ret-method': 'returns', 'ret-go': 'returns',
+  'open-return': 'returns', 'ret-qty': 'returns', 'ret-all': 'returns', 'ret-method': 'returns', 'ret-reason': 'returns', 'ret-go': 'returns',
   'toggle-low': '', 'add-product': 'products', 'np-all': 'products', 'np-save': 'products', 'edit-product': 'products', 'ep-save': 'products',
   'add-variant': 'products', 'edit-variant': 'products', 'variant-save': 'products', 'delete-variant': 'products', 'delete-product': 'products', 'photo-remove': 'products',
   'stock-d': 'stock', receive: 'stock', 'receive-save': 'stock', history: 'stock',

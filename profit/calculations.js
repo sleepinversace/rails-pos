@@ -54,6 +54,7 @@ const CONFIG = {
       unitCost: 'cost_price',             // cost per unit → used when there's no products file
       category: 'category',               // product category
       stockNow: 'stock_on_hand',          // current stock → used when there's no stock file (latest line wins)
+      refundReason: 'till_refund_reason', // why a refund line came back (Rails POS); "Faulty…" = not resellable
       // Lines with NEGATIVE units are refunds: they're counted as returns (put back in stock = resellable).
     },
     // One row per return.
@@ -122,7 +123,7 @@ const FIELD_LABELS = {
   reason: 'Return reason', resellable: 'Resellable (Yes/No)', refund: 'Refund amount',
   successFeeReversed: 'Success fee given back', onHand: 'Stock on hand', inbound: 'Stock on the way',
   cost: 'Cost price per unit', category: 'Category', successFeePct: 'Success fee %',
-  spend: 'Ad spend', adSales: 'Sales from ads', unitCost: 'Cost price per unit', stockNow: 'Stock on hand now', variant: 'Size / colour',
+  spend: 'Ad spend', adSales: 'Sales from ads', unitCost: 'Cost price per unit', stockNow: 'Stock on hand now', refundReason: 'Refund reason', variant: 'Size / colour',
 };
 const FILE_TYPES = ['sales', 'returns', 'stock', 'products', 'ads'];
 
@@ -302,7 +303,7 @@ function columnsFor(type, headers, lastResort = true, records = null) {
 // What each field should contain, so a guess can be checked against the actual values
 const NUMBER_FIELDS = new Set(['units', 'price', 'revenue', 'successFee', 'fulfilmentFee', 'unitCost', 'stockNow', 'refund',
   'successFeeReversed', 'onHand', 'inbound', 'cost', 'successFeePct', 'spend', 'adSales']);
-const TEXT_FIELDS = new Set(['name', 'category', 'channel', 'reason']);
+const TEXT_FIELDS = new Set(['name', 'category', 'channel', 'reason', 'refundReason']);
 /**
  * Does column `h` look right for field `f`? Checks up to 200 filled-in values:
  * dates must mostly read as dates, amounts/quantities mostly as numbers, and names
@@ -430,7 +431,9 @@ function buildDataset(rawFiles) {
     if (Number.isFinite(stockNow) && (!latestStock.has(sku) || latestStock.get(sku).date <= date)) latestStock.set(sku, { date, onHand: stockNow });
     if (units < 0) {
       // A refund line: count it as a return (a till puts refunded items back in stock)
-      refundLines.push({ date, sku, channel, units: -units, refund: -revenue, sfBack: Math.max(0, -successFee), resellable: true, reason: 'Refunded at the till' });
+      const why = get(r, C.sales.refundReason) || '';
+      refundLines.push({ date, sku, channel, units: -units, refund: -revenue, sfBack: Math.max(0, -successFee),
+        resellable: !/^faulty/i.test(why), reason: why || 'Refunded at the till' });
       continue;
     }
     sales.push({ date, sku, channel, units, revenue, successFee, fulfilmentFee });

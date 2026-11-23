@@ -1,9 +1,9 @@
 # Tiny static file server for testing Rails POS on Windows without Python/Node.
-# Usage (from the project folder):   pwsh -File tools/serve.ps1 [-Port 8000]
+# Usage (from the project folder):   pwsh -File tools/serve.ps1 [-Port 8000] [-Root "../Rails - Charts"]
 # Then open http://localhost:8000  (service workers need http://localhost or https).
-param([int]$Port = 8000)
+param([int]$Port = 8000, [string]$Root = "")
 
-$root = Split-Path -Parent $PSScriptRoot
+$root = if ($Root) { (Resolve-Path $Root).Path } else { Split-Path -Parent $PSScriptRoot }  # -Root serves another folder (e.g. "../Rails - Charts")
 $types = @{
   '.html' = 'text/html; charset=utf-8'; '.js' = 'text/javascript; charset=utf-8'
   '.css' = 'text/css; charset=utf-8'; '.json' = 'application/json; charset=utf-8'
