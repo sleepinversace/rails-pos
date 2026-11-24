@@ -207,6 +207,7 @@ function showDashboard() {
         <td>${esc(fmtWhen(a.at))}</td><td>${esc(a.shop_name)}</td><td>${esc(a.action)}</td>
         <td>${esc(fmtDay(a.old_until))} → <strong>${esc(a.new_until ? fmtDay(a.new_until) : 'no end date')}</strong></td></tr>`).join('')}</table>`
       : '<p class="small muted">No changes yet.</p>'}</div>
+    ${supportCard()}
     ${invoiceDetailsCard()}`;
 }
 
@@ -223,6 +224,24 @@ function invoiceDetailsCard() {
       <label class="field"><span>Footer line</span><input name="footer" class="input" maxlength="160" value="${esc(d.footer)}"></label>
       <p class="small muted">Saved in this browser only (the code is public, so your bank details are never put in it). Prices: ${randStr(PRICES.monthly)} a month, ${randStr(PRICES.device)} per extra device, setup ${randStr(PRICES.setup)}, Profit checker add-on ${randStr(PRICES.profit)} a month.</p>
       <button class="btn" type="submit">Save my details</button>
+    </form>`;
+}
+
+/* v42: what a paused till shows ("send proof of payment to …"). Saved in the database (support_contact),
+   never in the code, because the code is public. Every shop's till reads it. */
+let support = null;   // { email, message } or null when the v42 SQL hasn't been run yet
+function supportCard() {
+  if (!support) return `<div class="section-title">Message on paused tills</div>
+    <div class="card"><p class="small muted">Run the latest <b>cloud/supabase-setup.sql</b> in Supabase → SQL Editor to set the email paused shops send proof of payment to.</p></div>`;
+  return `<div class="section-title">Message on paused tills</div>
+    <form class="card inv-details" id="supportForm" novalidate>
+      <p class="small muted" style="margin-top:0">When a shop is deactivated, its paid-until date has passed (plus 7 days' grace), or a till has been offline for over 7 days, selling pauses and the till shows a full-screen message: <i>"Please send proof of payment to <b>${esc(support.email || 'your email')}</b> or on WhatsApp 073 314 2884 to have it reactivated."</i> with Email and WhatsApp buttons.</p>
+      <div class="grid-2">
+        <label class="field"><span>Email for proof of payment</span><input name="email" type="email" class="input" maxlength="200" value="${esc(support.email || '')}" placeholder="you@example.com"></label>
+        <label class="field"><span>Extra line (optional)</span><input name="message" class="input" maxlength="300" value="${esc(support.message || '')}" placeholder="e.g. Use your shop name as the reference."></label>
+      </div>
+      <p class="small muted">Saved in the database and shown to every shop's till (within about 10 minutes, or straight away on a paused till). Change it here when you get a business email.</p>
+      <button class="btn" type="submit">Save</button>
     </form>`;
 }
 
@@ -482,6 +501,7 @@ async function savePayment(form) {
 
 async function loadData() {
   [shops, audit] = await Promise.all([rpc('vendor_list_shops'), rpc('vendor_audit_log', { p_limit: 30 })]);
+  try { const s = await rpc('support_contact'); support = { email: s?.email || '', message: s?.message || '' }; } catch { support = null; }
   showDashboard();
 }
 
@@ -549,7 +569,7 @@ async function act(el) {
       return showDashboard();
     }
     if (a === 'deactivate') {
-      const reason = prompt(`Deactivate ${shopName(id)}?\n\nSelling pauses on all their devices (their data is kept, and you can reactivate any time).\n\nReason (optional, they will see it):`, '');
+      const reason = prompt(`Deactivate ${shopName(id)}?\n\nSelling pauses on all their devices (their data is kept, and you can reactivate any time). Their till asks them to send proof of payment${support?.email ? ` to ${support.email}` : ''}.\n\nReason (they will see it; leave empty for none):`, 'Payment not received');
       if (reason === null) return;
       await rpc('vendor_set_active', { p_shop: id, p_active: false, p_reason: reason.trim() });
       await loadData();
@@ -599,6 +619,15 @@ document.addEventListener('submit', async e => {
       const f = new FormData(e.target);
       const d = Object.fromEntries(['name', 'contact', 'bank', 'footer'].map(k => [k, String(f.get(k) || '').trim()]));
       try { localStorage.setItem(INVOICE_KEY, JSON.stringify(d)); toast('Saved in this browser'); } catch { toast('Could not save in this browser', true); }
+    }
+    if (e.target.id === 'supportForm') {
+      const f = new FormData(e.target);
+      const email = String(f.get('email') || '').trim(), message = String(f.get('message') || '').trim();
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast('That email address doesn\'t look right', true);
+      await rpc('vendor_set_setting', { p_key: 'support_email', p_value: email });
+      await rpc('vendor_set_setting', { p_key: 'pause_message', p_value: message });
+      await loadData();
+      toast(email ? `Saved. Paused tills will ask for proof of payment at ${email}` : 'Saved (no email: paused tills show WhatsApp only)');
     }
   } catch (err) {
     if ($('#err')) setErr(err.message); else handleError(err);

@@ -1025,3 +1025,19 @@ input:disabled { opacity: .5; }
 #discountRow .seg.sm button { min-height: 36px; min-width: 42px; }
 #discountRow .input.sm { min-height: 36px; }
 a.link { display: inline-flex; align-items: center; min-height: 36px; }
+
+/* v42: selling paused → full-screen message on Sell (products and cart hidden; the menu still works) */
+.selling-paused #view-sell .sell-products > :not(#pausedScreen) { display: none !important; }
+.selling-paused.on-sell #cartPanel, .selling-paused.on-sell #cartBar { display: none !important; }
+.selling-paused.on-sell #banners .licence-stop { display: none; }
+.paused-screen { display: flex; justify-content: center; padding: 24px 0 40px; }
+.paused-card { max-width: 560px; width: 100%; text-align: center; background: var(--surface); border: 1px solid var(--danger);
+  border-radius: 18px; padding: 28px 22px; box-shadow: var(--shadow); }
+.paused-card .paused-ico { width: 44px; height: 44px; stroke: var(--danger); fill: none; stroke-width: 1.8; margin-bottom: 8px; }
+.paused-card h2 { margin: 0 0 10px; font-size: 1.35rem; }
+.paused-card p { margin: 0 0 16px; line-height: 1.55; }
+.paused-card p b { overflow-wrap: anywhere; }
+.paused-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 16px; }
+.paused-actions .btn { min-height: 44px; }
+@media (min-width: 860px) { body.selling-paused.on-sell .app-main { padding-right: 0; } }
+.paused-actions a.btn, .banner a.btn { text-decoration: none; }

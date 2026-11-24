@@ -2309,6 +2309,14 @@ function priceLabel(p) {
 }
 
 function renderSell() {
+  // v42: selling paused → a full-screen message replaces the products and the cart (the menu still works)
+  const paused = !!ui.user && !sellingAllowed();
+  document.body.classList.toggle('selling-paused', paused);
+  let ps = $('#pausedScreen');
+  if (paused) {
+    if (!ps) { ps = document.createElement('div'); ps.id = 'pausedScreen'; ps.className = 'paused-screen'; $('.sell-products').prepend(ps); }
+    ps.innerHTML = pausedScreenHtml();
+  } else if (ps) ps.remove();
   const pk = (state.meta.parked || []).length;
   const pb = $('#parkedBtn');
   if (pb) { pb.hidden = !pk; pb.textContent = `Parked (${pk})`; }
@@ -4363,6 +4371,24 @@ async function enqueueAll() {
   Cloud.pending = keys.length;
 }
 
+/** v42: the supplier's support email / pause message, and the server's clock (to spot a device date set wrong).
+    Asked every SUPPORT_REFRESH_MS, or at once while selling is paused. Fails quietly until the v42 SQL is run. */
+async function refreshSupport(force = false) {
+  if (!force && Cloud.conf.supportAt && Date.now() - Cloud.conf.supportAt < SUPPORT_REFRESH_MS) return;
+  try {
+    const r = await cloudApi('/rest/v1/rpc/support_contact', { method: 'POST', body: {} });
+    if (!r || typeof r !== 'object') return;
+    const before = JSON.stringify([Cloud.conf.support, sellingAllowed()]);
+    Cloud.conf.support = { email: String(r.email || '').slice(0, 200), message: String(r.message || '').slice(0, 300) };
+    const server = Date.parse(r.now);
+    if (Number.isFinite(server)) Cloud.conf.clockSkewMs = Date.now() - server;
+    Cloud.conf.supportAt = Date.now();
+    if (JSON.stringify([Cloud.conf.support, sellingAllowed()]) !== before) Cloud.licenceChanged = true;
+  } catch (e) {
+    console.warn('Support contact not available yet:', e.message || e);
+  }
+}
+
 /** One sync round: check for a reset, send our changes, fetch everyone else's. */
 async function syncNow() {
   if (!cloudOn() || !ui.appActive) return;
@@ -4382,7 +4408,10 @@ async function syncNow() {
     }
     if (until !== Cloud.conf.activeUntil) { Cloud.conf.activeUntil = until; Cloud.licenceChanged = true; }
     if (applyProfitFields(shop)) Cloud.licenceChanged = true; // Profit checker add-on (v39)
+    const wasPaused = !sellingAllowed();
     Cloud.conf.licenceCheckedAt = new Date().toISOString();
+    if (wasPaused !== !sellingAllowed()) Cloud.licenceChanged = true;  // e.g. back online after the 7-day limit
+    await refreshSupport(wasPaused);
     await flushAllAdjust();
     if (shop.generation !== Cloud.conf.generation) {
       // Another device started fresh or restored a backup: take its data.
@@ -4781,12 +4810,23 @@ function cloudCardHtml() {
      with a warning, then selling is paused: Charge is disabled, everything
      else (reports, backups, settings, renewing) keeps working.
    The date is checked on every sync and remembered, so it works offline.
+   • v42: a connected till that hasn't checked in for OFFLINE_LIMIT_DAYS pauses
+     selling until it connects once ('offline'), so a shop that stops paying
+     can't keep selling by staying offline. A device date that is more than a
+     day off the server's clock, or earlier than its last check, also pauses
+     selling ('clock'), so setting the date back doesn't help either.
+   • Paused selling shows a full-screen message on Sell (pausedScreenHtml) with
+     "send proof of payment" to the support email the supplier typed on the
+     admin page (support_contact(); never in this public code) and WhatsApp.
    PLUG-IN: online payments — link the "Renew" button to a payment page
    (e.g. PayFast / Yoco link) that updates active_until via a webhook.
    ======================================================================== */
 
 const TRIAL_DAYS = 14;
 const GRACE_DAYS = 7;
+const OFFLINE_LIMIT_DAYS = 7;          // owner's choice, 24 Nov 2026
+const CLOCK_SLACK_MS = DAY_MS;         // a device clock may be up to a day off before it counts as wrong
+const SUPPORT_REFRESH_MS = 10 * 60 * 1000;
 const SUPPLIER = { name: 'Rails POS', whatsapp: '27733142884', phone: '073 314 2884' }; // supplier's WhatsApp Business (international format) for "Renew"
 
 function licence() {
@@ -4795,6 +4835,14 @@ function licence() {
   if (cloudOn()) {
     // Deactivated by the supplier: overrides everything (data stays; selling pauses)
     if (Cloud.conf.deactivated) return { state: 'deactivated', text: `Account deactivated by ${SUPPLIER.name}${Cloud.conf.deactivatedReason ? ` (${Cloud.conf.deactivatedReason})` : ''}` };
+    // Date set wrong: more than a day off the server's clock at the last check, or earlier than the last check
+    if (Math.abs(Cloud.conf.clockSkewMs || 0) > CLOCK_SLACK_MS) return { state: 'clock', text: "This device's date and time are wrong" };
+    const checked = Cloud.conf.licenceCheckedAt || Cloud.conf.lastSyncAt;
+    if (checked) {
+      const since = Date.now() - new Date(checked).getTime();
+      if (since < -CLOCK_SLACK_MS) return { state: 'clock', text: "This device's date is earlier than its last check" };
+      if (since > OFFLINE_LIMIT_DAYS * DAY_MS) return { state: 'offline', text: `Not online for ${Math.floor(since / DAY_MS)} days` };
+    }
     const until = Cloud.conf.activeUntil;
     if (until == null) return { state: 'active', text: 'Active, no end date' };
     const end = fromDateInput(until);
@@ -4813,7 +4861,53 @@ function licence() {
   if (left > 0) return { state: 'trial', end, left, text: `Free trial: ${left} day${left === 1 ? '' : 's'} left` };
   return { state: 'trial-over', end, text: 'Free trial ended' };
 }
-const sellingAllowed = () => !['expired', 'trial-over', 'deactivated'].includes(licence().state);
+const PAUSED_STATES = ['expired', 'trial-over', 'deactivated', 'offline', 'clock'];
+const sellingAllowed = () => !PAUSED_STATES.includes(licence().state);
+
+/** What to tell a shop whose selling is paused, and the buttons to fix it (v42). size: 'sm' for the banner, '' for the full screen. */
+function pauseInfo(l = licence(), size = 'sm') {
+  const shop = state.settings.storeName || 'my shop';
+  const sup = (cloudOn() && Cloud.conf.support) || {};
+  const email = sup.email || '';
+  const b = (cls, inner) => `${inner.replace('class="btn', `class="btn ${size} ${cls}`)}`;
+  const mail = email ? b('primary', `<a class="btn" href="mailto:${esc(encodeURIComponent(email))}?subject=${esc(encodeURIComponent(`Proof of payment: Rails POS for ${shop}`))}&body=${esc(encodeURIComponent(`Hi,\n\nPlease find attached proof of payment for Rails POS for ${shop}.\n\nThank you`))}">Email proof of payment</a>`) : '';
+  const wa = SUPPLIER.whatsapp ? b(email ? '' : 'primary', `<a class="btn" href="https://wa.me/${esc(SUPPLIER.whatsapp)}?text=${esc(encodeURIComponent(`Hi, here is proof of payment for Rails POS for ${shop}.`))}" target="_blank" rel="noopener">WhatsApp ${esc(SUPPLIER.phone)}</a>`) : '';
+  const check = cloudOn() ? b('', '<button class="btn" data-action="cloud-sync">Check again</button>') : '';
+  const connect = !cloudOn() && cloudReady() && can('settings') ? b('primary', '<button class="btn" data-action="go-settings">Connect shop account</button>') : '';
+  const proof = email
+    ? `Please send proof of payment to <b>${esc(email)}</b> or on WhatsApp ${esc(SUPPLIER.phone)} to have it reactivated.`
+    : `Please send proof of payment on WhatsApp ${esc(SUPPLIER.phone)} to have it reactivated.`;
+  const note = sup.message ? ` ${esc(sup.message)}` : '';
+  const reason = Cloud.conf?.deactivatedReason;
+  switch (l.state) {
+    case 'deactivated': return { title: 'Your Rails POS account is paused.',
+      text: `This shop's account has been deactivated by ${esc(SUPPLIER.name)}${reason ? ` (${esc(reason)})` : ''}. ${proof}${note}`, buttons: mail + wa + check };
+    case 'expired': return { title: 'Your Rails POS subscription has ended.',
+      text: `It ended on ${esc(fmtLong(l.end))}. ${proof}${note}`, buttons: mail + wa + check };
+    case 'offline': return { title: 'Connect to the internet to carry on selling.',
+      text: `This till hasn't been online for over ${OFFLINE_LIMIT_DAYS} days, so it needs to check your subscription. Connect to Wi-Fi or mobile data and tap <b>Check again</b>. Selling starts again as soon as it has checked in.`,
+      buttons: check.replace(`class="btn ${size} `, `class="btn ${size} primary `) + wa };
+    case 'clock': return { title: "This device's date and time are wrong.",
+      text: 'Set the date and time to <b>automatic</b> in the device\'s settings, connect to the internet, then tap <b>Check again</b>.',
+      buttons: check.replace(`class="btn ${size} `, `class="btn ${size} primary `) + wa };
+    case 'trial-over': return { title: 'The free trial on this device has ended.',
+      text: 'Connect your shop account (Settings → Cloud sync) to carry on.', buttons: connect + wa };
+    default: return null;
+  }
+}
+
+/** Full-screen message on Sell while selling is paused (v42). The menu still opens Reports, Settings and backups. */
+function pausedScreenHtml() {
+  const p = pauseInfo(licence(), '');
+  if (!p) return '';
+  return `<div class="paused-card" role="alert">
+      <svg class="paused-ico" aria-hidden="true"><use href="#i-lock"/></svg>
+      <h2>${esc(p.title)}</h2>
+      <p>${p.text}</p>
+      <div class="paused-actions">${p.buttons}</div>
+      <p class="small muted">Your data is safe: reports, backups, data export and settings still work. Use the menu to open them.</p>
+    </div>`;
+}
 
 /** Banner shown on every screen when the subscription needs attention. */
 function licenceBanner() {
@@ -4822,13 +4916,9 @@ function licenceBanner() {
     ? `<a class="btn sm primary" href="https://wa.me/${esc(SUPPLIER.whatsapp)}?text=${encodeURIComponent(`Hi, I'd like to renew Rails POS for ${state.settings.storeName}`)}" target="_blank" rel="noopener">Renew on WhatsApp</a>` : '';
   const connect = !cloudOn() && cloudReady() && can('settings') ? '<button class="btn sm primary" data-action="go-settings">Connect shop account</button>' : '';
   const check = cloudOn() ? '<button class="btn sm" data-action="cloud-sync">Check again</button>' : '';
-  if (l.state === 'deactivated') {
-    return `<div class="banner licence-stop"><p><strong>Selling is paused.</strong> This shop's Rails POS account has been deactivated${Cloud.conf.deactivatedReason ? ` (${esc(Cloud.conf.deactivatedReason)})` : ''}. Contact ${esc(SUPPLIER.name)} to reactivate it. Your data is safe: reports, backups and settings still work.</p>${renew.replace('Renew on WhatsApp', 'Contact on WhatsApp')}${check}</div>`;
-  }
-  if (l.state === 'expired' || l.state === 'trial-over') {
-    return `<div class="banner licence-stop"><p><strong>Selling is paused.</strong> ${l.state === 'trial-over'
-      ? 'The free trial on this device has ended. Connect your shop account (Settings → Cloud sync) to carry on.'
-      : `Your Rails POS subscription ended on ${fmtLong(l.end)}. Contact ${esc(SUPPLIER.name)} to renew.`} Your data is safe: reports, backups and settings still work.</p>${connect}${renew}${check}</div>`;
+  if (PAUSED_STATES.includes(l.state)) {
+    const p = pauseInfo(l, 'sm');
+    return `<div class="banner licence-stop"><p><strong>Selling is paused.</strong> ${esc(p.title)} ${p.text} Your data is safe: reports, backups and settings still work.</p>${p.buttons}</div>`;
   }
   if (l.state === 'grace') {
     return `<div class="banner licence-warn"><p><strong>Subscription ended.</strong> ${esc(l.text)}. Contact ${esc(SUPPLIER.name)} to renew.</p>${renew}${check}</div>`;
@@ -4877,7 +4967,7 @@ function applyProfitFields(shop) {
 function profitAccess() {
   if (!cloudOn()) return { ok: false, state: 'no-cloud', text: 'Needs a shop account' };
   const c = Cloud.conf;
-  if (['deactivated', 'expired'].includes(licence().state)) return { ok: false, state: 'pos-off', text: 'Rails POS subscription not active' };
+  if (PAUSED_STATES.includes(licence().state)) return { ok: false, state: 'pos-off', text: 'Rails POS subscription not active' };
   if (c.profitBlocked) return { ok: false, state: 'blocked', text: `Switched off by ${SUPPLIER.name}` };
   const today = startOfDay();
   const daysTo = iso => { const d = fromDateInput(iso); return d ? Math.round((startOfDay(d) - today) / DAY_MS) : -1; };

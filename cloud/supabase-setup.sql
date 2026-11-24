@@ -491,3 +491,55 @@ revoke execute on function public.profit_start_trial(uuid), public.vendor_list_s
   public.vendor_set_profit(uuid, date, boolean, date, boolean, text) from public, anon;
 grant execute on function public.profit_start_trial(uuid), public.vendor_list_shops(),
   public.vendor_set_profit(uuid, date, boolean, date, boolean, text) to authenticated;
+
+-- =========================================================================
+-- v42: SUPPORT CONTACT FOR PAUSED SHOPS
+--   The supplier types a support email (and an optional message) on the admin
+--   page. Paused tills show it ("send proof of payment to …"). It lives here,
+--   not in the app code, because the code is public on GitHub.
+--   Shops can read it (support_contact) but only the supplier can change it.
+-- =========================================================================
+create table if not exists public.vendor_settings (
+  key        text primary key,
+  value      text,
+  updated_at timestamptz not null default now()
+);
+alter table public.vendor_settings enable row level security; -- no policies: only the functions below
+revoke all on public.vendor_settings from anon, authenticated;
+
+create or replace function public.support_contact() returns json
+language sql security definer set search_path = public as $$
+  select json_build_object(
+    'email',   (select value from public.vendor_settings where key = 'support_email'),
+    'message', (select value from public.vendor_settings where key = 'pause_message'),
+    'now',     now());   -- the server's clock: tills compare it with their own (a date set backwards pauses selling)
+$$;
+
+create or replace function public.vendor_set_setting(p_key text, p_value text) returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  perform public.vendor_check();
+  if p_key not in ('support_email', 'pause_message') then raise exception 'Unknown setting'; end if;
+  insert into public.vendor_settings (key, value, updated_at)
+    values (p_key, nullif(left(trim(coalesce(p_value, '')), 300), ''), now())
+    on conflict (key) do update set value = excluded.value, updated_at = now();
+  insert into public.vendor_audit (admin_id, shop_id, action, old_until, new_until)
+    values (auth.uid(), null, left('Setting: ' || p_key, 60), null, null);
+  return true;
+end $$;
+
+revoke execute on function public.support_contact(), public.vendor_set_setting(text, text) from public, anon;
+grant execute on function public.support_contact(), public.vendor_set_setting(text, text) to authenticated;
+
+-- Recent changes: a change that isn't about one shop (e.g. the support email) shows as "(all shops)".
+create or replace function public.vendor_audit_log(p_limit int default 50)
+returns table (at timestamptz, shop_name text, action text, old_until date, new_until date)
+language plpgsql security definer set search_path = public as $$
+begin
+  perform public.vendor_check();
+  return query
+    select a.at, case when a.shop_id is null then '(all shops)' else coalesce(s.name, '(deleted shop)') end,
+           a.action, a.old_until, a.new_until
+    from public.vendor_audit a left join public.shops s on s.id = a.shop_id
+    order by a.at desc limit least(greatest(coalesce(p_limit, 50), 1), 200);
+end $$;

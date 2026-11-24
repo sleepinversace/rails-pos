@@ -1347,6 +1347,12 @@ function fakeCloud() {
         profit_trial_until: s.profit_trial_until ?? null, profit_paid: !!s.profit_paid, profit_until: s.profit_until ?? null, profit_blocked: !!s.profit_blocked })));
       if (fn === 'vendor_audit_log') return json(db.audit.slice().reverse());
       if (fn === 'vendor_shop_payments') return json(pays(body.p_shop).slice().reverse());
+      if (fn === 'vendor_set_setting') {   // v42
+        if (!['support_email', 'pause_message'].includes(body.p_key)) return json({ message: 'Unknown setting' }, 400);
+        db.settings ||= {}; db.settings[body.p_key] = String(body.p_value || '').trim() || null;
+        db.audit.push({ at: new Date().toISOString(), shop_name: '(all shops)', action: 'Setting: ' + body.p_key, old_until: null, new_until: null });
+        return json(true);
+      }
       const shop = db.shops.find(s => s.id === body.p_shop);
       if (!shop) return json({ message: 'Shop not found' }, 400);
       const old = shop.active_until;
@@ -1398,6 +1404,10 @@ function fakeCloud() {
         db.shops.push(s); return json([s], 201);
       }
       return json(mine.filter(s => !param('id') || s.id === param('id')));
+    }
+    if (p === '/rest/v1/rpc/support_contact') {   // v42: any signed-in login; db.serverSkewMs fakes a wrong device clock
+      const st = db.settings || {};
+      return json({ email: st.support_email || null, message: st.pause_message || null, now: new Date(Date.now() - (db.serverSkewMs || 0)).toISOString() });
     }
     const shop = mine.find(s => s.id === (body?.p_shop || param('shop_id') || body?.[0]?.shop_id));
     if (p === '/rest/v1/rpc/claim_device') { shop.next_device++; return json(shop.next_device - 1); }
@@ -1514,8 +1524,37 @@ test('Cloud sync: two tills share sales, stock and settings; a wiped device gets
   shop.deactivated = true; shop.deactivated_reason = 'Unpaid account'; await synced();
   eq([P.licence().state, P.sellingAllowed()], ['deactivated', false], 'deactivated: selling paused');
   ok($('#banners').textContent.includes('deactivated') && $('#banners').textContent.includes('Unpaid account'), 'shop sees why');
+  // v42: full-screen message on Sell asking for proof of payment to the support email the supplier set
+  cloud.settings = { support_email: 'pay@example.test', pause_message: 'Use your shop name as the reference.' };
+  await w.refreshSupport(true); w.renderAll(); await nav('sell');
+  const ps = () => $('#pausedScreen');
+  ok(ps() && ps().textContent.includes('proof of payment to pay@example.test') && ps().textContent.includes('Unpaid account') && ps().textContent.includes('shop name as the reference'),
+    'full-screen pause asks for proof of payment: ' + (ps()?.textContent || '').replace(/\s+/g, ' ').slice(0, 160));
+  ok(ps().querySelector('a[href^="mailto:pay%40example.test"]') && ps().querySelector('a[href^="https://wa.me/"]'), 'Email and WhatsApp buttons');
+  ok(d.body.classList.contains('selling-paused') && getComputedStyle($('#productGrid')).display === 'none' && getComputedStyle($('#cartBar')).display === 'none', 'products and cart are hidden');
   shop.deactivated = false; shop.deactivated_reason = null; await synced();
   eq(P.sellingAllowed(), true, 'reactivated: selling again');
+  ok(!ps() && !d.body.classList.contains('selling-paused'), 'pause screen gone when reactivated');
+  // v42: a till that hasn't been online for over 7 days pauses until it checks in once
+  const realChecked = P.Cloud.conf.licenceCheckedAt;
+  P.Cloud.conf.licenceCheckedAt = new Date(Date.now() - 8 * 864e5).toISOString();
+  eq([P.licence().state, P.sellingAllowed()], ['offline', false], 'offline for 8 days: selling paused');
+  w.renderAll(); await nav('sell');
+  ok(ps() && ps().textContent.includes('Connect to the internet') && ps().querySelector('[data-action="cloud-sync"]'), 'tells them to connect and check again');
+  await synced();
+  eq([P.licence().state, P.sellingAllowed()], ['active', true], 'one check-in: selling again');
+  P.Cloud.conf.licenceCheckedAt = new Date(Date.now() - 6 * 864e5).toISOString();
+  eq(P.sellingAllowed(), true, 'offline for 6 days: still selling');
+  P.Cloud.conf.licenceCheckedAt = realChecked;
+  // v42: device date set back (or wrong): the server clock gives it away
+  cloud.serverSkewMs = -3 * 864e5;    // the server is 3 days AHEAD of this device = device set back
+  await synced(); await w.refreshSupport(true);
+  eq([P.licence().state, P.sellingAllowed()], ['clock', false], 'device date 3 days behind the server: paused');
+  cloud.serverSkewMs = 0; await w.refreshSupport(true);
+  eq(P.sellingAllowed(), true, 'date fixed: selling again');
+  P.Cloud.conf.licenceCheckedAt = new Date(Date.now() + 3 * 864e5).toISOString();
+  eq(P.licence().state, 'clock', 'last check is in the "future" (date set back while offline): paused');
+  P.Cloud.conf.licenceCheckedAt = realChecked; w.renderAll();
 
   // Profit checker add-on: trial only on a paid plan, opens with the till's data, a block closes it
   eq(w.profitAccess().state, 'pos-trial', 'shop still on its POS trial: add-on not available yet');
@@ -1679,6 +1718,15 @@ test('Supplier admin page: shop logins refused; admin signs in with password; re
   ok($('#shopList') && $('#shopList').textContent.includes('owner@example.test'), 'dashboard lists the shop with its login email');
   ok(!$('#shopList img') && $('#shopList').innerHTML.includes('&lt;img'), 'shop name shown as text, not run as HTML');
   ok(!$('[data-act="add"]'), 'no "+1 month" button any more');
+  // v42: the email paused tills ask for proof of payment at — typed here, saved in the database (not the code)
+  const sf = $('#supportForm');
+  ok(sf, 'message-on-paused-tills card');
+  sf.querySelector('[name="email"]').value = 'not-an-email'; sf.requestSubmit(); await tick(300);
+  ok(!cloud.settings?.support_email, 'a wrong email is refused');
+  $('#supportForm [name="email"]').value = 'pay@example.test'; $('#supportForm [name="message"]').value = 'Reference: your shop name';
+  $('#supportForm').requestSubmit(); await tick(500);
+  eq([cloud.settings.support_email, cloud.settings.pause_message], ['pay@example.test', 'Reference: your shop name'], 'support email and line saved');
+  ok($('#supportForm [name="email"]').value === 'pay@example.test' && $('.audit').textContent.includes('(all shops)'), 'shown again after saving; logged for all shops');
   const origConfirm = w.confirm; w.confirm = () => true;
   // Billing: R380 + R50 per extra device (2 devices used in the last 30 days)
   eq($('[data-k="fee-shop-x"]').textContent, 'R430.00', 'monthly fee from the devices used');

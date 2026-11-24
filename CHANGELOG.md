@@ -17,6 +17,17 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v42 — 2026-11-24 · Paused accounts: proof of payment, 7-day check-in, date check 🗄️
+
+- 🔒 **A till must check in at least once every 7 days.** A connected till that hasn't been online for over 7 days pauses selling until it connects once ("Connect to the internet to carry on selling"). A shop that stops paying can't keep selling by staying offline. Load-shedding and short outages are fine: selling starts again as soon as the till checks in.
+- 🔒 **Date check.** If the device's date is more than a day off the server's clock, or earlier than its last check, selling pauses until the date and time are corrected. Setting the date back no longer stretches a subscription.
+- ✨ **Full-screen pause message on Sell.** When an account is deactivated, the subscription has ended (after the 7 days' grace), the 7-day check-in is missed, or the date is wrong, the Sell screen is replaced by a clear message, for example *"Your Rails POS account is paused. Please send proof of payment to … or on WhatsApp 073 314 2884 to have it reactivated."* It has **Email proof of payment**, **WhatsApp** and **Check again** buttons. Products and the cart are hidden; Reports, backups, data export and Settings still work from the menu. Other screens show the same message as a banner.
+- ✨ **Supplier admin page → "Message on paused tills":** type the email for proof of payment (and an optional extra line, e.g. "Use your shop name as the reference"). It's saved in the database, **not** in the app code (which is public), and every till reads it (within about 10 minutes, or straight away when paused). Change it in one place when you get a business email. **Deactivate** now suggests the reason "Payment not received". Admin files `?v=31`.
+- 🔧 Terms page: the 7-day check-in and how to get a paused account reactivated.
+- 🗄️ Needs the Supabase SQL file re-run: `vendor_settings` table, `support_contact()` (support email, message and the server's clock) and `vendor_set_setting()`. Until it's run, tills simply show WhatsApp only and the date check against the server is skipped.
+
+---
+
 ## v41 — 2026-11-24 · Fixes from a full test sweep
 
 - 🐞 **Faulty returns no longer make profit look too high.** A faulty item isn't put back on the rail, so its cost now stays a cost (a write-off) in Reports: Gross profit, profit per category and Best sellers. Before, profit came out too high by the cost of every faulty return, and Reports didn't match the Profit checker.
