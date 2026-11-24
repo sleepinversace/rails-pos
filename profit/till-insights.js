@@ -74,7 +74,8 @@
 
   /* ---------------- the findings ---------------- */
 
-  function sizesFinding(rows) {
+  function sizesFinding(rows, p) {
+    const judgeSlow = p.days >= 28;   // "not moving" needs about a month of sales, or a quiet fortnight looks like a problem
     const byProduct = new Map();
     for (const r of rows) { if (!byProduct.has(r.code)) byProduct.set(r.code, []); byProduct.get(r.code).push(r); }
     const reorder = [], stuck = [];
@@ -83,13 +84,15 @@
       const total = list.reduce((a, r) => a + r.sold, 0);
       for (const r of list) {
         if (r.stock === 0 && r.sold >= 2) reorder.push(r);
-        else if (r.stock >= 3 && r.sold === 0 && total >= 3) stuck.push(r);
+        else if (judgeSlow && r.stock >= 3 && r.sold === 0 && total >= 3) stuck.push(r);
       }
     }
     reorder.sort((a, b) => b.sold - a.sold);
     stuck.sort((a, b) => b.stock * b.cost - a.stock * a.cost);
     if (!reorder.length && !stuck.length) {
-      return { id: 'sizes', tone: 'good', headline: 'Your sizes are in step with what sells.', detail: 'No size that sells is sold out, and no size sits while the others sell.' };
+      return judgeSlow
+        ? { id: 'sizes', tone: 'good', headline: 'Your sizes are in step with what sells.', detail: 'No size that sells is sold out, and no size sits while the others sell.' }
+        : { id: 'sizes', tone: 'good', headline: 'No size that sells is sold out.', detail: 'Choose 30 days or more to also see which sizes aren’t moving.' };
     }
     return {
       id: 'sizes', tone: 'warn',
@@ -263,7 +266,7 @@
     const lines = inPeriod(x, p);
     return {
       net: netProfit(x, p, ctx),
-      findings: [sizesFinding(rows), missedFinding(rows, p), ageFinding(rows), discountFinding(lines),
+      findings: [sizesFinding(rows, p), missedFinding(rows, p), ageFinding(rows), discountFinding(lines),
         reasonsFinding(lines), teamFinding(lines), clientsFinding(x, lines, p)].filter(Boolean),
     };
   }

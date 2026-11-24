@@ -60,7 +60,8 @@ function esc(value) {
 function money(cents) {
   const neg = cents < 0;
   const abs = Math.abs(Math.round(cents));
-  const rands = Math.floor(abs / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  // Thousands with a NO-BREAK space (U+00A0), so "R1 080.00" never splits across two lines on a phone
+  const rands = Math.floor(abs / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
   return (neg ? '-R' : 'R') + rands + '.' + String(abs % 100).padStart(2, '0');
 }
 const centsToPlain = cents => (cents / 100).toFixed(2);
@@ -69,7 +70,9 @@ const centsToPlain = cents => (cents / 100).toFixed(2);
 function parseMoney(str) {
   let s = String(str ?? '').trim().replace(/[R\s]/gi, '');
   if (s === '') return NaN;
-  if (!s.includes('.') && /,\d{1,2}$/.test(s)) s = s.replace(',', '.'); // comma decimal
+  if (/^-?\d{1,3}(\.\d{3})+,\d{1,2}$/.test(s)) s = s.replace(/\./g, '').replace(',', '.'); // "1.234,50" (dot thousands, comma cents)
+  else if (!s.includes('.') && /^-?\d*,\d{0,2}$/.test(s)) s = s.replace(',', '.'); // comma decimal ("50," while typing = 50)
+  if (s.includes(',') && !/^-?\d{1,3}(,\d{3})+(\.\d*)?$/.test(s)) return NaN;      // commas only as thousands ("1,234.50")
   s = s.replace(/,/g, '');
   if (!/^-?\d*(\.\d*)?$/.test(s)) return NaN;
   const n = Number(s);
@@ -909,6 +912,8 @@ function renderReturn() {
 
 /** Why an item came back (v40, optional). Faulty items aren't put back in stock. */
 const RETURN_REASONS = { size: 'Wrong size or fit', mind: 'Changed mind', faulty: 'Faulty or damaged', other: 'Other' };
+/** Did this return's items go back on the rail? Faulty ones don't, so in Reports their cost stays a cost (a write-off). */
+const backInStock = ret => ret.reason !== 'faulty';
 
 async function processReturn(asExchange) {
   const sale = state.sales.find(s => s.id === ui.ret?.saleId);
@@ -1145,7 +1150,7 @@ function buildReport(range) {
   const refunds = sum(rets, x => x.ret.amount);
   const revenue = gross - refunds;
   const vat = sum(sales, s => s.vat) - sum(rets, x => x.ret.vat);
-  const cost = sum(sales, s => sum(s.items, it => it.unitCost * it.qty)) - sum(rets, x => x.ret.cost);
+  const cost = sum(sales, s => sum(s.items, it => it.unitCost * it.qty)) - sum(rets, x => backInStock(x.ret) ? x.ret.cost : 0);
 
   const byPayment = {};
   for (const k of ['cash', 'card', 'eft', 'credit']) byPayment[k] = { sales: 0, refunds: 0, count: 0 };
@@ -1172,7 +1177,7 @@ function buildReport(range) {
     row.qty += qty; row.amount += amount; row.cost += cost; cats.set(name, row);
   };
   sales.forEach(s => s.items.forEach(it => addCat(it.productId, it.qty, it.unitPrice * it.qty, it.unitCost * it.qty)));
-  rets.forEach(({ sale, ret }) => ret.items.forEach(ri => { const it = sale.items[ri.idx]; addCat(it.productId, -ri.qty, -ri.amount, -it.unitCost * ri.qty); }));
+  rets.forEach(({ sale, ret }) => ret.items.forEach(ri => { const it = sale.items[ri.idx]; addCat(it.productId, -ri.qty, -ri.amount, backInStock(ret) ? -it.unitCost * ri.qty : 0); }));
 
   // By cashier
   const people = new Map();
@@ -1389,7 +1394,7 @@ function bestSellers(range, { by = 'product', sort = 'qty', cat = '' } = {}) {
   state.sales.filter(s => inR(s.date)).forEach(s => s.items.forEach(it => add(it, it.qty, it.unitPrice * it.qty, it.unitCost * it.qty, s.vatRate)));
   allReturns().filter(x => inR(x.ret.date)).forEach(({ sale, ret }) => ret.items.forEach(ri => {
     const it = sale.items[ri.idx];
-    add(it, -ri.qty, -ri.amount, -it.unitCost * ri.qty, sale.vatRate);
+    add(it, -ri.qty, -ri.amount, backInStock(ret) ? -it.unitCost * ri.qty : 0, sale.vatRate);
   }));
   const rows = [...map.values()].filter(r => r.qty > 0 && (!cat || r.category === cat)).map(r => {
     const f = by === 'variant' ? findVariant(r.key) : null;
@@ -2328,7 +2333,7 @@ function renderSell() {
     return `<button class="product-card ${stock === 0 ? 'out' : ''} ${photo ? 'has-photo' : ''}" style="--cat:${catColour(p.category)}" data-action="pick" data-id="${esc(p.id)}"
         aria-label="${esc(p.name)}, ${esc(priceLabel(p))}, ${stock} in stock">
         ${photo || catIcon(p.category)}<span class="name">${esc(p.name)}</span>
-        <span class="cat">${esc(p.category)} · ${p.variants.length} option${p.variants.length === 1 ? '' : 's'}</span>
+        <span class="cat">${esc(p.category)} · <span class="nowrap">${p.variants.length} option${p.variants.length === 1 ? '' : 's'}</span></span>
         <span class="bottom"><span class="price money">${priceLabel(p)}</span>${badge}</span>
       </button>`;
   }).join('') : `<div class="empty">${state.products.length ? 'No products match.' : 'No products yet. Add some on the Stock screen.'}</div>`;

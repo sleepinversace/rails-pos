@@ -17,6 +17,19 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v41 — 2026-11-24 · Fixes from a full test sweep
+
+- 🐞 **Faulty returns no longer make profit look too high.** A faulty item isn't put back on the rail, so its cost now stays a cost (a write-off) in Reports: Gross profit, profit per category and Best sellers. Before, profit came out too high by the cost of every faulty return, and Reports didn't match the Profit checker.
+- 🐞 **Prices typed as "1.234,50"** (dot for thousands, comma for cents, as on some South African computers and in Excel files) are now read as R1 234.50; before they became R1.23. Nonsense like "1.234,5,6" is refused instead of being guessed.
+- 🔧 Amounts never split across two lines on a phone (for example "R1 080.00" under Gross profit).
+- 🔧 Product tiles keep "8 options" together on narrow phones.
+- 🔧 Bigger buttons for fingers: the R / % discount switch and links.
+- 🔧 **Profit checker:** for a shop that only uses till data, the Fees tile and the "no selling fees" answer are hidden (they always said R0). "Sizes that aren't moving" now needs at least 4 weeks of data, because a quiet fortnight isn't a trend.
+- 🔧 **Supplier admin page:** the Profit checker tick box on payments and invoices is only ticked when the shop already has the add-on on, so nobody is billed R150 by accident after just trying it (admin files `?v=30`).
+- No SQL changes.
+
+---
+
 ## v40 — 2026-11-23 · Profit checker reads much more from the till
 
 - ✨ **Profit checker → "From your till"**, a new section that follows the chosen dates:

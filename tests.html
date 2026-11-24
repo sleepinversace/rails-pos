@@ -814,7 +814,7 @@ test('Reports: reorder list, staff sales and commission; lay-by WhatsApp reminde
   eq(w.reminderReason(lb(Date.now() + 60 * day, [{ amount: 100, date: iso(Date.now() - 2 * day) }])), '', 'paying regularly: no reminder');
   eq(w.reminderReason(lb(Date.now() - 2 * day, [], [{ date: iso(Date.now() - 2 * day) }])), '', 'reminded 2 days ago: not again yet');
   const msg = w.reminderText(lb(Date.now() + 5 * day));
-  ok(msg.startsWith('Hi Ayesha,') && msg.includes('R1 000.00') && msg.includes('LB'), 'message: ' + msg);
+  ok(msg.startsWith('Hi Ayesha,') && msg.replace(/ /g, ' ').includes('R1 000.00') && msg.includes('LB'), 'message: ' + msg);
   await nav('customers');
   click('[data-action="cust-filter"][data-f="remind"]'); await tick();
   ok($('#custList .remind-row') || $('#custList .empty'), 'To remind list shows');
@@ -1100,6 +1100,8 @@ test('Export for Rails Profit checker: one file whose profit matches Gross profi
   const s = P.state.sales.find(x => x.items.some((it, i) => it.qty - rq(x, i) > 0 && w.findVariant(it.variantId)));
   const idx = s.items.findIndex((it, i) => it.qty - rq(s, i) > 0 && w.findVariant(it.variantId));
   const fv = w.findVariant(s.items[idx].variantId).variant, before = fv.stock;
+  const allTime = { from: new Date(2000, 0, 1), to: new Date(2100, 0, 1), label: 'all' };
+  const repBefore = w.buildReport(allTime);
   await nav('sales');
   click(`[data-action="open-doc"][data-doc="sale:${s.id}"]`); await tick();
   click('[data-action="open-return"]'); await tick();
@@ -1109,6 +1111,12 @@ test('Export for Rails Profit checker: one file whose profit matches Gross profi
   click('[data-action="ret-go"][data-mode="refund"]'); await tick(400);
   closeModal(); await tick();
   eq([s.returns[s.returns.length - 1].reason, fv.stock], ['faulty', before], 'faulty: reason kept, stock unchanged');
+  // v41: the faulty item's cost stays a cost (it isn't back on the rail), so profit drops by the whole refund excl. VAT
+  const fr = s.returns[s.returns.length - 1], repAfter = w.buildReport(allTime);
+  eq([repAfter.cost, repBefore.profit - repAfter.profit], [repBefore.cost, fr.amount - fr.vat], 'faulty refund: cost unchanged, profit down by the refund excl. VAT');
+  // v41: money typed with a dot for thousands and a comma for cents
+  eq(['1.234,50', 'R1 234,50', '1,234.50', '12,5', '50,', '1.234,5,6'].map(x => w.parseMoney(x)), [123450, 123450, 123450, 1250, 5000, NaN], 'money in every common style; nonsense refused');
+  ok(!/\d \d/.test(w.money(108000)) && w.money(108000).replace(/ /g, ' ') === 'R1 080.00', 'amounts never split across lines (no-break space)');
   // What the till hands the Profit checker on top of the file
   const all = await w.RailsProfitHost.tillData();
   ok(all.text.includes(',Faulty or damaged'), 'the till file carries the refund reason');
@@ -1744,7 +1752,9 @@ test('Supplier admin page: shop logins refused; admin signs in with password; re
   eq([cloud.shops[0].profit_blocked, cloud.shops[0].profit_trial_until], [false, '2030-01-01'], 'unblocked, trial date kept');
   click('[data-act="pay-open"][data-id="shop-x"]'); await tick(150);
   const pf = $('[data-pay-form="shop-x"]');
-  ok(pf.querySelector('[name="profit"]').checked && pf.querySelector('[data-pay-hint]').textContent.includes('incl. Profit checker R150.00'), 'payment form adds the R150 add-on for a shop that tried it');
+  ok(!pf.querySelector('[name="profit"]').checked && !pf.querySelector('[data-pay-hint]').textContent.includes('Profit checker'), 'a shop that only tried it is NOT ticked (no accidental R150)');
+  const box = pf.querySelector('[name="profit"]'); box.checked = true; box.dispatchEvent(new w.Event('input', { bubbles: true }));
+  ok(pf.querySelector('[data-pay-hint]').textContent.includes('incl. Profit checker R150.00'), 'ticking it adds R150 a month');
   pf.querySelector('[name="paid_until"]').value = '2027-03-31'; pf.querySelector('[name="paid_until"]').dispatchEvent(new w.Event('input', { bubbles: true }));
   pf.requestSubmit(); await tick(500);
   eq([cloud.shops[0].profit_paid, cloud.shops[0].profit_until, cloud.payments.length], [true, '2027-03-31', 2], 'the payment turns the add-on on until the same date');

@@ -44,8 +44,9 @@ const feeOf = s => PRICES.monthly + PRICES.device * (devicesBilled(s) - 1);
    until a date, or no end) or block it. A block reaches open tills within ~20 s. */
 const profitOn = s => !!s.profit_paid && !s.profit_blocked;                   // billed every month
 const profitFee = s => (profitOn(s) ? PRICES.profit : 0);
-/** Tick "Profit checker" on payments and invoices when the shop pays for it or has tried it. */
-const profitSuggested = s => !s.profit_blocked && (!!s.profit_paid || !!s.profit_trial_until);
+/** Tick "Profit checker" on payments and invoices only when the shop already has it on (paid).
+    A shop on (or after) its free trial isn't ticked: you tick it yourself once they say yes, so nobody is billed R150 by accident. */
+const profitSuggested = s => profitOn(s);
 function profitStatusOf(s) {
   const today = isoDay(new Date());
   const left = d => Math.round((new Date(d + 'T12:00:00') - new Date(today + 'T12:00:00')) / 864e5);

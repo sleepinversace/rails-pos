@@ -1020,3 +1020,8 @@ input:disabled { opacity: .5; }
 .profit-frame { flex: 1; width: 100%; border: 0; background: var(--bg); }
 @media print { .profit-view { display: none !important; } }
 .seg.ret-reason { flex-wrap: wrap; }
+.nowrap { white-space: nowrap; }
+/* v41: comfortable finger targets (at least 36 px) */
+#discountRow .seg.sm button { min-height: 36px; min-width: 42px; }
+#discountRow .input.sm { min-height: 36px; }
+a.link { display: inline-flex; align-items: center; min-height: 36px; }

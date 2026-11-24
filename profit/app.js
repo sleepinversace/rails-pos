@@ -277,6 +277,8 @@
 
   /* =================== From your till (inside Rails POS only) =================== */
   const tillChannelOk = () => channel === 'all' || channel === 'Shop';
+  /** Only the till's own data loaded (no Takealot/Amazon/other files). */
+  const tillOnly = () => sources.length > 0 && sources.every(s => s.id === TILL_ID);
 
   function renderTill(res) {
     const wrap = $('till-wrap');
@@ -342,7 +344,8 @@
     const warns = sources.some(s => s.id === TILL_ID) ? data.warnings.filter(w => !/^No returns file loaded/.test(w)) : data.warnings;
     $('warnings').innerHTML = importNotes.concat(warns).map(w => `<p>⚠️ ${esc(w)}</p>`).join('');
 
-    $('findings').innerHTML = res.findings.filter(f => !f.extra).map(findingHTML).join('');
+    // Till-only shops have no marketplace fees, so the "no fees" answer is just noise there
+    $('findings').innerHTML = res.findings.filter(f => !f.extra && !(f.id === 'fees' && tillOnly() && !res.totals.fees)).map(findingHTML).join('');
     const extras = res.findings.filter(f => f.extra);
     $('findings-extra').innerHTML = extras.map(findingHTML).join('');
     $('extra-wrap').hidden = !extras.length;
@@ -375,6 +378,8 @@
   function renderKpis(res) {
     const t = res.totals, pv = res.prev, d = res.period.days;
     const feeShare = t.netSales > 0 ? t.fees / t.netSales : 0;
+    const showFees = !(tillOnly() && !t.fees);    // a till-only shop has no selling fees: the tile would always say R0
+    $('kpis').classList.toggle('three', !showFees);
     $('kpis').innerHTML = `
       <div class="kpi has-spark">
         <div class="label">Net sales</div>
@@ -388,12 +393,12 @@
         <div class="sub">${PC.pct(t.margin)} margin${t.adSpend ? ` · after ${R(t.adSpend)} ads` : ''}</div>
         <div class="sub">${delta(t.profit, pv && pv.profit, true, d)}</div>
       </div>
-      <div class="kpi">
+      ${showFees ? `<div class="kpi">
         <div class="label">Fees</div>
         <div class="value">${R(t.fees)}</div>
         <div class="sub">${PC.pct(feeShare)} of sales</div>
         <div class="sub">${delta(t.fees, pv && pv.fees, false, d)}</div>
-      </div>
+      </div>` : ''}
       <div class="kpi">
         <div class="label">Returns cost</div>
         <div class="value">${R(t.returnCost)}</div>
