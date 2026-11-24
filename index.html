@@ -5,13 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Rails POS</title>
   <meta name="description" content="Offline-first point of sale for small clothing stores.">
-  <meta name="theme-color" content="#05060c">
+  <meta name="theme-color" content="#35203d">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Rails POS">
+  <!-- The shop's look (light or dark) before the first paint; app.js applyTheme() keeps it up to date -->
+  <script>try { if (!/[?&]test/.test(location.search)) document.documentElement.dataset.theme = localStorage.getItem("rails-pos-theme") || "light"; } catch (e) {}</script>
   <link rel="stylesheet" href="app.css">
 </head>
 <body class="on-sell">

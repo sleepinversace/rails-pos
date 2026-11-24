@@ -17,6 +17,20 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v43 — 2026-11-25 · Boutique look: Atelier (light) and Evening (dark)
+
+- ✨ **A new look made for clothing shops.** The neon colours are gone. The till now uses the same plum, pearl and champagne as the Rails POS website, with elegant serif headings and one main colour instead of four. No glow and no pulsing Charge button.
+- ✨ **Product tiles look like clothes on a rail:** a large photo (or a clothing icon in a soft fabric colour) on top, with the name, price and stock below. Before, a photo was only a small corner picture.
+- ✨ **Dark look:** Settings → Shop floor → Appearance → **Dark** (aubergine with champagne buttons). Light is the default. Shops that were on Neon or Light get the new light look; the choice is shared by all the shop's devices, as before.
+- 🔧 New app icon and logo: the same hanger in champagne on plum. A till already on a home screen may show the old icon until the app is removed and added again.
+- 🔧 The A4 reports, terms page and supplier admin page use the same colours (admin files `?v=32`).
+- 🔧 The Profit checker add-on follows the till's Light or Dark choice (before, it followed the device).
+- 🐞 The quantity between − and + in the cart is centred; it sat too high.
+- 🔒 Nothing about selling, money, stock or sync changed. Text and buttons in both looks are checked for readable contrast in the tests.
+- No SQL changes.
+
+---
+
 ## v42 — 2026-11-24 · Paused accounts: proof of payment, 7-day check-in, date check 🗄️
 
 - 🔒 **A till must check in at least once every 7 days.** A connected till that hasn't been online for over 7 days pauses selling until it connects once ("Connect to the internet to carry on selling"). A shop that stops paying can't keep selling by staying offline. Load-shedding and short outages are fine: selling starts again as soon as the till checks in.

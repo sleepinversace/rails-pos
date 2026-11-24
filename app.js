@@ -264,7 +264,7 @@ const DEFAULT_SETTINGS = {
   returnDays: 7,            // return / exchange period in days (0 = no limit); a warning only
   ownerWhatsApp: '',        // owner's number for the daily summary
   pettyCategories: 'Cleaning, Refreshments, Transport, Stationery, Wages, Other',
-  theme: 'auto',            // auto | light | dark
+  theme: 'light',           // light (Atelier) | dark (Evening); older shops may have 'auto', which means light
   lastBackupAt: null,
   // PLUG-IN: multiple branches — add storeId / branchName here and stamp it on each sale.
 };
@@ -2238,11 +2238,22 @@ function setPressed(selector, isOn) {
 
 /* ===== 13. Views ======================================================== */
 
+/* The two looks (Settings → Appearance): light (Atelier, the default; 'auto' from older
+   versions means light) and dark (Evening). The choice is also kept in localStorage so
+   index.html can set it before the first paint (no white flash on a dark till). */
+const THEME_KEY = DB_NAME + '-theme';
+const themeName = () => (state.settings.theme === 'dark' ? 'dark' : 'light');
+function applyTheme() {
+  const t = themeName();
+  document.documentElement.dataset.theme = t;
+  const bar = $('meta[name="theme-color"]');
+  if (bar) bar.content = t === 'dark' ? '#120c14' : '#35203d';
+  try { localStorage.setItem(THEME_KEY, t); } catch { /* private mode */ }
+}
+
 function renderAll() {
   $('#storeNameLabel').textContent = state.settings.storeName || '';
-  // Theme: no attribute = follow the device; otherwise force light/dark.
-  if (state.settings.theme === 'auto') delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = state.settings.theme;
+  applyTheme();
   applyPermissions();
   renderBanners();
   renderSell();
@@ -2276,9 +2287,9 @@ function showView(name) {
 
 /* ----- Sell ----- */
 
-/* Each category gets its own colour (the strip down the tile's left edge) and a
+/* Each category gets its own colour (the panel at the top of the tile) and a
    small clothing icon picked from words in its name. Same name → same colour. */
-const CAT_COLOURS = ['#45d3e8', '#ff5fa2', '#f5dc3c', '#4ade80', '#a78bfa', '#fb923c', '#60a5fa', '#2dd4bf'];
+const CAT_COLOURS = ['#6f7f9c', '#b65f7b', '#a08a4b', '#6d7f64', '#7a6392', '#a87945', '#5b7b87', '#5c8a80']; // soft fabric shades (app.css lightens them on the dark look)
 const CAT_FIXED = { tops: 0, bottoms: 3, dresses: 1, outerwear: 4, accessories: 5, shoes: 6, kids: 7 };
 function catColour(cat) {
   const k = String(cat || '').trim().toLowerCase();
@@ -3282,7 +3293,7 @@ async function renderSettings() {
         <label class="field"><span>Low-stock threshold</span><input class="input" data-setting="lowStock" inputmode="numeric" value="${esc(st.lowStock)}"></label>
         <label class="field"><span>Appearance</span>
           <select data-setting="theme">
-            ${[['auto', 'Neon (default)'], ['light', 'Light (bright sunlight)']].map(([t, l]) => `<option value="${t}" ${(st.theme === 'dark' ? 'auto' : st.theme) === t ? 'selected' : ''}>${l}</option>`).join('')}
+            ${[['light', 'Light'], ['dark', 'Dark']].map(([t, l]) => `<option value="${t}" ${themeName() === t ? 'selected' : ''}>${l}</option>`).join('')}
           </select></label>
       </div>
       <div class="grid-2">
@@ -5070,7 +5081,7 @@ async function profitStartTrial(el) {
 /* The Profit checker page (in the frame) reads what it needs from here. */
 window.RailsProfitHost = {
   allowed: () => profitAccess().ok,
-  theme: () => document.documentElement.dataset.theme || '',
+  theme: () => themeName(),
   tillCsv() {
     // Everything this device knows: from the first sale or refund to the end of today
     const dates = state.sales.map(s => s.date).concat(allReturns().map(r => r.ret.date)).filter(Boolean).sort();

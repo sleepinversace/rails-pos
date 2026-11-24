@@ -4,89 +4,86 @@
    Colours are tokens on :root so the two looks only swap values.
    ========================================================================= */
 
-/* NEON (default): near-black background with glowing neon yellow, green,
-   cyan and pink. --accent is neon yellow (buttons, active tab, highlights),
-   --accent-text is the same colour where it is used as text.
-   Cash / Card / EFT each have their own neon colour (--pay-*). */
+/* ATELIER (default): pearl background, plum buttons and header, champagne
+   highlights. The same colours as the Rails POS website.
+   --accent is plum (buttons, chosen options); --accent-text is the same colour
+   where it is used as text. --mark is the champagne on the plum header and
+   --mark-line the gold that marks the open screen. --line outlines buttons and
+   tiles. --cat-keep / --tint tune the category colours for light and dark. */
 :root {
-  --bg: #07080f;
-  --surface: #10121f;
-  --surface-2: #191c2f;
-  --text: #f3f5ff;
-  --muted: #a6acc8;
-  --border: #2b3052;
-  --brand: #05060c;
+  --bg: #f8f5f7;
+  --surface: #ffffff;
+  --surface-2: #f2ecf1;
+  --text: #2a1a2f;
+  --muted: #655469;
+  --border: #e2d7e1;
+  --line: #cfc0cd;
+  --brand: #35203d;
   --brand-ink: #ffffff;
-  --brand-muted: #a6acc8;
-  --accent: #f5dc3c;
-  --accent-hover: #fbe77a;
-  --accent-ink: #141200;
-  --accent-text: #f5dc3c;
-  --accent-soft: #29270f;
-  --neon: #45d3e8;        /* cyan: outlines of buttons and tiles */
-  --neon-pink: #e45ad6;
-  --danger: #f0627a;
-  --danger-soft: #3a0f1d;
-  --warn: #e58ad9;
-  --warn-soft: #33102f;
-  --ok: #4fe08e;
-  --ok-soft: #0b2a18;
-  --money: #4fe08e;       /* rand amounts in reports */
-  --money-bar: #2cc777;   /* chart bars */
-  --pay-cash: #4fe08e;
-  --pay-card: #45d3e8;
-  --pay-eft: #e45ad6;
-  --pay-ink: #05060c;     /* text on a lit-up payment button */
-  --pay-eft-ink: #05060c;
-  --g1: 42%;              /* inner glow strength */
-  --g2: 18%;              /* outer glow strength */
-  --shadow-sm: 0 1px 2px rgba(0,0,0,.5);
-  --shadow: 0 1px 3px rgba(0,0,0,.5), 0 10px 28px rgba(0,0,0,.55);
-  --radius: 14px;
+  --brand-muted: #cdbfd0;
+  --accent: #35203d;
+  --accent-hover: #4d2d58;
+  --accent-ink: #ffffff;
+  --accent-text: #5a2f66;
+  --accent-soft: #f5eedf;
+  --mark: #e6c98f;
+  --mark-ink: #2a1a2f;    /* text on champagne */
+  --mark-line: #b8904f;
+  --danger: #ad2c48;
+  --danger-ink: #ffffff;
+  --danger-soft: #fae7eb;
+  --warn: #85540f;
+  --warn-soft: #f8ecd6;
+  --ok: #22694a;
+  --ok-soft: #e3f1ea;
+  --money: #22694a;       /* rand amounts in reports */
+  --money-bar: #5a2f66;   /* chart bars */
+  --cat-keep: 100%;
+  --tint: 13%;
+  --shadow-sm: none;
+  --shadow: 0 1px 2px rgba(42,26,47,.06), 0 18px 40px -24px rgba(42,26,47,.38);
+  --radius: 12px;
+  /* Headings and totals. Fonts devices already have; nothing is downloaded. */
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "Noto Serif", Georgia, serif;
   --header-h: 52px;
   --nav-h: 62px;
   --cartbar-h: 58px;
   --safe-b: env(safe-area-inset-bottom, 0px);
-  color-scheme: dark;
+  color-scheme: light;
 }
 
-/* LIGHT (Settings → Appearance → Light): for bright sunlight. Same neon
-   colours, darker where they are used as text so they stay readable. */
-:root[data-theme="light"] {
-  --bg: #f3f4fa;
-  --surface: #ffffff;
-  --surface-2: #e9ebf5;
-  --text: #0d0f1c;
-  --muted: #555b78;
-  --border: #d3d7ea;
-  --brand: #0b0d18;
-  --brand-ink: #ffffff;
-  --brand-muted: #a6acc8;
-  --accent: #ffd60a;
-  --accent-hover: #ffe14d;
-  --accent-ink: #161300;
-  --accent-text: #7a5f00;
-  --accent-soft: #fff6c2;
-  --neon: #00b8d9;
-  --neon-pink: #e000c4;
-  --danger: #c8102e;
-  --danger-soft: #fde6ea;
-  --warn: #a3008f;
-  --warn-soft: #fbe3f7;
-  --ok: #0a7d3e;
-  --ok-soft: #d9f7e5;
-  --money: #0a7d3e;
-  --money-bar: #12c060;
-  --pay-cash: #00c565;
-  --pay-card: #00b8d9;
-  --pay-eft: #c400ab;
-  --pay-ink: #05060c;
-  --pay-eft-ink: #ffffff;
-  --g1: 30%;
-  --g2: 10%;
-  --shadow-sm: 0 1px 2px rgba(13,15,28,.07);
-  --shadow: 0 1px 3px rgba(13,15,28,.08), 0 10px 28px rgba(13,15,28,.10);
-  color-scheme: light;
+/* EVENING (Settings, Appearance, Dark): aubergine with champagne buttons. */
+:root[data-theme="dark"] {
+  --bg: #171019;
+  --surface: #211724;
+  --surface-2: #2d2031;
+  --text: #f7f0f4;
+  --muted: #bcaabd;
+  --border: #423147;
+  --line: #5a4760;
+  --brand: #120c14;
+  --brand-ink: #f7f0f4;
+  --brand-muted: #bcaabd;
+  --accent: #e6c98f;
+  --accent-hover: #f0d8a6;
+  --accent-ink: #2a1a2f;
+  --accent-text: #e6c98f;
+  --accent-soft: #33281f;
+  --mark: #e6c98f;
+  --mark-line: #e6c98f;
+  --danger: #f08a9c;
+  --danger-ink: #2a0d16;
+  --danger-soft: #42182a;
+  --warn: #e6b877;
+  --warn-soft: #3c2a18;
+  --ok: #8fd0ae;
+  --ok-soft: #1b3329;
+  --money: #8fd0ae;
+  --money-bar: #c9a868;
+  --cat-keep: 62%;
+  --tint: 30%;
+  --shadow: 0 1px 3px rgba(0,0,0,.5), 0 16px 36px rgba(0,0,0,.45);
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -145,7 +142,7 @@ h3 { font-size: 15px; }
 .banner.licence-warn { background: var(--warn-soft); border-color: var(--warn) !important; }
 .banner a.btn { text-decoration: none; }
 .licence-card.stopped { border-color: var(--danger); }
-.cloud-card.on { border-color: color-mix(in srgb, var(--ok) 55%, var(--border)); box-shadow: 0 0 14px color-mix(in srgb, var(--ok) var(--g2), transparent); }
+.cloud-card.on { border-color: color-mix(in srgb, var(--ok) 55%, var(--border)); }
 
 /* ----- Navigation (bottom bar on phones) ----- */
 .app-nav {
@@ -165,7 +162,7 @@ h3 { font-size: 15px; }
 .app-nav .ico { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .app-nav button { position: relative; transition: color .15s; }
 .app-nav button.active { color: var(--accent-text); }
-/* Small glowing bar marks the open screen */
+/* Small gold bar marks the open screen */
 .app-nav button.active::after {
   content: ""; position: absolute; top: 0; left: 30%; right: 30%; height: 3px;
   border-radius: 0 0 3px 3px; background: var(--accent);
@@ -208,7 +205,7 @@ h3 { font-size: 15px; }
 .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn.ghost, .btn.danger { box-shadow: none; }
 .btn.danger { color: var(--danger); border-color: var(--danger); background: transparent; }
-.btn.danger.solid { background: var(--danger); color: #fff; }
+.btn.danger.solid { background: var(--danger); color: var(--danger-ink); }
 .btn.ghost { border-color: transparent; background: transparent; }
 .btn.sm { min-height: 34px; padding: 5px 10px; font-size: 13px; }
 .btn.lg { min-height: 52px; font-size: 17px; }
@@ -278,10 +275,10 @@ label.field > span { display: block; font-size: 13px; font-weight: 600; color: v
 .lb-kpis .value { font-size: 20px; }
 .cust-row {
   width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 10px; text-align: left;
-  background: var(--surface); border: 1px solid color-mix(in srgb, var(--neon) 22%, var(--border)); border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 12px 14px; margin-bottom: 8px; box-shadow: var(--shadow-sm);
 }
-.cust-row:hover { border-color: var(--neon); }
+.cust-row:hover { border-color: var(--mark-line); }
 .cust-row.overdue { border-left: 4px solid var(--danger); }
 .cust-main, .cust-side { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .cust-side { align-items: flex-end; text-align: right; flex: none; }
@@ -409,7 +406,7 @@ label.field > span { display: block; font-size: 13px; font-weight: 600; color: v
 .cart-foot { border-top: 1px solid var(--border); padding: 10px 16px 12px; display: flex; flex-direction: column; gap: 8px; }
 .cash-row { display: flex; flex-direction: column; gap: 6px; }
 .quick-cash { display: flex; gap: 6px; }
-.quick-cash button { flex: 1; }
+.quick-cash button { border-color: var(--line); box-shadow: none; }
 .totals { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-size: 14px; }
 .totals .grand { font-size: 22px; font-weight: 800; letter-spacing: -.01em; }
 .totals .change { color: var(--ok); font-weight: 700; }
@@ -458,7 +455,7 @@ label.field > span { display: block; font-size: 13px; font-weight: 600; color: v
 
 /* Reports */
 .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow-sm); border-top: 3px solid var(--accent); }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow-sm); }
 .kpi .label { font-size: 12px; color: var(--muted); font-weight: 600; }
 .kpi .value { font-size: 22px; font-weight: 800; margin-top: 2px; }
 .kpi .sub { font-size: 12px; color: var(--muted); }
@@ -468,7 +465,7 @@ label.field > span { display: block; font-size: 13px; font-weight: 600; color: v
 #view-reports .money.neg, #view-reports .money .neg { color: var(--danger); }
 #view-reports .money .muted { color: var(--muted); font-weight: 500; }
 #view-reports .kpi .value.money { font-size: 24px; }
-#view-reports .kpi.hero { background: linear-gradient(160deg, color-mix(in srgb, var(--money) 9%, var(--surface)), var(--surface) 70%); border-top-color: var(--money); }
+#view-reports .kpi.hero { background: linear-gradient(160deg, color-mix(in srgb, var(--money) 9%, var(--surface)), var(--surface) 70%); }
 #view-reports .sale-row:not(.returned) .t { color: var(--money); }
 .trend { margin-top: 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
 .trend.up { color: var(--money); }
@@ -482,7 +479,7 @@ label.field > span { display: block; font-size: 13px; font-weight: 600; color: v
 .pay-amt { display: inline-flex; gap: 8px; align-items: baseline; justify-content: flex-end; }
 .pay-pct { min-width: 34px; text-align: right; font-size: 12px; }
 #view-reports .bar-fill { background: var(--money-bar); }
-#view-reports .kpi { border-top-color: var(--money); }
+
 .rank {
   display: inline-grid; place-items: center; width: 22px; height: 22px; margin-right: 8px; border-radius: 99px;
   background: var(--surface-2); font-size: 12px; font-weight: 700; color: var(--muted);
@@ -550,7 +547,7 @@ label.field > span { display: block; font-size: 13px; font-weight: 600; color: v
   font-weight: 600; font-size: 14px; transition: all .2s; max-width: calc(100vw - 32px); text-align: center;
 }
 .toast.show { opacity: 1; transform: translateX(-50%); }
-.toast.error { background: var(--danger); color: #fff; }
+.toast.error { background: var(--danger); color: var(--danger-ink); }
 
 .print-area { display: none; }
 
@@ -637,123 +634,101 @@ input:disabled { opacity: .5; }
 .lock-btn .ico { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 /* =====================================================================
-   NEON EFFECTS
-   Glows are coloured box-shadows / text-shadows. --g1 / --g2 set how
-   strong they are (weaker in the Light look).
+   ATELIER LOOK
+   Serif headings, hairline outlines, one main colour, no glow.
+   Both looks (light and dark) come from the tokens at the top.
    ===================================================================== */
-.app-header {
-  border-bottom: 2px solid transparent;
-  border-image: linear-gradient(90deg, var(--neon), var(--neon-pink), var(--accent)) 1;
-  box-shadow: 0 6px 24px color-mix(in srgb, var(--neon) var(--g2), transparent);
-}
-.brand span { text-shadow: 0 0 12px color-mix(in srgb, var(--neon) var(--g1), transparent); }
-.app-nav { border-top-color: color-mix(in srgb, var(--neon) 35%, var(--border)); }
-.app-nav button.active { text-shadow: 0 0 10px color-mix(in srgb, var(--accent) var(--g1), transparent); }
-.app-nav button.active .ico { filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent) var(--g1), transparent)); }
-.app-nav button.active::after { box-shadow: 0 0 8px var(--accent), 0 0 18px color-mix(in srgb, var(--accent) var(--g2), transparent); }
+h1, h2, h3, .sold-title, .cart-welcome .cw-title { font-family: var(--serif); font-weight: 600; }
+.cart-head h2 { font-size: 22px; }
+.modal-head h2 { font-size: 20px; }
+.prod-head h3 { font-size: 17px; }
+.app-header { border-bottom: 1px solid color-mix(in srgb, var(--mark) 22%, transparent); box-shadow: none; }
+.brand img { box-shadow: 0 0 0 1px color-mix(in srgb, var(--mark) 45%, transparent); }
+.brand .brand-name { font-family: var(--serif); font-size: 19px; font-weight: 600; letter-spacing: 0; }
+.brand .brand-name b { color: var(--mark); font-weight: 600; }
+.app-nav button.active::after { background: var(--mark-line); }
 
 /* Buttons */
-.btn.primary {
-  box-shadow: 0 0 0 1px var(--accent), 0 0 14px color-mix(in srgb, var(--accent) var(--g1), transparent),
-    0 0 32px color-mix(in srgb, var(--accent) var(--g2), transparent);
-}
-.btn.primary:hover { box-shadow: 0 0 0 1px var(--accent-hover), 0 0 20px color-mix(in srgb, var(--accent) var(--g1), transparent), 0 0 44px color-mix(in srgb, var(--accent) var(--g2), transparent); }
-.btn.primary:disabled { box-shadow: none; }
-.btn.danger { box-shadow: 0 0 10px color-mix(in srgb, var(--danger) var(--g2), transparent); }
-.btn:not(.primary):not(.danger):not(.ghost) { border-color: color-mix(in srgb, var(--neon) 40%, var(--border)); }
-.btn:not(.primary):not(.danger):not(.ghost):hover { border-color: var(--neon); box-shadow: 0 0 12px color-mix(in srgb, var(--neon) var(--g2), transparent); }
-#chargeBtn:not(:disabled) { animation: neon-pulse 2.6s ease-in-out infinite; }
-@keyframes neon-pulse {
-  50% { box-shadow: 0 0 0 1px var(--accent), 0 0 20px color-mix(in srgb, var(--accent) var(--g1), transparent), 0 0 36px color-mix(in srgb, var(--accent) var(--g2), transparent); }
-}
+.btn.primary { box-shadow: none; }
+.btn:not(.primary):not(.danger):not(.ghost) { border-color: var(--line); }
+.btn:not(.primary):not(.danger):not(.ghost):hover { border-color: var(--accent-text); }
 
 /* Inputs */
-.input, input[type="search"], select, textarea { border-color: color-mix(in srgb, var(--neon) 30%, var(--border)); }
+.input, input[type="search"], select, textarea { border-color: var(--line); }
 .input:focus, input[type="search"]:focus, select:focus, textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), 0 0 16px color-mix(in srgb, var(--accent) var(--g1), transparent);
+  border-color: var(--accent-text); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-text) 18%, transparent);
 }
-#sellSearch { border-width: 1.5px; border-color: var(--neon); box-shadow: 0 0 14px color-mix(in srgb, var(--neon) var(--g2), transparent); }
-#sellSearch:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 18px color-mix(in srgb, var(--accent) var(--g1), transparent); }
+#sellSearch { border-radius: 99px; padding-left: 18px; }
 
-/* Segmented buttons (discount R/%, report periods…): each option outlined in neon */
+/* Segmented buttons (discount R/%, report periods…) */
 .seg { background: transparent; gap: 6px; padding: 0; }
-.seg button {
-  border: 1.5px solid color-mix(in srgb, var(--neon) 60%, transparent); color: var(--text);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--neon) var(--g2), transparent);
-}
-.seg button.on {
-  background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), 0 0 14px color-mix(in srgb, var(--accent) var(--g1), transparent);
-}
+.seg button { border: 1px solid var(--line); color: var(--text); background: var(--surface); }
+.seg button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); box-shadow: none; }
 
-/* Cash / Card / EFT: bigger, each in its own neon colour, the chosen one lit up */
+/* Cash / Card / EFT: one style for all three, the chosen one filled */
 .seg.pay { gap: 8px; }
-.seg.pay button { min-height: 50px; font-size: 16px; font-weight: 800; letter-spacing: .02em; border-width: 2px; }
-.seg.pay button[data-pay="cash"] { --c: var(--pay-cash); --ci: var(--pay-ink); }
-.seg.pay button[data-pay="card"] { --c: var(--pay-card); --ci: var(--pay-ink); }
-.seg.pay button[data-pay="eft"]  { --c: var(--pay-eft);  --ci: var(--pay-eft-ink); }
-.seg.pay button { border-color: color-mix(in srgb, var(--c) 85%, transparent); box-shadow: 0 0 8px color-mix(in srgb, var(--c) var(--g2), transparent); }
-.seg.pay button.on {
-  background: var(--c); color: var(--ci); border-color: var(--c);
-  box-shadow: 0 0 0 1px var(--c), 0 0 18px color-mix(in srgb, var(--c) var(--g1), transparent), 0 0 40px color-mix(in srgb, var(--c) var(--g2), transparent);
-}
-.quick-cash button { border-color: var(--pay-cash) !important; box-shadow: 0 0 8px color-mix(in srgb, var(--pay-cash) var(--g2), transparent); }
+.seg.pay button { min-height: 50px; font-size: 16px; font-weight: 650; }
 
-/* Category chips */
-.chip { border-color: color-mix(in srgb, var(--neon) 55%, var(--border)); box-shadow: 0 0 8px color-mix(in srgb, var(--neon) var(--g2), transparent); }
-.chip.on { box-shadow: 0 0 0 1px var(--accent), 0 0 14px color-mix(in srgb, var(--accent) var(--g1), transparent); }
+/* Category chips, size and colour options */
+.chip, .opt { border-color: var(--line); }
+.opt.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); box-shadow: none; }
 
-/* Product tiles */
-.product-card { border-color: color-mix(in srgb, var(--neon) 28%, var(--border)); }
-.product-card::before { box-shadow: 0 0 10px var(--cat, var(--accent)), 0 0 18px color-mix(in srgb, var(--cat, var(--accent)) var(--g2), transparent); opacity: 1; }
-.product-card:hover {
-  border-color: var(--neon); transform: translateY(-1px);
-  box-shadow: 0 0 0 1px var(--neon), 0 0 18px color-mix(in srgb, var(--neon) var(--g2), transparent);
-}
-.product-card .price { color: var(--money); }
+/* Category colours are soft fabric shades; the dark look lightens them a little */
+[style*="--cat"] { --cat-ui: color-mix(in srgb, var(--cat) var(--cat-keep), #fff); }
 
-/* Size / colour picker options */
-.opt { border-color: color-mix(in srgb, var(--neon) 50%, var(--border)); }
-.opt.on {
-  background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), 0 0 14px color-mix(in srgb, var(--accent) var(--g1), transparent);
+/* Product tiles: the garment (photo or icon) on top, name and price below */
+.product-grid { gap: 14px; }
+.product-card { padding: 0 13px 13px; min-height: 200px; gap: 3px; }
+.product-card::before { display: none; }
+.product-card:hover { border-color: var(--mark-line); box-shadow: var(--shadow); transform: none; }
+.product-card .cat-icon, .product-card .thumb {
+  position: static; flex: none; width: auto; height: 118px; margin: 0 -13px 9px; border-radius: 0;
 }
+.product-card .thumb { display: block; width: calc(100% + 26px); max-width: none; object-position: 50% 30%; }
+.product-card .cat-icon { color: var(--cat-ui); background: color-mix(in srgb, var(--cat) var(--tint), var(--surface)); }
+.product-card .cat-icon svg { width: 46px; height: 46px; stroke-width: 1.15; }
+.product-card .name, .product-card .cat,
+.product-card.has-photo .name, .product-card.has-photo .cat { padding-right: 0; }
+.product-card .name { font-family: var(--serif); font-weight: 600; font-size: 16.5px; line-height: 1.2; overflow-wrap: break-word; }
+.product-card .bottom { padding-top: 6px; }
+.product-card .price { color: var(--text); font-weight: 700; font-size: 16px; }
+.product-card .badge.stock { background: transparent; color: var(--muted); padding: 0; font-weight: 550; font-size: 12px; }
+.product-card.out .thumb { filter: grayscale(1); }
 
 /* Cart */
-.cart-panel { border-top: 1.5px solid var(--neon); box-shadow: 0 -6px 30px color-mix(in srgb, var(--neon) var(--g2), transparent); }
-.stepper { border-color: color-mix(in srgb, var(--neon) 55%, var(--border)); }
-.totals .grand { color: var(--money); text-shadow: 0 0 12px color-mix(in srgb, var(--money) var(--g2), transparent); }
-.cart-bar { border: 1.5px solid var(--accent); box-shadow: 0 0 18px color-mix(in srgb, var(--accent) var(--g2), transparent), var(--shadow); }
-.cart-bar strong { color: var(--money); }
-.cart-bar-go { box-shadow: 0 0 12px color-mix(in srgb, var(--accent) var(--g1), transparent); }
+.cart-panel { border-top: 1px solid var(--line); }
+.stepper { border-color: var(--line); }
+.stepper span { line-height: 40px; }
+.totals .grand { font-family: var(--serif); font-weight: 600; font-size: 25px; font-variant-numeric: lining-nums tabular-nums; }
+.cart-bar { box-shadow: 0 14px 30px -16px rgba(42,26,47,.6); }
+.cart-bar strong { color: var(--mark); font-variant-numeric: lining-nums tabular-nums; }
+.cart-bar-go { background: var(--mark); color: var(--mark-ink); }
+:root[data-theme="dark"] .cart-bar { border: 1px solid var(--line); background: var(--surface-2); }
 
 /* Cards, banners, dialogs */
-.card, .kpi, .sale-row { border-color: color-mix(in srgb, var(--neon) 22%, var(--border)); }
-.banner { border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); }
-.banner.info { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
-.modal { border: 1px solid color-mix(in srgb, var(--neon) 45%, var(--border)); box-shadow: var(--shadow), 0 0 34px color-mix(in srgb, var(--neon) var(--g2), transparent); }
-.list-table tr:first-child .rank { box-shadow: 0 0 10px color-mix(in srgb, var(--accent) var(--g1), transparent); }
+.banner { border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); }
+.banner.info { border-color: color-mix(in srgb, var(--mark-line) 45%, transparent); }
+.modal { border: 1px solid var(--border); }
+.section-title { font-family: var(--serif); font-size: 17px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--text); }
 
-/* Reports: glowing green money */
-#view-reports .money { text-shadow: 0 0 10px color-mix(in srgb, var(--money) var(--g2), transparent); }
-#view-reports .kpi { box-shadow: 0 -4px 16px -6px color-mix(in srgb, var(--money) var(--g1), transparent); }
-#view-reports .bar-fill, .chart-bar.best { box-shadow: 0 0 10px color-mix(in srgb, var(--money-bar) var(--g1), transparent); }
+/* Figures */
+.kpi .value { font-family: var(--serif); font-weight: 600; font-variant-numeric: lining-nums tabular-nums; }
 
-/* Sign-in */
+/* Sign-in and setup */
 .signin {
   background:
-    radial-gradient(700px 420px at 90% -5%, color-mix(in srgb, var(--neon-pink) 30%, transparent), transparent 60%),
-    radial-gradient(700px 420px at 0% 105%, color-mix(in srgb, var(--neon) 26%, transparent), transparent 60%),
-    var(--brand);
+    radial-gradient(760px 460px at 88% 0%, rgba(196,106,133,.30), transparent 62%),
+    radial-gradient(700px 420px at 0% 100%, rgba(230,201,143,.16), transparent 60%),
+    linear-gradient(160deg, #2a1631, #3b2144 55%, #4a2a55);
 }
-.signin-box { border-color: var(--neon); box-shadow: 0 0 0 1px var(--neon), 0 0 30px color-mix(in srgb, var(--neon) var(--g1), transparent), 0 0 70px color-mix(in srgb, var(--neon-pink) var(--g2), transparent); }
-.signin-box h1 { text-shadow: 0 0 14px color-mix(in srgb, var(--accent) var(--g1), transparent); }
-
-/* Light look: no text glow (it blurs dark text) */
-:root[data-theme="light"] .app-nav button.active,
-:root[data-theme="light"] #view-reports .money,
-:root[data-theme="light"] .totals .grand { text-shadow: none; }
+:root[data-theme="dark"] .signin {
+  background:
+    radial-gradient(760px 460px at 88% 0%, rgba(196,106,133,.18), transparent 62%),
+    linear-gradient(160deg, #120c14, #211724);
+}
+.signin-box { border-color: transparent; box-shadow: 0 40px 80px -30px rgba(0,0,0,.6); }
+:root[data-theme="dark"] .signin-box { border-color: var(--border); }
+.signin-box h1 { font-size: 25px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
@@ -782,8 +757,8 @@ input:disabled { opacity: .5; }
   .cart-panel {
     top: calc(var(--header-h) + 16px); right: 20px; bottom: 16px; left: auto;
     width: 360px; height: auto; transform: none; visibility: visible;
-    border-radius: var(--radius); border: 1.5px solid color-mix(in srgb, var(--neon) 70%, var(--border));
-    box-shadow: 0 0 22px color-mix(in srgb, var(--neon) var(--g2), transparent);
+    border-radius: var(--radius); border: 1px solid var(--border);
+    box-shadow: var(--shadow);
     z-index: 20; transition: none; padding-bottom: 0;
   }
   .cart-close { display: none; }
@@ -825,21 +800,21 @@ input:disabled { opacity: .5; }
 }
 .print-a4 .a4-head {
   display: flex; justify-content: space-between; align-items: flex-end; gap: 16px;
-  padding-bottom: 8px; margin-bottom: 12px; border-bottom: 3px solid #1e2a44;
+  padding-bottom: 8px; margin-bottom: 12px; border-bottom: 3px solid #35203d;
 }
-.print-a4 .a4-store { font-size: 15pt; font-weight: 800; color: #1e2a44; }
+.print-a4 .a4-store { font-size: 15pt; font-weight: 800; color: #35203d; }
 .print-a4 .a4-addr { font-size: 8.5pt; color: #555; margin-top: 2px; }
 .print-a4 .a4-title { text-align: right; }
-.print-a4 .a4-title h1 { font-size: 14pt; margin: 0; color: #c0442f; }
+.print-a4 .a4-title h1 { font-size: 14pt; margin: 0; color: #8c6529; }
 .print-a4 .a4-title div { font-size: 9pt; color: #333; }
-.print-a4 h2 { font-size: 10.5pt; margin: 12px 0 4px; color: #1e2a44; text-transform: uppercase; letter-spacing: .04em; }
+.print-a4 h2 { font-size: 10.5pt; margin: 12px 0 4px; color: #35203d; text-transform: uppercase; letter-spacing: .04em; }
 .print-a4 table { width: 100%; border-collapse: collapse; }
-.print-a4 th { text-align: left; font-size: 8.5pt; color: #555; font-weight: 700; border-bottom: 1.5px solid #1e2a44; padding: 3px 4px; }
+.print-a4 th { text-align: left; font-size: 8.5pt; color: #555; font-weight: 700; border-bottom: 1.5px solid #35203d; padding: 3px 4px; }
 .print-a4 td { padding: 3px 4px; border-bottom: 0.5px solid #d6d9e0; vertical-align: top; }
 .print-a4 .r { text-align: right; white-space: nowrap; }
 .print-a4 .m { color: #0b6b34; font-weight: 600; font-variant-numeric: tabular-nums; }
 .print-a4 .m.neg { color: #b42318; }
-.print-a4 tr.tot td { border-top: 1.5px solid #1e2a44; border-bottom: 0; font-weight: 800; }
+.print-a4 tr.tot td { border-top: 1.5px solid #35203d; border-bottom: 0; font-weight: 800; }
 .print-a4 tr.refund td { background: #fdf0ee; }
 .print-a4 tr.low td { background: #fdf5e4; }
 .print-a4 tr.first td { border-top: 1px solid #b9c0cc; }
@@ -896,19 +871,19 @@ input:disabled { opacity: .5; }
 /* ----- Empty cart: logo, hint, today's sales, parked shortcut ----- */
 .cart-welcome { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 36px 12px 24px; color: var(--muted); }
 .cart-welcome img { border-radius: 16px; opacity: .9; margin-bottom: 6px;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--neon) 35%, transparent), 0 0 26px color-mix(in srgb, var(--neon) 22%, transparent); }
-.cart-welcome .cw-title { font-size: 18px; font-weight: 800; color: var(--text); }
+  box-shadow: none; }
+.cart-welcome .cw-title { font-size: 19px; font-weight: 600; color: var(--text); }
 .cart-welcome .cw-hint { font-size: 13px; max-width: 240px; }
 .cart-welcome .cw-stat { margin-top: 10px; font-size: 13px; font-weight: 650; padding: 5px 12px; border-radius: 99px; background: var(--surface-2); color: var(--text); }
 .cart-welcome .cw-stat .money { color: var(--money); }
 .cart-welcome .cw-parked { margin-top: 6px; }
 
-/* ----- Cash / Card / EFT: one style for all three, the chosen one lit up ----- */
-.seg.pay button[data-pay] { --c: var(--neon); --ci: var(--pay-ink); }
+/* ----- Cash / Card / EFT: one style for all three, icons ----- */
+
 .seg.pay button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
-.seg.pay button:not(.on) { color: var(--text); border-color: color-mix(in srgb, var(--neon) 40%, var(--border)); box-shadow: none; }
+.seg.pay button:not(.on) { color: var(--text); border-color: var(--line); box-shadow: none; }
 .seg.pay .pay-ico { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.quick-cash button { border-color: color-mix(in srgb, var(--neon) 55%, var(--border)) !important; box-shadow: none; }
+.quick-cash button { border-color: var(--line); box-shadow: none; }
 
 /* ----- Charge: clearly switched off until there is something to charge ----- */
 #chargeBtn:disabled { opacity: 1; background: transparent; color: var(--muted); border: 1.5px dashed var(--border); box-shadow: none; font-weight: 600; }
@@ -932,11 +907,11 @@ input:disabled { opacity: .5; }
 /* ----- Sale complete ----- */
 .sold-hero { text-align: center; padding: 6px 0 14px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .sold-tick { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 60%, transparent), 0 0 26px color-mix(in srgb, var(--ok) 30%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 60%, transparent);
   animation: sold-pop .35s ease-out; }
 .sold-tick svg { width: 34px; height: 34px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
 @keyframes sold-pop { from { transform: scale(.6); opacity: 0; } to { transform: none; opacity: 1; } }
-.sold-title { font-size: 22px; font-weight: 800; }
+.sold-title { font-size: 24px; font-weight: 600; }
 .sold-sub { color: var(--muted); font-size: 14px; }
 .sold-sub .money { color: var(--text); font-weight: 700; }
 .sold-change { margin-top: 10px; width: 100%; max-width: 340px; padding: 12px 16px; border-radius: 14px; background: var(--surface-2);
@@ -945,7 +920,7 @@ input:disabled { opacity: .5; }
 .sold-change strong { font-size: 40px; line-height: 1.1; font-weight: 900; color: var(--money); }
 .sold-nochange { margin-top: 6px; font-weight: 650; color: var(--muted); }
 .sold-receipt { margin: 4px 0 6px; }
-.sold-receipt summary { cursor: pointer; text-align: center; font-weight: 650; color: var(--neon); padding: 6px; list-style: none; }
+.sold-receipt summary { cursor: pointer; text-align: center; font-weight: 650; color: var(--accent-text); padding: 6px; list-style: none; }
 .sold-receipt summary::-webkit-details-marker { display: none; }
 .sold-receipt summary::after { content: " ▾"; }
 .sold-receipt[open] summary::after { content: " ▴"; }
@@ -966,20 +941,20 @@ input:disabled { opacity: .5; }
 .chart-notes .dot.best { background: var(--money-bar); }
 .chart-notes .dot.quiet { background: color-mix(in srgb, var(--money-bar) 55%, var(--surface-2)); }
 .chart-notes .dot.avg { height: 0; border-top: 2px dashed color-mix(in srgb, var(--text) 55%, transparent); border-radius: 0; vertical-align: 3px; }
-#view-reports .bar-fill.best { background: var(--accent); box-shadow: 0 0 10px color-mix(in srgb, var(--accent) var(--g1), transparent); }
-.cat-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px; background: var(--cat, var(--accent)); vertical-align: 0; box-shadow: 0 0 6px color-mix(in srgb, var(--cat, var(--accent)) 50%, transparent); }
+#view-reports .bar-fill.best { background: var(--mark-line); }
+.cat-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px; background: var(--cat-ui, var(--accent)); vertical-align: 0; }
 .cat-rows { display: flex; flex-direction: column; gap: 12px; }
 .cat-row { display: flex; flex-direction: column; gap: 5px; }
 .cat-row-top { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
-#view-reports .cat-row .bar-fill { background: var(--cat); box-shadow: 0 0 8px color-mix(in srgb, var(--cat) 45%, transparent); }
-.stock-kpis .kpi { border-top-color: var(--neon) !important; box-shadow: 0 -4px 16px -6px color-mix(in srgb, var(--neon) var(--g1), transparent) !important; }
-#view-reports .kpi .value.money.warn { color: var(--warn); text-shadow: none; }
+#view-reports .cat-row .bar-fill { background: var(--cat-ui); }
+
+#view-reports .kpi .value.money.warn { color: var(--warn); }
 .slow-why { color: var(--warn); font-weight: 600; }
 .good-news { color: var(--ok); font-weight: 650; padding: 6px 2px; }
 .size-mix { margin-bottom: 14px; }
 .size-mix-head { font-size: 14px; margin-bottom: 6px; }
 .size-stack { display: flex; height: 10px; border-radius: 99px; overflow: hidden; gap: 2px; margin-bottom: 7px; }
-.size-stack span { background: var(--cat); }
+.size-stack span { background: var(--cat-ui); }
 .size-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .size-chip { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--surface-2); color: var(--muted); }
 .size-chip b { color: var(--text); margin-right: 3px; }

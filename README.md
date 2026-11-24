@@ -8,7 +8,7 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - Search by name or SKU. A barcode scanner works too: it types the SKU and presses Enter, and the item is added.
   - Pick size and colour, change quantities, give a discount in rand or percent, and take cash, card or EFT with change worked out.
   - You can't sell more than is in stock.
-  - Product tiles have a colour and a clothing icon per category, and say "58 in stock", "Only 2 left" or "Out of stock".
+  - Product tiles show the photo, or a clothing icon in a soft colour per category, and say "58 in stock", "Only 2 left" or "Out of stock".
   - The empty cart shows today's sales (the rand total only for staff who may see reports) and any parked sales.
   - After charging, a **Sale complete** screen shows the change due in large numbers, with Print, WhatsApp, Email, Copy and New sale.
 - **Tax-correct slips**
@@ -104,7 +104,7 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - You can't delete yourself, and there is always at least one user with Admin access.
   - This keeps staff and customers out of the till. It is not copy protection: a licence check needs a server (see *What to build next*).
 - **Usable by everyone**
-  - A neon look (dark background, glowing yellow, green, cyan and pink). Cash, Card and EFT each have their own neon colour. A Light look for bright sunlight is in Settings → Appearance.
+  - A boutique look: pearl and plum with champagne, serif headings, and product tiles with room for a photo. A Dark look (aubergine and champagne) is in Settings → Appearance.
   - Keyboard and screen-reader friendly dialogs.
   - Colours checked for WCAG AA contrast.
 
