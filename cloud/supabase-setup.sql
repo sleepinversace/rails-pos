@@ -28,8 +28,17 @@ create table if not exists public.shops (
 
 -- Licences: a new shop gets a 30-day free trial. Only YOU (in the Supabase
 -- dashboard / SQL editor) can change active_until — shops cannot.
-alter table public.shops alter column active_until set default (current_date + 30);
+alter table public.shops alter column active_until set default ((now() at time zone 'Africa/Johannesburg')::date + 30);
 create unique index if not exists shops_one_per_owner on public.shops (owner); -- one shop per login
+
+-- Today's date in South Africa. The database's own clock is UTC, two hours behind, so its
+-- "current_date" is still yesterday between 00:00 and 02:00 SA time. The functions below use this.
+create or replace function public.sa_today() returns date
+language sql stable set search_path = public as $$
+  select (now() at time zone 'Africa/Johannesburg')::date
+$$;
+revoke execute on function public.sa_today() from public, anon;
+grant execute on function public.sa_today() to authenticated;
 
 create sequence if not exists public.records_seq;
 
@@ -265,7 +274,7 @@ language plpgsql security definer set search_path = public as $$
 declare old date; new_date date;
 begin
   perform public.vendor_check();
-  if p_paid_on is null or p_paid_on > current_date then raise exception 'The payment date can''t be in the future'; end if;
+  if p_paid_on is null or p_paid_on > public.sa_today() then raise exception 'The payment date can''t be in the future'; end if;
   if p_months is null or p_months < 1 or p_months > 24 then raise exception 'Months must be 1 to 24'; end if;
   if p_amount_cents is null or p_amount_cents < 0 then raise exception 'Enter the amount paid'; end if;
   select active_until into old from public.shops where id = p_shop for update;
@@ -289,9 +298,9 @@ language plpgsql security definer set search_path = public as $$
 declare old date;
 begin
   perform public.vendor_check();
-  if p_paid_on is null or p_paid_on > current_date then raise exception 'The payment date can''t be in the future'; end if;
+  if p_paid_on is null or p_paid_on > public.sa_today() then raise exception 'The payment date can''t be in the future'; end if;
   if p_until is null or p_until < p_paid_on then raise exception 'Paid until must be on or after the payment date'; end if;
-  if p_until > current_date + interval '5 years' then raise exception 'Paid until can''t be more than 5 years ahead'; end if;
+  if p_until > public.sa_today() + interval '5 years' then raise exception 'Paid until can''t be more than 5 years ahead'; end if;
   if p_amount_cents is null or p_amount_cents < 0 then raise exception 'Enter the amount paid'; end if;
   select active_until into old from public.shops where id = p_shop for update;
   if not found then raise exception 'Shop not found'; end if;
@@ -356,7 +365,7 @@ begin
   if p_months is null or p_months < 1 or p_months > 24 then raise exception 'Months must be 1 to 24'; end if;
   select active_until into old from public.shops where id = p_shop for update;
   if not found then raise exception 'Shop not found'; end if;
-  new_date := (greatest(coalesce(old, current_date), current_date) + make_interval(months => p_months))::date;
+  new_date := (greatest(coalesce(old, public.sa_today()), public.sa_today()) + make_interval(months => p_months))::date;
   update public.shops set active_until = new_date, plan = 'paid' where id = p_shop;
   insert into public.vendor_audit (admin_id, shop_id, action, old_until, new_until)
     values (auth.uid(), p_shop, '+' || p_months || ' month' || case when p_months > 1 then 's' else '' end, old, new_date);
@@ -427,7 +436,7 @@ begin
   if s.plan <> 'paid' then raise exception 'The free trial starts once your monthly Rails POS subscription is active'; end if;
   if s.profit_trial_until is not null then raise exception 'The free trial has already been used'; end if;
   if s.profit_paid then raise exception 'Profit checker is already on'; end if;
-  d := current_date + 14;
+  d := public.sa_today() + 14;
   update public.shops set profit_trial_until = d where id = p_shop;
   insert into public.vendor_audit (admin_id, shop_id, action, old_until, new_until)
     values (auth.uid(), p_shop, 'Profit checker: shop started 14-day trial', null, d);
@@ -444,7 +453,7 @@ begin
   perform public.vendor_check();
   select * into s from public.shops where id = p_shop for update;
   if not found then raise exception 'Shop not found'; end if;
-  if p_until is not null and p_until > current_date + interval '5 years' then raise exception 'Paid until can''t be more than 5 years ahead'; end if;
+  if p_until is not null and p_until > public.sa_today() + interval '5 years' then raise exception 'Paid until can''t be more than 5 years ahead'; end if;
   update public.shops set profit_trial_until = p_trial_until, profit_paid = coalesce(p_paid, false),
     profit_until = case when coalesce(p_paid, false) then p_until else null end,
     profit_blocked = coalesce(p_blocked, false)
@@ -476,7 +485,7 @@ begin
            s.deactivated, s.deactivated_reason,
            (select coalesce(sum(p.amount_cents), 0) from public.vendor_payments p where p.shop_id = s.id)::bigint,
            (select coalesce(sum(p.amount_cents), 0) from public.vendor_payments p
-             where p.shop_id = s.id and date_trunc('month', p.paid_on) = date_trunc('month', current_date))::bigint,
+             where p.shop_id = s.id and date_trunc('month', p.paid_on) = date_trunc('month', public.sa_today()))::bigint,
            (select max(p.paid_on) from public.vendor_payments p where p.shop_id = s.id),
            (select count(distinct r.device) from public.records r
              where r.shop_id = s.id and r.device is not null and r.updated_at > now() - interval '30 days')::int,

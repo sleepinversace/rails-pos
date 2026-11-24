@@ -1343,6 +1343,7 @@ function fakeCloud() {
       }
     }
     // Supplier admin functions (the real checks live in supabase-setup.sql)
+    const saToday = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Africa/Johannesburg' }); // sa_today(): South African date, not UTC
     if (p.startsWith('/rest/v1/rpc/vendor_')) {
       const fn = p.slice('/rest/v1/rpc/'.length);
       if (fn === 'vendor_whoami') return json({ admin: db.admins.has(userId), aal: aal2 ? 'aal2' : 'aal1' });
@@ -1382,7 +1383,7 @@ function fakeCloud() {
         return json(body.p_active);
       }
       if (fn === 'vendor_record_payment_until') {
-        if (body.p_paid_on > new Date().toISOString().slice(0, 10)) return json({ message: 'The payment date can\'t be in the future' }, 400);
+        if (body.p_paid_on > saToday()) return json({ message: 'The payment date can\'t be in the future' }, 400);
         if (body.p_until < body.p_paid_on) return json({ message: 'Paid until must be on or after the payment date' }, 400);
         shop.active_until = body.p_until; shop.plan = 'paid';
         db.payments.push({ id: db.payments.length + 1, shop_id: shop.id, paid_on: body.p_paid_on, paid_until: body.p_until, amount_cents: body.p_amount_cents, months: null, method: body.p_method, note: body.p_note });
@@ -1728,6 +1729,10 @@ test('Supplier admin page: shop logins refused; admin signs in with password; re
   ok($('#shopList') && $('#shopList').textContent.includes('owner@example.test'), 'dashboard lists the shop with its login email');
   ok(!$('#shopList img') && $('#shopList').innerHTML.includes('&lt;img'), 'shop name shown as text, not run as HTML');
   ok(!$('[data-act="add"]'), 'no "+1 month" button any more');
+  // Dates in the database follow South Africa, not UTC (which is still yesterday from 00:00 to 02:00, so today's payment was refused)
+  const sql = await (await fetch('cloud/supabase-setup.sql', { cache: 'no-store' })).text();
+  const code = sql.split('\n').map(l => l.replace(/--.*$/, '')).join('\n');
+  ok(!/current_date/i.test(code) && (code.match(/p_paid_on > public\.sa_today\(\)/g) || []).length === 2, 'payment dates use sa_today()');
   // v42: the email paused tills ask for proof of payment at — typed here, saved in the database (not the code)
   const sf = $('#supportForm');
   ok(sf, 'message-on-paused-tills card');

@@ -17,6 +17,13 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## Cloud database — 2026-11-25 · South African dates (no app update) 🗄️
+
+- 🐞 **A payment dated today was refused between midnight and 02:00.** The database's clock is two hours behind South Africa, so until 02:00 it thought today's date was in the future. Payments, the "paid this month" total, new shops' 30 days and the Profit checker trial now all follow the South African date.
+- 🗄️ Needs the Supabase SQL file re-run (new `sa_today()` function). The app files haven't changed, so tills don't update.
+
+---
+
 ## v43 — 2026-11-25 · Boutique look: Atelier (light) and Evening (dark)
 
 - ✨ **A new look made for clothing shops.** The neon colours are gone. The till now uses the same plum, pearl and champagne as the Rails POS website, with elegant serif headings and one main colour instead of four. No glow and no pulsing Charge button.
