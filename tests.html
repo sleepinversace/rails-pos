@@ -158,11 +158,11 @@ test('First run loads 8 demo products and sample sales', async () => {
   eq(P.state.products.length, 8, 'products');
   ok(P.state.sales.length > 0, 'has demo sales');
   eq(P.state.meta.demo, true, 'demo flag');
-  ok($('#banners').textContent.includes('Demo data'), 'demo banner shown');
+  ok(P.state.meta.demo && !$('#banners').textContent.includes('Demo data'), 'no demo banner (Start fresh is in Settings)');
 });
 
 test('Start fresh empties the shop', async () => {
-  click('#banners [data-action="start-fresh"]'); await confirmYes();
+  await nav('settings'); click('#view-settings [data-action="start-fresh"]'); await confirmYes();
   eq([P.state.products.length, P.state.sales.length, P.state.meta.nextReceiptNo, P.state.meta.demo], [0, 0, 1, false], 'counts');
 });
 

@@ -17,6 +17,13 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v44 — 2026-11-25 · Buttons with more depth; no demo banner
+
+- 🔧 **Every button has more to it:** a satin face, a soft shadow and champagne piping on the main ones (Charge, chosen options). They rise when you point at them and sink when pressed. Park, Clear, Remove and the close button now look like buttons, the open screen in the menu has a filled icon, and product tiles, sales and clients lift too. Same in Light and Dark.
+- 🔧 The "Demo data … Start fresh" message no longer shows at the top of the screen. **Start fresh** is still in Settings.
+
+---
+
 ## Cloud database — 2026-11-25 · South African dates (no app update) 🗄️
 
 - 🐞 **A payment dated today was refused between midnight and 02:00.** The database's clock is two hours behind South Africa, so until 02:00 it thought today's date was in the future. Payments, the "paid this month" total, new shops' 30 days and the Profit checker trial now all follow the South African date.

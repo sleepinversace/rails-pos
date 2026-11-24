@@ -40,6 +40,14 @@
   --money-bar: #5a2f66;   /* chart bars */
   --cat-keep: 100%;
   --tint: 13%;
+  /* Buttons: the face (top to bottom), the main button, its champagne piping, and shadows at rest / raised */
+  --face: linear-gradient(180deg, #ffffff, #f4edf3);
+  --face-main: linear-gradient(180deg, #56346a, #331d3c 62%, #2c1934);
+  --main-edge: #2c1934;
+  --piping: rgba(230,201,143,.42);
+  --lift: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 2px rgba(42,26,47,.10), 0 3px 8px -3px rgba(42,26,47,.18);
+  --lift-main: 0 2px 4px rgba(42,26,47,.22), 0 8px 18px -8px rgba(42,26,47,.55);
+  --lift-hover: 0 2px 4px rgba(42,26,47,.14), 0 10px 20px -8px rgba(42,26,47,.36);
   --shadow-sm: none;
   --shadow: 0 1px 2px rgba(42,26,47,.06), 0 18px 40px -24px rgba(42,26,47,.38);
   --radius: 12px;
@@ -80,6 +88,13 @@
   --ok-soft: #1b3329;
   --money: #8fd0ae;
   --money-bar: #c9a868;
+  --face: linear-gradient(180deg, #3a2a3f, #291d2d);
+  --face-main: linear-gradient(180deg, #f5e1b8, #e0bf82 62%, #d6b374);
+  --main-edge: #c9a563;
+  --piping: rgba(255,255,255,.38);
+  --lift: inset 0 1px 0 rgba(255,255,255,.07), 0 1px 2px rgba(0,0,0,.4), 0 4px 10px -4px rgba(0,0,0,.55);
+  --lift-main: 0 2px 4px rgba(0,0,0,.4), 0 8px 18px -8px rgba(0,0,0,.7);
+  --lift-hover: inset 0 1px 0 rgba(255,255,255,.1), 0 3px 6px rgba(0,0,0,.45), 0 12px 22px -8px rgba(0,0,0,.7);
   --cat-keep: 62%;
   --tint: 30%;
   --shadow: 0 1px 3px rgba(0,0,0,.5), 0 16px 36px rgba(0,0,0,.45);
@@ -406,7 +421,6 @@ label.field > span { display: block; font-size: 13px; font-weight: 600; color: v
 .cart-foot { border-top: 1px solid var(--border); padding: 10px 16px 12px; display: flex; flex-direction: column; gap: 8px; }
 .cash-row { display: flex; flex-direction: column; gap: 6px; }
 .quick-cash { display: flex; gap: 6px; }
-.quick-cash button { border-color: var(--line); box-shadow: none; }
 .totals { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-size: 14px; }
 .totals .grand { font-size: 22px; font-weight: 800; letter-spacing: -.01em; }
 .totals .change { color: var(--ok); font-weight: 700; }
@@ -730,7 +744,59 @@ h1, h2, h3, .sold-title, .cart-welcome .cw-title { font-family: var(--serif); fo
 :root[data-theme="dark"] .signin-box { border-color: var(--border); }
 .signin-box h1 { font-size: 25px; }
 
-@media (prefers-reduced-motion: reduce) {
+@media/* ----- Buttons (v44): a satin face, a soft shadow to lift them off the page, and
+   champagne piping on the main ones. They rise on hover and sink when pressed. ----- */
+.btn, .seg button, .chip, .opt, .stepper button, .cart-bar-go { transition: transform .12s, box-shadow .15s, background-color .15s, border-color .15s, filter .15s; }
+.btn:not(.primary):not(.danger):not(.ghost), .seg button, .chip, .opt {
+  background: var(--face); border-color: var(--line); box-shadow: var(--lift); font-weight: 650;
+}
+.btn { border-radius: 12px; }
+.btn.primary, .seg button.on, .chip.on, .opt.on {
+  background: var(--face-main); color: var(--accent-ink); border-color: var(--main-edge);
+  box-shadow: inset 0 0 0 1px var(--piping), var(--lift-main);
+}
+.btn.danger:not(.solid) { background: var(--face); box-shadow: var(--lift); }
+.btn.danger.solid { box-shadow: inset 0 1px 0 rgba(255,255,255,.22), var(--lift-main); }
+/* Quiet buttons (Park, Clear, Remove, close): a light face, so they read as buttons */
+.btn.ghost { background: color-mix(in srgb, var(--accent-text) 8%, transparent); }
+.app-header .btn.ghost { background: rgba(255,255,255,.08); border-color: color-mix(in srgb, var(--mark) 38%, transparent); }
+
+@media (hover: hover) {
+  .btn:not(:disabled):hover, .seg button:not(:disabled):hover, .opt:not(:disabled):hover { transform: translateY(-1px); }
+  .btn:not(.primary):not(.danger):not(.ghost):not(:disabled):hover, .seg button:not(.on):hover, .chip:not(.on):hover, .opt:not(.on):not(:disabled):hover {
+    border-color: var(--mark-line); box-shadow: var(--lift-hover);
+  }
+  .btn.primary:not(:disabled):hover, .seg button.on:hover, .chip.on:hover, .opt.on:hover {
+    background: var(--face-main); border-color: var(--main-edge); filter: brightness(1.1);
+    box-shadow: inset 0 0 0 1px var(--piping), var(--lift-hover);
+  }
+  .btn.ghost:not(:disabled):hover { background: color-mix(in srgb, var(--accent-text) 15%, transparent); }
+  .app-header .btn.ghost:not(:disabled):hover { background: rgba(255,255,255,.16); }
+  .stepper button:hover { filter: brightness(.96); }
+}
+/* Pressed (fingers too): the button sinks in */
+.btn:not(:disabled):not(#_):active, .seg button:not(:disabled):active, .chip:active, .opt:not(:disabled):active {
+  transform: translateY(1px) scale(.985); box-shadow: inset 0 2px 5px rgba(20,10,24,.28); filter: none;
+}
+.btn:disabled:disabled:disabled, .opt:disabled { box-shadow: none; transform: none; }
+
+.stepper { box-shadow: var(--lift); background: var(--surface); }
+.stepper button { background: var(--face); color: var(--accent-text); }
+.stepper button:active { box-shadow: inset 0 2px 5px rgba(20,10,24,.25); }
+.cart-bar-go { box-shadow: inset 0 1px 0 rgba(255,255,255,.55), 0 2px 6px rgba(0,0,0,.28); }
+.seg.pay button { border-radius: 12px; }
+#chargeBtn:not(:disabled) { min-height: 56px; border-radius: 14px; }
+
+/* Things you tap that are not buttons in looks: tiles, rows and the menu */
+.product-card { box-shadow: var(--lift); }
+.product-card:hover { transform: translateY(-2px); }
+.product-card:active { transform: translateY(1px); box-shadow: none; }
+.sale-row, .cust-row { box-shadow: var(--lift); transition: border-color .15s, box-shadow .15s; }
+.sale-row:hover, .cust-row:hover { border-color: var(--mark-line); box-shadow: var(--lift-hover); }
+.app-nav button .ico { box-sizing: border-box; width: 42px; height: 30px; padding: 4px 10px; border-radius: 10px; }
+.app-nav button.active .ico { color: var(--accent-ink); background: var(--face-main); box-shadow: inset 0 0 0 1px var(--piping), var(--lift); }
+
+ (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
 
@@ -881,9 +947,8 @@ h1, h2, h3, .sold-title, .cart-welcome .cw-title { font-family: var(--serif); fo
 /* ----- Cash / Card / EFT: one style for all three, icons ----- */
 
 .seg.pay button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
-.seg.pay button:not(.on) { color: var(--text); border-color: var(--line); box-shadow: none; }
+.seg.pay button:not(.on) { color: var(--text); border-color: var(--line); }
 .seg.pay .pay-ico { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.quick-cash button { border-color: var(--line); box-shadow: none; }
 
 /* ----- Charge: clearly switched off until there is something to charge ----- */
 #chargeBtn:disabled { opacity: 1; background: transparent; color: var(--muted); border: 1.5px dashed var(--border); box-shadow: none; font-weight: 600; }

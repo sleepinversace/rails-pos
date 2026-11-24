@@ -2212,10 +2212,6 @@ function renderBanners() {
     html += `<div class="banner info"><p><strong>A new version is ready.</strong> Reload to start using it — your data is kept.</p>
       <button class="btn sm primary" data-action="apply-update">Reload now</button></div>`;
   }
-  if (state.meta.demo) {
-    html += `<div class="banner info"><p><strong>Demo data.</strong> These products and sales are samples to try things out.</p>
-      ${can('settings') ? '<button class="btn sm primary" data-action="start-fresh">Start fresh</button>' : ''}</div>`;
-  }
   if (cloudOn() && Cloud.status === 'signedout') {
     html += `<div class="banner"><p><strong>Cloud sync has stopped.</strong> Sign in again so this device's sales reach your other devices.</p>
       ${can('settings') ? '<button class="btn sm primary" data-action="go-settings">Sign in</button>' : ''}</div>`;
