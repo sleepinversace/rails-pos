@@ -104,7 +104,7 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - You can't delete yourself, and there is always at least one user with Admin access.
   - This keeps staff and customers out of the till. It is not copy protection: a licence check needs a server (see *What to build next*).
 - **Usable by everyone**
-  - A boutique look: pearl and plum with champagne, serif headings, and product tiles with room for a photo. A Dark look (aubergine and champagne) is in Settings → Appearance.
+  - A boutique look: soft blush with black buttons and rose edges, serif headings, raised buttons, and product tiles with room for a photo. A Dark look (near-black with rose buttons) is in Settings → Appearance.
   - Keyboard and screen-reader friendly dialogs.
   - Colours checked for WCAG AA contrast.
 
