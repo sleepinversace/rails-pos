@@ -264,7 +264,7 @@ const DEFAULT_SETTINGS = {
   returnDays: 7,            // return / exchange period in days (0 = no limit); a warning only
   ownerWhatsApp: '',        // owner's number for the daily summary
   pettyCategories: 'Cleaning, Refreshments, Transport, Stationery, Wages, Other',
-  theme: 'light',           // light (Atelier) | dark (Evening); older shops may have 'auto', which means light
+  theme: 'light',           // light (Atelier) | dark (Black and rose); older shops may have 'auto', which means light
   lastBackupAt: null,
   // PLUG-IN: multiple branches — add storeId / branchName here and stamp it on each sale.
 };
@@ -2235,7 +2235,7 @@ function setPressed(selector, isOn) {
 /* ===== 13. Views ======================================================== */
 
 /* The two looks (Settings → Appearance): light (Atelier, the default; 'auto' from older
-   versions means light) and dark (Evening). The choice is also kept in localStorage so
+   versions means light) and dark (Black and rose). The choice is also kept in localStorage so
    index.html can set it before the first paint (no white flash on a dark till). */
 const THEME_KEY = DB_NAME + '-theme';
 const themeName = () => (state.settings.theme === 'dark' ? 'dark' : 'light');
@@ -2243,7 +2243,7 @@ function applyTheme() {
   const t = themeName();
   document.documentElement.dataset.theme = t;
   const bar = $('meta[name="theme-color"]');
-  if (bar) bar.content = t === 'dark' ? '#120c14' : '#35203d';
+  if (bar) bar.content = t === 'dark' ? '#0c0b0d' : '#35203d';
   try { localStorage.setItem(THEME_KEY, t); } catch { /* private mode */ }
 }
 

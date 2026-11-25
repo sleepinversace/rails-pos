@@ -39,6 +39,7 @@
   --money: #22694a;       /* rand amounts in reports */
   --money-bar: #5a2f66;   /* chart bars */
   --cat-keep: 100%;
+  --panel: var(--surface);
   --tint: 13%;
   /* Buttons: the face (top to bottom), the main button, its champagne piping, and shadows at rest / raised */
   --face: linear-gradient(180deg, #ffffff, #f4edf3);
@@ -60,43 +61,46 @@
   color-scheme: light;
 }
 
-/* EVENING (Settings, Appearance, Dark): aubergine with champagne buttons. */
+/* BLACK AND ROSE (Settings, Appearance, Dark): near-black with soft rose buttons. Danger is a
+   clear red, so it can't be mistaken for the rose. */
 :root[data-theme="dark"] {
-  --bg: #171019;
-  --surface: #211724;
-  --surface-2: #2d2031;
-  --text: #f7f0f4;
-  --muted: #bcaabd;
-  --border: #423147;
-  --line: #5a4760;
-  --brand: #120c14;
-  --brand-ink: #f7f0f4;
-  --brand-muted: #bcaabd;
-  --accent: #e6c98f;
-  --accent-hover: #f0d8a6;
-  --accent-ink: #2a1a2f;
-  --accent-text: #e6c98f;
-  --accent-soft: #33281f;
-  --mark: #e6c98f;
-  --mark-line: #e6c98f;
-  --danger: #f08a9c;
-  --danger-ink: #2a0d16;
-  --danger-soft: #42182a;
+  --bg: #121113;
+  --surface: #1b191c;
+  --surface-2: #272428;
+  --text: #f8f3f4;
+  --muted: #b8aeb1;
+  --border: #332e31;
+  --line: #494246;
+  --brand: #0c0b0d;
+  --brand-ink: #f8f3f4;
+  --brand-muted: #b8aeb1;
+  --accent: #e9b8bf;
+  --accent-hover: #f3cfd4;
+  --accent-ink: #34161d;
+  --accent-text: #eec3c9;
+  --accent-soft: #33242a;
+  --mark: #eec3c9;
+  --mark-ink: #34161d;
+  --mark-line: #e9b8bf;
+  --danger: #ff7b72;
+  --danger-ink: #2b0706;
+  --danger-soft: #451917;
   --warn: #e6b877;
-  --warn-soft: #3c2a18;
+  --warn-soft: #3a2b17;
   --ok: #8fd0ae;
-  --ok-soft: #1b3329;
+  --ok-soft: #1a3328;
   --money: #8fd0ae;
-  --money-bar: #c9a868;
-  --face: linear-gradient(180deg, #3a2a3f, #291d2d);
-  --face-main: linear-gradient(180deg, #f5e1b8, #e0bf82 62%, #d6b374);
-  --main-edge: #c9a563;
-  --piping: rgba(255,255,255,.38);
+  --money-bar: #d99aa5;
+  --face: linear-gradient(180deg, #302c31, #232024);
+  --face-main: linear-gradient(180deg, #f6d5d9, #e6b1b9 62%, #dca2ab);
+  --main-edge: #cf929c;
+  --piping: rgba(255,255,255,.4);
   --lift: inset 0 1px 0 rgba(255,255,255,.07), 0 1px 2px rgba(0,0,0,.4), 0 4px 10px -4px rgba(0,0,0,.55);
   --lift-main: 0 2px 4px rgba(0,0,0,.4), 0 8px 18px -8px rgba(0,0,0,.7);
   --lift-hover: inset 0 1px 0 rgba(255,255,255,.1), 0 3px 6px rgba(0,0,0,.45), 0 12px 22px -8px rgba(0,0,0,.7);
-  --cat-keep: 62%;
-  --tint: 30%;
+  --cat-keep: 58%;
+  --panel: #262327;       /* one clean shade behind the garment icon; the icon keeps the colour */
+  --tint: 0%;
   --shadow: 0 1px 3px rgba(0,0,0,.5), 0 16px 36px rgba(0,0,0,.45);
   color-scheme: dark;
 }
@@ -688,7 +692,7 @@ h1, h2, h3, .sold-title, .cart-welcome .cw-title { font-family: var(--serif); fo
 .chip, .opt { border-color: var(--line); }
 .opt.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); box-shadow: none; }
 
-/* Category colours are soft fabric shades; the dark look lightens them a little */
+/* Category colours are soft fabric shades; the dark look lightens them */
 [style*="--cat"] { --cat-ui: color-mix(in srgb, var(--cat) var(--cat-keep), #fff); }
 
 /* Product tiles: the garment (photo or icon) on top, name and price below */
@@ -700,7 +704,7 @@ h1, h2, h3, .sold-title, .cart-welcome .cw-title { font-family: var(--serif); fo
   position: static; flex: none; width: auto; height: 118px; margin: 0 -13px 9px; border-radius: 0;
 }
 .product-card .thumb { display: block; width: calc(100% + 26px); max-width: none; object-position: 50% 30%; }
-.product-card .cat-icon { color: var(--cat-ui); background: color-mix(in srgb, var(--cat) var(--tint), var(--surface)); }
+.product-card .cat-icon { color: var(--cat-ui); background: color-mix(in srgb, var(--cat) var(--tint), var(--panel)); }
 .product-card .cat-icon svg { width: 46px; height: 46px; stroke-width: 1.15; }
 .product-card .name, .product-card .cat,
 .product-card.has-photo .name, .product-card.has-photo .cat { padding-right: 0; }
@@ -739,7 +743,7 @@ h1, h2, h3, .sold-title, .cart-welcome .cw-title { font-family: var(--serif); fo
 :root[data-theme="dark"] .signin {
   background:
     radial-gradient(760px 460px at 88% 0%, rgba(196,106,133,.18), transparent 62%),
-    linear-gradient(160deg, #120c14, #211724);
+    linear-gradient(160deg, #0c0b0d, #201b1f);
 }
 .signin-box { border-color: transparent; box-shadow: 0 40px 80px -30px rgba(0,0,0,.6); }
 :root[data-theme="dark"] .signin-box { border-color: var(--border); }

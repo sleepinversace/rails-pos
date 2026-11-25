@@ -17,6 +17,14 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v46 — 2026-11-25 · New dark look: Black and rose
+
+- 🔧 **Dark is now near-black with soft rose buttons** (Settings → Shop floor → Appearance → Dark). The brown-purple and champagne dark look is gone. Light is unchanged.
+- 🔧 In Dark, product tiles have one clean panel and the clothing icon keeps the category colour (the panels used to look brown and olive).
+- 🔧 Warnings, refunds and losses in Dark are a clearer red, so they stand apart from the rose.
+
+---
+
 ## v45 — 2026-11-25 · Activity log fits on phones
 
 - 🐞 On a phone, long lines in **Admin → Activity log** ran off the right edge and made the whole page too wide. They now wrap. (An older problem, from before the new look.)
