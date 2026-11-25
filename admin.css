@@ -37,17 +37,17 @@
 /* ----- Invoices and receipts (printed on A4 from this page) ----- */
 @page { size: A4; margin: 16mm 15mm; }
 .inv { color: #111; font: 10.5pt/1.45 "Segoe UI", system-ui, Arial, sans-serif; }
-.inv .inv-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; border-bottom: 3px solid #35203d; padding-bottom: 10px; margin-bottom: 18px; }
+.inv .inv-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; border-bottom: 3px solid #1b191c; padding-bottom: 10px; margin-bottom: 18px; }
 .inv .inv-brand { font-size: 20pt; font-weight: 800; }
 .inv .inv-title { text-align: right; }
 .inv .inv-title h1 { font-size: 18pt; margin: 0 0 4px; letter-spacing: .04em; }
 .inv h2 { font-size: 9pt; text-transform: uppercase; letter-spacing: .06em; color: #555; margin: 0 0 4px; }
 .inv .inv-to { margin-bottom: 16px; }
 .inv .inv-lines { width: 100%; border-collapse: collapse; margin: 6px 0 16px; }
-.inv .inv-lines th { text-align: left; font-size: 9pt; color: #555; border-bottom: 1.5px solid #35203d; padding: 5px 6px; }
+.inv .inv-lines th { text-align: left; font-size: 9pt; color: #555; border-bottom: 1.5px solid #1b191c; padding: 5px 6px; }
 .inv .inv-lines td { padding: 7px 6px; border-bottom: 0.5px solid #d6d9e0; vertical-align: top; }
 .inv .inv-lines .r { text-align: right; white-space: nowrap; }
-.inv .inv-lines tr.tot td { border-top: 2px solid #35203d; border-bottom: 0; font-weight: 800; font-size: 12pt; }
+.inv .inv-lines tr.tot td { border-top: 2px solid #1b191c; border-bottom: 0; font-weight: 800; font-size: 12pt; }
 .inv .inv-bank { background: #f3f4f8; border-radius: 6px; padding: 8px 12px; margin: 14px 0; }
 .inv .inv-bank pre { font: inherit; margin: 0; white-space: pre-wrap; }
 .inv .inv-small { font-size: 9pt; color: #555; }

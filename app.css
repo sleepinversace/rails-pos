@@ -4,53 +4,52 @@
    Colours are tokens on :root so the two looks only swap values.
    ========================================================================= */
 
-/* ATELIER (default): pearl background, plum buttons and header, champagne
-   highlights. The same colours as the Rails POS website.
-   --accent is plum (buttons, chosen options); --accent-text is the same colour
-   where it is used as text. --mark is the champagne on the plum header and
-   --mark-line the gold that marks the open screen. --line outlines buttons and
-   tiles. --cat-keep / --tint tune the category colours for light and dark. */
+/* BLUSH AND BLACK (default, light): soft blush page, black header and buttons, rose edges.
+   --accent is black (buttons, chosen options); --accent-text is the deep rose used for text.
+   --mark is the rose on the black header and --mark-line the rose that marks the open
+   screen. --line outlines buttons and tiles. --panel is the shade behind a product's icon;
+   --cat-keep / --tint tune the category colours. */
 :root {
-  --bg: #f8f5f7;
+  --bg: #fcf6f6;
   --surface: #ffffff;
-  --surface-2: #f2ecf1;
-  --text: #2a1a2f;
-  --muted: #655469;
-  --border: #e2d7e1;
-  --line: #cfc0cd;
-  --brand: #35203d;
+  --surface-2: #f7ecec;
+  --text: #1f1a1c;
+  --muted: #6a5b5f;
+  --border: #eedede;
+  --line: #dcc6c7;
+  --brand: #1b191c;
   --brand-ink: #ffffff;
-  --brand-muted: #cdbfd0;
-  --accent: #35203d;
-  --accent-hover: #4d2d58;
+  --brand-muted: #cbbfc2;
+  --accent: #1b191c;
+  --accent-hover: #37323a;
   --accent-ink: #ffffff;
-  --accent-text: #5a2f66;
-  --accent-soft: #f5eedf;
-  --mark: #e6c98f;
-  --mark-ink: #2a1a2f;    /* text on champagne */
-  --mark-line: #b8904f;
-  --danger: #ad2c48;
+  --accent-text: #8f3f4f;
+  --accent-soft: #fbeaea;
+  --mark: #eec3c9;
+  --mark-ink: #34161d;    /* text on rose */
+  --mark-line: #cf8d98;
+  --danger: #b3261e;      /* a clear red, so it can't be mistaken for the rose */
   --danger-ink: #ffffff;
-  --danger-soft: #fae7eb;
+  --danger-soft: #fce8e6;
   --warn: #85540f;
-  --warn-soft: #f8ecd6;
+  --warn-soft: #f9ecd6;
   --ok: #22694a;
   --ok-soft: #e3f1ea;
   --money: #22694a;       /* rand amounts in reports */
-  --money-bar: #5a2f66;   /* chart bars */
+  --money-bar: #cf8d98;   /* chart bars */
   --cat-keep: 100%;
-  --panel: var(--surface);
-  --tint: 13%;
-  /* Buttons: the face (top to bottom), the main button, its champagne piping, and shadows at rest / raised */
-  --face: linear-gradient(180deg, #ffffff, #f4edf3);
-  --face-main: linear-gradient(180deg, #56346a, #331d3c 62%, #2c1934);
-  --main-edge: #2c1934;
-  --piping: rgba(230,201,143,.42);
-  --lift: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 2px rgba(42,26,47,.10), 0 3px 8px -3px rgba(42,26,47,.18);
-  --lift-main: 0 2px 4px rgba(42,26,47,.22), 0 8px 18px -8px rgba(42,26,47,.55);
-  --lift-hover: 0 2px 4px rgba(42,26,47,.14), 0 10px 20px -8px rgba(42,26,47,.36);
+  --panel: #f9ecec;
+  --tint: 0%;
+  /* Buttons: the face (top to bottom), the main button, its rose piping, and shadows at rest / raised */
+  --face: linear-gradient(180deg, #ffffff, #faf0f0);
+  --face-main: linear-gradient(180deg, #3b363c, #201d21 62%, #171518);
+  --main-edge: #151316;
+  --piping: rgba(238,195,201,.6);
+  --lift: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 2px rgba(40,24,28,.10), 0 3px 8px -3px rgba(40,24,28,.18);
+  --lift-main: 0 2px 4px rgba(27,20,22,.22), 0 8px 18px -8px rgba(27,20,22,.55);
+  --lift-hover: 0 2px 4px rgba(40,24,28,.14), 0 10px 20px -8px rgba(40,24,28,.36);
   --shadow-sm: none;
-  --shadow: 0 1px 2px rgba(42,26,47,.06), 0 18px 40px -24px rgba(42,26,47,.38);
+  --shadow: 0 1px 2px rgba(40,24,28,.06), 0 18px 40px -24px rgba(40,24,28,.38);
   --radius: 12px;
   /* Headings and totals. Fonts devices already have; nothing is downloaded. */
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "Noto Serif", Georgia, serif;
@@ -358,7 +357,7 @@ label.field > span { display: block; font-size: 13px; font-weight: 600; color: v
 .setup-choices { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
 .setup-box .btn.ghost { margin-top: 6px; }
 #setupErr { min-height: 1.4em; margin: 0 0 10px; }
-.chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 10px; scrollbar-width: none; }
+.chips { display: flex; gap: 8px; overflow-x: auto; padding: 3px 8px 14px; margin: -3px -8px -4px; scrollbar-width: none; }
 .chips::-webkit-scrollbar { display: none; }
 .chip {
   flex: none; border: 1px solid var(--border); background: var(--surface);
@@ -652,7 +651,7 @@ input:disabled { opacity: .5; }
 .lock-btn .ico { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 /* =====================================================================
-   ATELIER LOOK
+   THE LOOK (v43, colours v46 and v47)
    Serif headings, hairline outlines, one main colour, no glow.
    Both looks (light and dark) come from the tokens at the top.
    ===================================================================== */
@@ -719,7 +718,7 @@ h1, h2, h3, .sold-title, .cart-welcome .cw-title { font-family: var(--serif); fo
 .stepper { border-color: var(--line); }
 .stepper span { line-height: 40px; }
 .totals .grand { font-family: var(--serif); font-weight: 600; font-size: 25px; font-variant-numeric: lining-nums tabular-nums; }
-.cart-bar { box-shadow: 0 14px 30px -16px rgba(42,26,47,.6); }
+.cart-bar { box-shadow: 0 14px 30px -16px rgba(40,24,28,.6); }
 .cart-bar strong { color: var(--mark); font-variant-numeric: lining-nums tabular-nums; }
 .cart-bar-go { background: var(--mark); color: var(--mark-ink); }
 :root[data-theme="dark"] .cart-bar { border: 1px solid var(--line); background: var(--surface-2); }
@@ -736,9 +735,9 @@ h1, h2, h3, .sold-title, .cart-welcome .cw-title { font-family: var(--serif); fo
 /* Sign-in and setup */
 .signin {
   background:
-    radial-gradient(760px 460px at 88% 0%, rgba(196,106,133,.30), transparent 62%),
-    radial-gradient(700px 420px at 0% 100%, rgba(230,201,143,.16), transparent 60%),
-    linear-gradient(160deg, #2a1631, #3b2144 55%, #4a2a55);
+    radial-gradient(760px 460px at 88% 0%, rgba(233,184,191,.34), transparent 62%),
+    radial-gradient(700px 420px at 0% 100%, rgba(233,184,191,.18), transparent 60%),
+    linear-gradient(160deg, #141215, #262126 55%, #322a30);
 }
 :root[data-theme="dark"] .signin {
   background:
@@ -750,7 +749,7 @@ h1, h2, h3, .sold-title, .cart-welcome .cw-title { font-family: var(--serif); fo
 .signin-box h1 { font-size: 25px; }
 
 @media/* ----- Buttons (v44): a satin face, a soft shadow to lift them off the page, and
-   champagne piping on the main ones. They rise on hover and sink when pressed. ----- */
+   rose piping on the main ones. They rise on hover and sink when pressed. ----- */
 .btn, .seg button, .chip, .opt, .stepper button, .cart-bar-go { transition: transform .12s, box-shadow .15s, background-color .15s, border-color .15s, filter .15s; }
 .btn:not(.primary):not(.danger):not(.ghost), .seg button, .chip, .opt {
   background: var(--face); border-color: var(--line); box-shadow: var(--lift); font-weight: 650;
@@ -871,21 +870,21 @@ h1, h2, h3, .sold-title, .cart-welcome .cw-title { font-family: var(--serif); fo
 }
 .print-a4 .a4-head {
   display: flex; justify-content: space-between; align-items: flex-end; gap: 16px;
-  padding-bottom: 8px; margin-bottom: 12px; border-bottom: 3px solid #35203d;
+  padding-bottom: 8px; margin-bottom: 12px; border-bottom: 3px solid #1b191c;
 }
-.print-a4 .a4-store { font-size: 15pt; font-weight: 800; color: #35203d; }
+.print-a4 .a4-store { font-size: 15pt; font-weight: 800; color: #1b191c; }
 .print-a4 .a4-addr { font-size: 8.5pt; color: #555; margin-top: 2px; }
 .print-a4 .a4-title { text-align: right; }
-.print-a4 .a4-title h1 { font-size: 14pt; margin: 0; color: #8c6529; }
+.print-a4 .a4-title h1 { font-size: 14pt; margin: 0; color: #8f3f4f; }
 .print-a4 .a4-title div { font-size: 9pt; color: #333; }
-.print-a4 h2 { font-size: 10.5pt; margin: 12px 0 4px; color: #35203d; text-transform: uppercase; letter-spacing: .04em; }
+.print-a4 h2 { font-size: 10.5pt; margin: 12px 0 4px; color: #1b191c; text-transform: uppercase; letter-spacing: .04em; }
 .print-a4 table { width: 100%; border-collapse: collapse; }
-.print-a4 th { text-align: left; font-size: 8.5pt; color: #555; font-weight: 700; border-bottom: 1.5px solid #35203d; padding: 3px 4px; }
+.print-a4 th { text-align: left; font-size: 8.5pt; color: #555; font-weight: 700; border-bottom: 1.5px solid #1b191c; padding: 3px 4px; }
 .print-a4 td { padding: 3px 4px; border-bottom: 0.5px solid #d6d9e0; vertical-align: top; }
 .print-a4 .r { text-align: right; white-space: nowrap; }
 .print-a4 .m { color: #0b6b34; font-weight: 600; font-variant-numeric: tabular-nums; }
 .print-a4 .m.neg { color: #b42318; }
-.print-a4 tr.tot td { border-top: 1.5px solid #35203d; border-bottom: 0; font-weight: 800; }
+.print-a4 tr.tot td { border-top: 1.5px solid #1b191c; border-bottom: 0; font-weight: 800; }
 .print-a4 tr.refund td { background: #fdf0ee; }
 .print-a4 tr.low td { background: #fdf5e4; }
 .print-a4 tr.first td { border-top: 1px solid #b9c0cc; }

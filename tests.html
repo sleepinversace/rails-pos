@@ -1146,7 +1146,7 @@ test('Accessibility: focus is kept in dialogs; nav has aria-current; colours hav
     for (const [fg, bg] of pairs) { const c = contrast(css(fg), css(bg)); if (c < 4.5) fails.push(`${theme} ${fg} on ${bg}: ${c.toFixed(2)}`); }
   }
   ok(!fails.length, 'Low contrast: ' + fails.join('; '));
-  // v43: two looks. Light (Atelier) is the default and what 'auto' from older versions means; dark (Black and rose) is a choice in Settings.
+  // v43: two looks. Light (Blush and black) is the default and what 'auto' from older versions means; dark (Black and rose) is a choice in Settings.
   const S = P.state, was = S.settings.theme;
   const look = t => { S.settings.theme = t; w.renderAll(); return d.documentElement.dataset.theme; };
   eq(['light', 'auto', undefined, 'dark'].map(look), ['light', 'light', 'light', 'dark'], 'look chosen for each saved setting');

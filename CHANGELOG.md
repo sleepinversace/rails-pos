@@ -17,6 +17,17 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v47 — 2026-11-25 · New light look: Blush and black
+
+- 🔧 **Light is now soft blush with black buttons and a rose edge**, the daytime twin of the Black and rose dark look. The plum and champagne look is gone.
+- 🔧 Product tiles in Light have one blush panel; the clothing icon keeps the category colour.
+- 🔧 **New logo and app icon:** a rose hanger on black, to suit both looks. A till already on a home screen may keep the old icon until the app is removed and added again.
+- 🔧 Deletions, refunds and losses in Light are a clearer red, apart from the rose.
+- 🔧 A4 reports, the terms page and the supplier admin page (admin files `?v=33`) use the same colours.
+- No SQL changes.
+
+---
+
 ## v46 — 2026-11-25 · New dark look: Black and rose
 
 - 🔧 **Dark is now near-black with soft rose buttons** (Settings → Shop floor → Appearance → Dark). The brown-purple and champagne dark look is gone. Light is unchanged.
