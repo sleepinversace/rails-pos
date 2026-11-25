@@ -657,6 +657,7 @@ h1, h2, h3, .sold-title, .cart-welcome .cw-title { font-family: var(--serif); fo
 .modal-head h2 { font-size: 20px; }
 .prod-head h3 { font-size: 17px; }
 .app-header { border-bottom: 1px solid color-mix(in srgb, var(--mark) 22%, transparent); box-shadow: none; }
+.app-header { gap: 10px; }
 .brand img { box-shadow: 0 0 0 1px color-mix(in srgb, var(--mark) 45%, transparent); }
 .brand .brand-name { font-family: var(--serif); font-size: 19px; font-weight: 600; letter-spacing: 0; }
 .brand .brand-name b { color: var(--mark); font-weight: 600; }
@@ -922,6 +923,8 @@ h1, h2, h3, .sold-title, .cart-welcome .cw-title { font-family: var(--serif); fo
 .print-a4 .a4-brand-foot { color: #444; }
 /* Activity log (Admin) */
 .act-log td { vertical-align: top; }
+/* The text wraps (other tables keep their last column, an amount, on one line at the right) */
+.act-log td:last-child { text-align: left; white-space: normal; padding-left: 12px; overflow-wrap: anywhere; }
 .act-tag { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--border); margin-right: 4px; }
 .act-discount, .act-price { border-color: var(--accent); color: var(--accent-text, var(--accent)); }
 .act-refund, .act-exchange, .act-delete, .act-layby { border-color: var(--danger); color: var(--danger); }

@@ -17,6 +17,13 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v45 — 2026-11-25 · Activity log fits on phones
+
+- 🐞 On a phone, long lines in **Admin → Activity log** ran off the right edge and made the whole page too wide. They now wrap. (An older problem, from before the new look.)
+- 🔧 A long shop name in the header keeps a small gap before the sync status.
+
+---
+
 ## v44 — 2026-11-25 · Buttons with more depth; no demo banner
 
 - 🔧 **Every button has more to it:** a satin face, a soft shadow and champagne piping on the main ones (Charge, chosen options). They rise when you point at them and sink when pressed. Park, Clear, Remove and the close button now look like buttons, the open screen in the menu has a filled icon, and product tiles, sales and clients lift too. Same in Light and Dark.

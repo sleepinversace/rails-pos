@@ -1154,6 +1154,12 @@ test('Accessibility: focus is kept in dialogs; nav has aria-current; colours hav
   await nav('settings');
   eq([...d.querySelectorAll('[data-setting="theme"] option')].map(o => [o.value, o.selected]), [['light', false], ['dark', true]], 'Appearance: Light or Dark');
   eq(look('light'), 'light', 'back to light');
+  // v45: a long activity-log entry wraps on a phone instead of pushing the page wider than the screen
+  await nav('admin');
+  w.logOp('refund', 'Refund (Cash) R199.00 on sale #B-00002 of 22/11/2026 (OUTSIDE the 7-day return period), reference ' + 'x1234567890'.repeat(6));
+  S.settings.theme = 'light'; w.renderAll(); await tick(300);
+  ok($('.act-log') && d.documentElement.scrollWidth <= w.innerWidth, `activity log fits a phone: ${d.documentElement.scrollWidth} in ${w.innerWidth}`);
+  S.activity.pop();
   // Category colours can be told apart from the tile in both looks (graphics: 3:1)
   for (const c of ['Tops', 'Bottoms', 'Dresses', 'Outerwear', 'Accessories', 'Shoes', 'Kids', 'Other']) ok(contrast(w.catColour(c), '#ffffff') >= 3, c + ' colour is too pale');
   S.settings.theme = was; w.renderAll(); await nav('sell');
