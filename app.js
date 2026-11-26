@@ -678,6 +678,7 @@ function addToCart(variantId, qty = 1) {
   }
   const line = ui.cart.lines.find(l => l.variantId === variantId);
   if (line) line.qty += qty; else ui.cart.lines.push({ variantId, qty });
+  Sfx.play('tick');
   renderCart();
   saveCart();
   return true;
@@ -804,6 +805,7 @@ async function checkout() {
   $('#tendered').value = '';
   closeCartSheet();
   renderAll();
+  Sfx.play('sale');
   showDoc(`sale:${sale.id}`, { justSold: true });
 }
 
@@ -1720,6 +1722,7 @@ async function saveCashup() {
     logOp('cashup', `Cash-up Z${zNo(z)}${z.blind ? ' (blind count)' : ''}: expected ${money(z.expected)}, counted ${money(z.counted)} — ${z.diff === 0 ? 'balanced' : `${z.diff > 0 ? 'over' : 'SHORT'} ${money(Math.abs(z.diff))}`}`, { amount: z.diff, ref: `z:${z.id}` })]);
   closeModal();
   renderAll();
+  Sfx.play('coins');
   if (!can('reports')) {
     // Blind cash-up: the person counting doesn't see expected / over / short. The owner sees it in Reports and the activity log.
     return toast(`Cash-up saved: you counted ${money(counted)}. The manager will check it.`);
@@ -2104,6 +2107,65 @@ function showDoc(ref, { justSold = false, fresh = justSold } = {}) {
   });
 }
 
+/* ===== 11b. Sounds (v48) ================================================
+   Soft sounds for the key moments only, the same ones as the promo video:
+   tick = an item goes in the cart · sale = sale complete (and a lay-by collected)
+   payment = a lay-by payment · coins = cash-up · refuse = something was refused
+   (an error message, a wrong PIN). Ordinary buttons stay silent.
+   Made with Web Audio here (nothing is downloaded). On by default; Settings →
+   Shop floor → "Sounds on this device" (Off / Soft / Normal / Loud) is kept per
+   device in localStorage, so the till can chime while the owner's phone is quiet.
+   Browsers only allow sound after the first tap, so the audio starts then.
+   On an iPhone the silent switch also silences these sounds.
+   ======================================================================== */
+const SOUND_KEY = DB_NAME + '-sound';
+const SOUND_LEVELS = { off: 0, soft: 0.35, normal: 0.6, loud: 1 };
+const Sfx = (() => {
+  let ctx = null, out = null;
+  const log = [];   // what played (the tests read this; tests make no real sound)
+  const level = () => { try { const v = localStorage.getItem(SOUND_KEY); return v in SOUND_LEVELS ? v : 'normal'; } catch { return 'normal'; } };
+  function unlock() {
+    if (TEST_MODE || ctx) return;
+    try {
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      out = ctx.createGain(); out.connect(ctx.destination);
+    } catch { ctx = null; }
+  }
+  const hz = m => 440 * Math.pow(2, (m - 69) / 12);
+  function tone(freq, t, { type = 'sine', v = 0.2, a = 0.006, len = 0.5, to = 0 } = {}) {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    if (to) o.frequency.exponentialRampToValueAtTime(to, t + len * 0.8);
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v, t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    o.connect(g).connect(out); o.start(t); o.stop(t + len + 0.05);
+  }
+  const bell = (m, t, v = 0.2, len = 1.2) => [[1, 1], [2.76, 0.22], [5.4, 0.07]].forEach(([k, lv]) => tone(hz(m) * k, t, { v: v * lv, len: len / k }));
+  const SOUNDS = {
+    tick: t => { tone(1900, t, { v: 0.12, a: 0.002, len: 0.05 }); tone(hz(84), t + 0.01, { v: 0.06, len: 0.18 }); },
+    sale: t => { bell(84, t); bell(91, t + 0.14, 0.15); },
+    payment: t => { bell(88, t, 0.17); bell(93, t + 0.12, 0.12); },
+    coins: t => [0, 0.09, 0.2, 0.28].forEach((d, i) => bell(96 + (i % 2) * 3, t + d, 0.1, 0.6)),
+    refuse: t => { tone(220, t, { type: 'triangle', v: 0.16, len: 0.16 }); tone(185, t + 0.13, { type: 'triangle', v: 0.16, len: 0.24 }); },
+  };
+  function play(name) {
+    const lv = SOUND_LEVELS[level()];
+    if (!lv || !SOUNDS[name]) return;
+    log.push(name);
+    if (TEST_MODE) return;
+    unlock();
+    if (!ctx) return;
+    try {
+      if (ctx.state === 'suspended') ctx.resume();
+      out.gain.setValueAtTime(lv, ctx.currentTime);
+      SOUNDS[name](ctx.currentTime + 0.01);
+    } catch (e) { console.warn('Sound failed', e); }
+  }
+  function set(v) { try { localStorage.setItem(SOUND_KEY, v in SOUND_LEVELS ? v : 'normal'); } catch { /* private mode */ } }
+  // The first tap anywhere allows sound for the rest of the session
+  ['pointerdown', 'keydown'].forEach(ev => document.addEventListener(ev, unlock, { once: true, capture: true }));
+  return { play, set, level, log };
+})();
+
 /* ===== 12. UI helpers =================================================== */
 
 const isWide = () => window.matchMedia('(min-width: 860px)').matches;
@@ -2153,6 +2215,7 @@ function confirmBox(message, okLabel = 'OK', danger = false) {
 
 let toastTimer;
 function toast(msg, isError = false) {
+  if (isError) Sfx.play('refuse');   // v48: something was refused
   const t = $('#toast');
   t.textContent = msg;
   t.setAttribute('role', isError ? 'alert' : 'status');
@@ -3293,6 +3356,13 @@ async function renderSettings() {
           </select></label>
       </div>
       <div class="grid-2">
+        <label class="field"><span>Sounds on this device</span>
+          <select id="soundSel">
+            ${[['off', 'Off'], ['soft', 'Soft'], ['normal', 'Normal'], ['loud', 'Loud']].map(([v, l]) => `<option value="${v}" ${Sfx.level() === v ? 'selected' : ''}>${l}</option>`).join('')}
+          </select></label>
+        <p class="small muted" style="margin:24px 0 0">A soft chime for sales, lay-by payments and cash-ups, a tick when an item goes in the cart, and a low tone when something is refused. Only this device.</p>
+      </div>
+      <div class="grid-2">
         <label class="field"><span>Return / exchange period (days, 0 = no limit)</span><input class="input" data-setting="returnDays" inputmode="numeric" value="${esc(st.returnDays ?? 7)}"></label>
         <label class="field"><span>Owner's WhatsApp (daily summary)</span><input class="input" type="tel" inputmode="tel" data-setting="ownerWhatsApp" placeholder="082 123 4567" value="${esc(st.ownerWhatsApp || '')}"></label>
       </div>
@@ -3886,6 +3956,7 @@ async function submitSignIn() {
       err.textContent = `Too many wrong tries. Try again in ${LOCKOUT_MS / 1000} seconds.`;
     } else {
       err.textContent = 'Wrong username or PIN';
+      Sfx.play('refuse');
     }
     $('#siPin').value = '';
     $('#siPin').focus();
@@ -6365,6 +6436,7 @@ async function saveLayby() {
   closeCartSheet();
   renderAll();
   toast(existing ? `Added to ${lbNo(lb)}` : `Lay-by ${lbNo(lb)} created for ${c.name}`);
+  if (pay) Sfx.play('payment');
   showDoc(pay ? `lbpay:${lb.id}:${pay.id}` : `lb:${lb.id}`, { fresh: true });
 }
 
@@ -6405,6 +6477,7 @@ async function saveLaybyPayment() {
   await persist(ops);
   closeModal();
   renderAll();
+  Sfx.play('payment');
   toast(lbBalance(l) <= 0 ? `Paid in full! Tap “Collect & invoice” when ${l.customer.name} takes the items.` : `Payment of ${money(amount)} taken`);
   showDoc(`lbpay:${l.id}:${pay.id}`, { fresh: true });
 }
@@ -6431,6 +6504,7 @@ async function collectLayby(id) {
   state.sales.push(sale);
   await persist([opPut('sales', sale), opPut('laybys', l), opKv('meta', state.meta)]);
   renderAll();
+  Sfx.play('sale');
   showDoc(`sale:${sale.id}`, { fresh: true });
 }
 
@@ -7461,6 +7535,7 @@ function bindEvents() {
     const t = e.target;
     if (t.dataset.stockInput && allowed('stock')) adjustStock(t.dataset.stockInput, t.value === '' ? 0 : t.value, 'count');
     if (t.dataset.setting && allowed('settings')) onSettingChange(t);
+    if (t.id === 'soundSel') { Sfx.set(t.value); Sfx.play('sale'); toast(t.value === 'off' ? 'Sounds off on this device' : 'Sounds on'); }
     if (t.id === 'restoreFile' && t.files[0] && allowed('settings')) { t.files[0].text().then(restoreFromText); t.value = ''; }
     if (t.id === 'uRole' || (t.dataset.perm && t.closest('#modal'))) onUserFormChange(t);
     if (t.id === 'fPhoto') onPhotoPicked(t);
@@ -7585,7 +7660,7 @@ async function boot() {
 
 // Handle for tests / debugging in the console.
 window.__pos = { state, ui, DB, actions, buildReport, computeShift, receiptText, creditNoteText, zText, cartTotals, flushAllAdjust, checkLogin,
-  Cloud, CLOUD, syncNow, applyRemote, Barcode, findByCode, resizePhoto, licence, sellingAllowed,
+  Cloud, CLOUD, syncNow, applyRemote, Sfx, Barcode, findByCode, resizePhoto, licence, sellingAllowed,
   lbBalance, lbPaid, lbOverdue, lbState, laybyText, statementText };
 
 boot();

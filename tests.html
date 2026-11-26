@@ -1160,6 +1160,22 @@ test('Accessibility: focus is kept in dialogs; nav has aria-current; colours hav
   S.settings.theme = 'light'; w.renderAll(); await tick(300);
   ok($('.act-log') && d.documentElement.scrollWidth <= w.innerWidth, `activity log fits a phone: ${d.documentElement.scrollWidth} in ${w.innerWidth}`);
   S.activity.pop();
+  // v48: sounds for the key moments, per device (the tests make no real sound; Sfx.log records what would play)
+  const fx = P.Sfx; fx.log.length = 0;
+  eq(fx.level(), 'normal', 'sounds on (normal) by default');
+  w.toast('Nope', true); w.toast('Fine');
+  eq(fx.log.slice(), ['refuse'], 'an error message makes the refuse sound, a normal one is silent');
+  await nav('settings');
+  const sel = $('#soundSel'); ok(sel, 'Settings has "Sounds on this device"');
+  sel.value = 'off'; sel.dispatchEvent(new w.Event('change', { bubbles: true })); await tick(50);
+  eq([fx.level(), w.localStorage.getItem('rails-pos-test-sound')], ['off', 'off'], 'switched off, kept on this device only');
+  fx.log.length = 0; w.toast('Nope', true); eq(fx.log.length, 0, 'no sound when off');
+  sel.value = 'normal'; sel.dispatchEvent(new w.Event('change', { bubbles: true })); await tick(50);
+  eq(fx.level(), 'normal', 'back on');
+  const vt = S.products.flatMap(p => p.variants).find(v => v.stock > 0);
+  const cartWas = P.ui.cart; P.ui.cart = w.emptyCart('cash');
+  fx.log.length = 0; w.addToCart(vt.id); eq(fx.log.slice(), ['tick'], 'a tick when an item goes in the cart');
+  P.ui.cart = cartWas; w.renderCart();
   // Category colours can be told apart from the tile in both looks (graphics: 3:1)
   for (const c of ['Tops', 'Bottoms', 'Dresses', 'Outerwear', 'Accessories', 'Shoes', 'Kids', 'Other']) ok(contrast(w.catColour(c), '#ffffff') >= 3, c + ' colour is too pale');
   S.settings.theme = was; w.renderAll(); await nav('sell');

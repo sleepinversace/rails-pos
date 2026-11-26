@@ -17,6 +17,15 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v48 — 2026-11-26 · Sounds for the key moments
+
+- ✨ **The till makes soft sounds, like the promo video:** a tick when an item goes in the cart (tap or scan), a chime when a sale is complete or a lay-by is collected, a chime for a lay-by payment, coins at cash-up, and a low tone when something is refused (out of stock, a wrong PIN, any error message). Ordinary buttons stay silent.
+- ✨ **Settings → Shop floor → Sounds on this device:** Off, Soft, Normal (the default) or Loud. It's kept per device, so the till can chime while the owner's phone stays quiet. Choosing a level plays a sample.
+- 🔧 The sounds are made in the app itself, so nothing is downloaded and they work offline. The first tap after opening the app switches sound on (a browser rule). On an iPhone the silent switch also silences them.
+- No SQL changes.
+
+---
+
 ## v47 — 2026-11-25 · New light look: Blush and black
 
 - 🔧 **Light is now soft blush with black buttons and a rose edge**, the daytime twin of the Black and rose dark look. The plum and champagne look is gone.
