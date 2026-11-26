@@ -13,7 +13,7 @@
    the outbox when the connection comes back.
    ========================================================================= */
 
-const CACHE_VERSION = 'rails-pos-v48';
+const CACHE_VERSION = 'rails-pos-v49';
 const APP_SHELL = [
   './',
   './index.html',
@@ -23,6 +23,8 @@ const APP_SHELL = [
   './icon-192.png',
   './icon-512.png',
   './icon-maskable-512.png',
+  './fonts/inter-latin.woff2',
+  './fonts/playfair-display-latin.woff2',
   // Profit checker add-on (opens inside Reports; copied from Rails Profit checker by tools/copy-profit-checker.sh)
   './profit/index.html',
   './profit/styles.css',

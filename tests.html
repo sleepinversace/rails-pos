@@ -985,11 +985,21 @@ test('New look: header, tiles, empty cart, Charge, sale complete, sync pill, sid
   // Cash sale → Sale complete with the change in large numbers
   const p = S.products.find(x => !x.name.includes('Tee') && x.variants.some(v => v.stock >= 2)) || S.products.find(x => x.variants.some(v => v.stock >= 5));
   const v = p.variants.filter(x => x.stock >= 2 && !(p.name.includes('Tee') && x.size === 'S' && x.colour === 'Red')).sort((a, b) => b.stock - a.stock)[0];
+  // v49: premium fonts come from the app's own fonts/ folder (offline); receipts keep their typewriter font
+  eq($('#cartItems .cw-title').textContent, 'Ready for the next customer', 'welcome wording');
+  ok(/^"?Inter"?/.test(w.getComputedStyle(d.body).fontFamily) && /Playfair Display/.test(w.getComputedStyle($('.cart-head h2')).fontFamily), 'Inter for text, Playfair for headings');
+  await Promise.all([w.document.fonts.load('16px Inter'), w.document.fonts.load('600 16px "Playfair Display"')]);
+  ok(w.document.fonts.check('16px Inter') && w.document.fonts.check('600 16px "Playfair Display"'), 'both fonts load from fonts/');
+  const slipCss = [...d.styleSheets].flatMap(sh => { try { return [...sh.cssRules]; } catch { return []; } }).find(r => r.selectorText === '.print-area pre.slip');
+  ok(slipCss && /Courier/.test(slipCss.style.font || slipCss.style.fontFamily), 'receipt slip keeps Courier');
   w.addToCart(v.id, 1); await tick();
+  ok($('#cartItems .cart-line.just-added') && P.ui.justAdded === null, 'the new line slides in once');
+  w.renderCart(); ok(!$('#cartItems .cart-line.just-added'), 'and not again on the next redraw');
   ok($('#chargeBtn').querySelector('.charge-amt') && !$('#chargeBtn').disabled, 'Charge shows the amount');
   await pay('cash', '2000');
   const s = lastSale();
   ok($('#modal .sold-hero') && $('#modal .sold-title').textContent === 'Sale complete', 'sale complete screen');
+  eq($('#modal .sold-pay').textContent, 'Paid by Cash', 'how it was paid, under the total');
   eq($('#modal .sold-change strong').textContent, w.money(s.change), 'change due in large numbers');
   ok(receiptText().length > 50 && $('#modal details.sold-receipt') && !$('#modal details.sold-receipt').open, 'slip folded under Show receipt');
   ok($('#modal .sold-new.primary[autofocus]'), 'New sale is the main button');

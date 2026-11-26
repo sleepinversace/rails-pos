@@ -17,6 +17,20 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v49 — 2026-11-26 · A more premium look
+
+- ✨ **New fonts:** Playfair Display for product names, totals and headings, Inter for everything else. Both are saved inside the app (`fonts/`, open-licence), so they work offline and the till never contacts Google. Receipts, the WhatsApp receipt, A4 printouts and labels keep their own fonts.
+- ✨ **Light look refreshed:** a blush header and side menu (the open screen is a white raised tab), a warm off-white page, ivory tiles with a soft category colour, and compact buttons with a soft raised edge. The cart's − and + are neat round buttons. Charge stays black with the payment in rose.
+- ✨ **Gold "R" monogram** in the header instead of the small hanger icon (the home-screen icon is unchanged). Product photos still fill the top of the tile; tiles without one keep the soft colour and icon.
+- ✨ **Empty cart:** "Ready for the next customer".
+- ✨ **Sale complete:** a gold tick, the total large in Playfair and "Paid by Cash/Card/EFT" under it. It rises gently into view with the chime.
+- ✨ **Gentle motion:** screens fade in and a newly added item slides into the cart. Switched off when the device asks for reduced motion.
+- ✨ **Low stock in rose:** "Only 3 left" is a soft rose pill instead of amber.
+- 🐞 The device setting "reduce motion" was being ignored since v44 (a CSS slip split the rule in two). Fixed.
+- No SQL changes.
+
+---
+
 ## v48 — 2026-11-26 · Sounds for the key moments
 
 - ✨ **The till makes soft sounds, like the promo video:** a tick when an item goes in the cart (tap or scan), a chime when a sale is complete or a lay-by is collected, a chime for a lay-by payment, coins at cash-up, and a low tone when something is refused (out of stock, a wrong PIN, any error message). Ordinary buttons stay silent.

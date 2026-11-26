@@ -678,6 +678,7 @@ function addToCart(variantId, qty = 1) {
   }
   const line = ui.cart.lines.find(l => l.variantId === variantId);
   if (line) line.qty += qty; else ui.cart.lines.push({ variantId, qty });
+  ui.justAdded = variantId;   // v49: that line slides in once
   Sfx.play('tick');
   renderCart();
   saveCart();
@@ -2069,7 +2070,7 @@ function showDoc(ref, { justSold = false, fresh = justSold } = {}) {
   const hero = justSold ? `<div class="sold-hero">
       <div class="sold-tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5 10 17.5 19 7"/></svg></div>
       <div class="sold-title">Sale complete</div>
-      <div class="sold-sub"><span class="money">${money(s.total)}</span> · ${esc(PAY_LABEL[s.payment] || s.payment)}</div>
+      <div class="sold-sub"><span class="money">${money(s.total)}</span><span class="sold-pay">Paid by ${esc(PAY_LABEL[s.payment] || s.payment)}</span></div>
       ${s.payment === 'cash' ? (s.change > 0
         ? `<div class="sold-change"><span>Change due</span><strong class="money">${money(s.change)}</strong></div>`
         : '<div class="sold-nochange">Exact cash · no change</div>') : ''}
@@ -2490,7 +2491,7 @@ function cartWelcomeHtml() {
   }
   return `<div class="cart-welcome">
     <img src="icon-192.png" alt="" width="64" height="64">
-    <div class="cw-title">Ready to sell</div>
+    <div class="cw-title">Ready for the next customer</div>
     <div class="cw-hint">Tap a product or scan a barcode to start a sale.</div>
     <div class="cw-stat">${stat}</div>
     ${pk ? `<button class="btn sm cw-parked" data-action="parked">${pk} parked sale${pk === 1 ? '' : 's'} waiting</button>` : ''}
@@ -2507,7 +2508,7 @@ function renderCart() {
     + (cc ? `<div class="cust-chip cart-cust"><span>Client: <strong>${esc(cc.name)}</strong>${customerLaybys(cc.id).some(l => l.status === 'open') ? ' <span class="muted small">· has a lay-by</span>' : ''}</span>
       <button class="btn ghost sm" data-action="cart-cust-clear" aria-label="Remove client from this sale">✕</button></div>` : '');
   $('#cartItems').innerHTML = t.lines.length ? t.lines.map(l => `
-    <div class="cart-line">
+    <div class="cart-line${l.variantId === ui.justAdded ? ' just-added' : ''}">
       <div class="cl-name">${thumbHtml(l.product, 'sm')}<div><div><strong>${esc(l.product.name)}</strong></div>
         <div class="meta">${esc(l.variant.size)} / ${esc(l.variant.colour)} · ${money(l.price)} · ${l.variant.stock} in stock</div></div></div>
       <div class="lt money">${money(l.price * l.qty)}</div>
@@ -2518,6 +2519,7 @@ function renderCart() {
       <div style="text-align:right"><button class="btn ghost sm" data-action="line-remove" data-id="${esc(l.variantId)}" aria-label="Remove ${esc(l.product.name)}">Remove</button></div>
     </div>`).join('') : cr ? '<div class="empty">Add the items the customer is taking in exchange.</div>' : cartWelcomeHtml();
 
+  ui.justAdded = null;
   setPressed('[data-action="disc-type"]', b => b.dataset.type === ui.cart.discountType);
   setPressed('[data-action="pay"]', b => b.dataset.pay === ui.cart.payment);
   renderTotals(t);

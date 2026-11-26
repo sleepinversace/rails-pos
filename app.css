@@ -10,13 +10,13 @@
    screen. --line outlines buttons and tiles. --panel is the shade behind a product's icon;
    --cat-keep / --tint tune the category colours. */
 :root {
-  --bg: #fcf6f6;
-  --surface: #ffffff;
+  --bg: #f6f1ee;
+  --surface: #fffdfb;
   --surface-2: #f7ecec;
   --text: #1f1a1c;
   --muted: #6a5b5f;
-  --border: #eedede;
-  --line: #dcc6c7;
+  --border: #ece2df;
+  --line: #dccfcb;
   --brand: #1b191c;
   --brand-ink: #ffffff;
   --brand-muted: #cbbfc2;
@@ -38,15 +38,15 @@
   --money: #22694a;       /* rand amounts in reports */
   --money-bar: #cf8d98;   /* chart bars */
   --cat-keep: 100%;
-  --panel: #f9ecec;
-  --tint: 0%;
+  --panel: #fbf7f6;
+  --tint: 11%;
   /* Buttons: the face (top to bottom), the main button, its rose piping, and shadows at rest / raised */
-  --face: linear-gradient(180deg, #ffffff, #faf0f0);
-  --face-main: linear-gradient(180deg, #3b363c, #201d21 62%, #171518);
+  --face: linear-gradient(180deg, #fffefd, #faf5f3);
+  --face-main: linear-gradient(180deg, #322d32, #1b191c 62%, #141215);
   --main-edge: #151316;
-  --piping: rgba(238,195,201,.6);
-  --lift: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 2px rgba(40,24,28,.10), 0 3px 8px -3px rgba(40,24,28,.18);
-  --lift-main: 0 2px 4px rgba(27,20,22,.22), 0 8px 18px -8px rgba(27,20,22,.55);
+  --piping: rgba(255,255,255,.1);
+  --lift: inset 0 1px 0 #fff, 0 1px 0 #d9cbc7, 0 2px 5px -2px rgba(40,24,28,.2);
+  --lift-main: 0 1px 0 #000, 0 3px 8px -3px rgba(27,20,22,.5);
   --lift-hover: 0 2px 4px rgba(40,24,28,.14), 0 10px 20px -8px rgba(40,24,28,.36);
   --shadow-sm: none;
   --shadow: 0 1px 2px rgba(40,24,28,.06), 0 18px 40px -24px rgba(40,24,28,.38);
@@ -748,7 +748,7 @@ h1, h2, h3, .sold-title, .cart-welcome .cw-title { font-family: var(--serif); fo
 :root[data-theme="dark"] .signin-box { border-color: var(--border); }
 .signin-box h1 { font-size: 25px; }
 
-@media/* ----- Buttons (v44): a satin face, a soft shadow to lift them off the page, and
+/* ----- Buttons (v44): a satin face, a soft shadow to lift them off the page, and
    rose piping on the main ones. They rise on hover and sink when pressed. ----- */
 .btn, .seg button, .chip, .opt, .stepper button, .cart-bar-go { transition: transform .12s, box-shadow .15s, background-color .15s, border-color .15s, filter .15s; }
 .btn:not(.primary):not(.danger):not(.ghost), .seg button, .chip, .opt {
@@ -800,7 +800,7 @@ h1, h2, h3, .sold-title, .cart-welcome .cw-title { font-family: var(--serif); fo
 .app-nav button .ico { box-sizing: border-box; width: 42px; height: 30px; padding: 4px 10px; border-radius: 10px; }
 .app-nav button.active .ico { color: var(--accent-ink); background: var(--face-main); box-shadow: inset 0 0 0 1px var(--piping), var(--lift); }
 
- (prefers-reduced-motion: reduce) {
+@media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
 
@@ -1087,3 +1087,149 @@ a.link { display: inline-flex; align-items: center; min-height: 36px; }
 .paused-actions .btn { min-height: 44px; }
 @media (min-width: 860px) { body.selling-paused.on-sell .app-main { padding-right: 0; } }
 .paused-actions a.btn, .banner a.btn { text-decoration: none; }
+
+/* =====================================================================
+   PREMIUM (v49): Playfair Display for names, totals and headings, Inter for
+   everything else (both saved in fonts/, so they work offline). A light
+   blush side menu and header, compact buttons with a soft raised edge,
+   round − / + in the cart, a black Charge button. Receipts and printouts
+   keep their own fonts (see Printing). Dark (Black and rose) shares it all
+   through the tokens.
+   ===================================================================== */
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 400 600; font-display: swap;
+  src: url("fonts/inter-latin.woff2") format("woff2"); }
+@font-face { font-family: "Playfair Display"; font-style: normal; font-weight: 500 700; font-display: swap;
+  src: url("fonts/playfair-display-latin.woff2") format("woff2"); }
+:root {
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --serif: "Playfair Display", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --gold: #b8915f;
+  --gold-soft: #f7efe4;
+  --rail: #fbf4f3;
+  --low: #8f3f4f;
+  --low-soft: #f8e3e6;
+}
+:root[data-theme="dark"] {
+  --gold: #d9b88c;
+  --gold-soft: #2e271f;
+  --rail: #161417;
+  --low: #f3cfd4;
+  --low-soft: #3a2429;
+}
+body { font-family: var(--sans); font-feature-settings: "cv11" 1; }
+.money, .num { font-variant-numeric: lining-nums tabular-nums; }
+
+/* Header: light in the light look (dark keeps its black bar) */
+:root:not([data-theme="dark"]) .app-header {
+  background: var(--rail); color: var(--text); border-bottom: 1px solid var(--border); box-shadow: none;
+}
+:root:not([data-theme="dark"]) .brand .brand-name b { color: var(--accent-text); }
+:root:not([data-theme="dark"]) .brand .brand-shop { color: var(--muted); font-weight: 500; }
+:root:not([data-theme="dark"]) .brand img { box-shadow: 0 1px 3px rgba(40,24,28,.25); }
+:root:not([data-theme="dark"]) .app-header .btn.ghost {
+  color: var(--text); background: var(--face); border-color: var(--line); box-shadow: var(--lift);
+}
+.brand .brand-name { font-size: 20px; }
+.brand .brand-shop { font-family: var(--sans); font-size: 13px; letter-spacing: .01em; }
+
+/* Side menu / bottom bar */
+.app-nav { background: var(--rail); }
+.app-nav button { font-size: 11.5px; font-weight: 500; }
+@media (min-width: 860px) {
+  .app-nav button { margin: 2px 9px; height: 64px; border-radius: 12px; }
+  .app-nav button.active { background: var(--surface); color: var(--text); box-shadow: var(--lift); }
+  .app-nav button.active::after { display: none; }
+  .app-nav button .ico, .app-nav button.active .ico { width: 22px; height: 22px; padding: 0; background: none; box-shadow: none; }
+  .app-nav button.active .ico { color: var(--accent-text); }
+}
+
+/* Buttons: compact, with a soft raised edge so they still read as buttons */
+.btn { min-height: 38px; padding: 6px 13px; border-radius: 9px; font-size: 14px; font-weight: 500; }
+.btn.sm { min-height: 31px; padding: 4px 10px; font-size: 13px; border-radius: 8px; }
+.btn.lg { min-height: 48px; font-size: 16px; }
+.btn:not(.primary):not(.danger):not(.ghost), .seg button, .chip, .opt { font-weight: 500; }
+.btn.ghost { background: var(--face); border-color: var(--line); box-shadow: var(--lift); }
+.chip { min-height: 31px; padding: 4px 13px; font-size: 13px; }
+.seg button { min-height: 34px; border-radius: 8px; }
+.seg.pay button { min-height: 42px; font-size: 14.5px; font-weight: 500; border-radius: 9px; }
+.seg.pay .pay-ico { width: 18px; height: 18px; }
+.input, input[type="search"], select, textarea { min-height: 38px; border-radius: 9px; }
+.input.sm { min-height: 33px; }
+#sellSearch { background: var(--surface); box-shadow: inset 0 1px 2px rgba(40,24,28,.05); }
+
+/* Product tiles */
+.product-grid { gap: 12px; }
+.product-card { padding: 0 11px 11px; min-height: 176px; border-radius: 11px; border-color: var(--border); }
+.product-card .cat-icon, .product-card .thumb { height: 96px; margin: 0 -11px 9px; }
+.product-card .thumb { width: calc(100% + 22px); }
+.product-card .cat-icon { border-bottom: 1px solid var(--border); }
+.product-card .cat-icon svg { width: 38px; height: 38px; stroke-width: 1.3; }
+.product-card .name { font-size: 15px; font-weight: 600; line-height: 1.22; }
+.product-card .cat { font-size: 11.5px; }
+.product-card .price { font-size: 14.5px; font-weight: 600; }
+.product-card .badge.stock, .product-card .badge {
+  padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 500;
+}
+.product-card .badge.stock { background: var(--surface-2); color: var(--muted); }
+/* Low stock in rose: noticed, not alarming */
+.badge.low { background: var(--low-soft); color: var(--low); }
+
+/* Cart */
+.cart-panel { background: var(--surface); }
+.cart-head h2 { font-size: 23px; }
+.cart-line { padding: 11px 0; border-bottom-color: var(--border); }
+.cart-line strong { font-weight: 600; }
+.cart-line .lt { font-weight: 600; }
+.stepper { border: 0; box-shadow: none; background: transparent; gap: 4px; overflow: visible; }
+.stepper button {
+  width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line);
+  background: var(--face); color: var(--text); box-shadow: var(--lift); font-size: 17px; font-weight: 500;
+  display: inline-grid; place-items: center; padding: 0;
+}
+.stepper span, .stepper input { min-width: 26px; width: auto; height: 32px; line-height: 32px; font-weight: 600; }
+.stepper button:active { transform: translateY(1px); }
+.totals .grand { font-size: 27px; }
+.totals span.grand:not(.money) { font-family: var(--sans); font-size: 12px; font-weight: 500; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); align-self: end; padding-bottom: 5px; }
+#chargeBtn:not(:disabled) { min-height: 52px; border-radius: 11px; font-size: 16px; }
+#chargeBtn .charge-amt { font-weight: 600; }
+:root:not([data-theme="dark"]) #chargeBtn .charge-pay { color: var(--mark); opacity: 1; }
+
+/* Empty cart: a calm welcome */
+.cart-welcome .cw-title { font-size: 22px; }
+.cart-welcome img { width: 52px; height: 52px; border-radius: 14px; }
+.cart-welcome .cw-stat { font-weight: 500; }
+
+/* Sale complete: a gold tick and the total in Playfair */
+.sold-hero { animation: soft-rise .35s ease-out; }
+.sold-tick { background: var(--gold-soft); color: var(--gold); box-shadow: 0 0 0 1.5px var(--gold), 0 10px 24px -12px rgba(120,90,50,.5); }
+.sold-tick svg { stroke-width: 2.2; }
+.sold-title { font-size: 26px; }
+.sold-sub .money { display: block; font-family: var(--serif); font-size: 32px; font-weight: 600; line-height: 1.15; }
+.sold-pay { display: block; font-size: 13px; letter-spacing: .04em; }
+.sold-change strong { font-family: var(--serif); font-weight: 600; }
+
+/* Gentle motion: screens fade in, a new item slides into the cart */
+.view.active { animation: view-in .2s ease-out; }
+.cart-line.just-added { animation: line-in .32s ease-out; }
+@keyframes view-in { from { opacity: 0; } to { opacity: 1; } }   /* opacity only: a transform would move the pinned cart */
+@keyframes line-in {
+  from { opacity: 0; transform: translateX(14px); background: color-mix(in srgb, var(--mark) 35%, transparent); }
+  60% { background: color-mix(in srgb, var(--mark) 22%, transparent); }
+  to { opacity: 1; transform: none; background: transparent; }
+}
+@keyframes soft-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .view.active, .cart-line.just-added, .sold-hero { animation: none; }
+}
+
+/* Receipts and printouts keep their own fonts */
+.print-area, .print-a4 { font-feature-settings: normal; }
+.print-a4 h1, .print-a4 h2, .print-a4 h3 { font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "Noto Serif", Georgia, serif; }
+
+/* Gold "R" monogram in the header (v49; the home-screen icon is unchanged) */
+.brand .brand-mono {
+  flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; overflow: visible;
+  font: 600 17px/1 var(--serif); padding-top: 1px; color: #2a1f17;
+  background: linear-gradient(145deg, #efd6b4, #c69c6d 55%, #a87d4f);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.45), 0 1px 3px rgba(120,90,60,.35);
+}
