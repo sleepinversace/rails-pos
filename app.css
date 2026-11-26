@@ -1186,7 +1186,8 @@ body { font-family: var(--sans); font-feature-settings: "cv11" 1; }
   background: var(--face); color: var(--text); box-shadow: var(--lift); font-size: 17px; font-weight: 500;
   display: inline-grid; place-items: center; padding: 0;
 }
-.stepper span, .stepper input { min-width: 26px; width: auto; height: 32px; line-height: 32px; font-weight: 600; }
+.stepper span { min-width: 26px; width: auto; height: 32px; line-height: 32px; font-weight: 600; }
+.stepper input { width: 46px; min-width: 0; height: 32px; line-height: 32px; font-weight: 600; } /* a fixed width: an input left at auto stretched and squeezed the names (Stock) */
 .stepper button:active { transform: translateY(1px); }
 .totals .grand { font-size: 27px; }
 .totals span.grand:not(.money) { font-family: var(--sans); font-size: 12px; font-weight: 500; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); align-self: end; padding-bottom: 5px; }

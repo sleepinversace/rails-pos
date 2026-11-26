@@ -17,6 +17,14 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v51 — 2026-11-26 · Stock screen fix
+
+- 🐞 **Stock screen:** since v49 the quantity box between − and + stretched and squeezed the size, colour and SKU into a narrow column (most visible on phones). It has a fixed width again. A test now checks it.
+- 📝 Website, brochure, promo, ad script, user guide, README and handover updated for v49–v50 (docs only).
+- No SQL changes.
+
+---
+
 ## v50 — 2026-11-26 · Scan a receipt to open the sale
 
 - ✨ **Barcode on every receipt:** printed sale receipts (58 and 80 mm) and the on-screen receipt end with a barcode of the receipt number, for example `R00025` (`RA-00025` with cloud series letters). The receipt text and its font are unchanged; WhatsApp, email and copied receipts stay plain text.

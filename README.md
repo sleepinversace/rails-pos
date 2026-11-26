@@ -106,8 +106,11 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
 - **Sounds** (v48)
   - Soft sounds for the key moments: a tick when an item goes in the cart, a chime when a sale is complete or a lay-by is collected, a chime for lay-by payments, coins at cash-up, and a low tone when something is refused. Ordinary buttons stay silent.
   - **Settings → Shop floor → Sounds on this device:** Off, Soft, Normal (default) or Loud, per device. Made in the app (Web Audio), so nothing is downloaded.
+- **Receipt barcode** (v50)
+  - Every printed sale receipt (58 and 80 mm) and the on-screen receipt end with a Code 128 barcode of the receipt number: `R` + the number, e.g. `R00025` (`RA-00025` with cloud series letters). Drawn by the app as an SVG (`barcodeSvg`), so no barcode font is needed. WhatsApp, email and copied receipts stay plain text.
+  - **Sales → Scan receipt** (camera), or a USB/Bluetooth scanner typing into the Sales search + Enter, opens that sale with Return / exchange. Scanning a receipt on the Sell screen opens it too, without touching the cart. `findSaleByCode` also accepts the plain number (`00025`, `25`).
 - **Usable by everyone**
-  - A boutique look: soft blush with black buttons and rose edges, serif headings, raised buttons, and product tiles with room for a photo. A Dark look (near-black with rose buttons) is in Settings → Appearance.
+  - A premium boutique look (v49): Playfair Display for names, totals and headings and Inter for text, both saved in `fonts/` (open licence) so they work offline; a blush header and side menu with a gold "R" monogram, compact raised buttons, round − / + in the cart, a gold-tick "Sale complete", rose low-stock pills and gentle motion (off when the device asks for reduced motion). Receipts and printouts keep their own fonts. A Dark look (near-black with rose buttons) is in Settings → Appearance.
   - Keyboard and screen-reader friendly dialogs.
   - Colours checked for WCAG AA contrast.
 
