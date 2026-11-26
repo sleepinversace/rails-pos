@@ -144,7 +144,8 @@
     <!-- ===== SALES (history, returns, exchanges) ===== -->
     <section id="view-sales" class="view" aria-label="Sales">
       <div class="toolbar">
-        <input id="salesSearch" type="search" placeholder="Receipt no., customer or item…" aria-label="Search sales">
+        <input id="salesSearch" type="search" placeholder="Receipt no., customer or item… or scan a receipt" aria-label="Search sales or scan a receipt" enterkeyhint="go">
+        <button class="btn" data-action="scan" data-target="sales" aria-label="Scan a receipt's barcode with the camera"><svg class="ico-sm" aria-hidden="true"><use href="#i-scan"/></svg><span>Scan receipt</span></button>
       </div>
       <div id="salesList"></div>
     </section>

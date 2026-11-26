@@ -17,6 +17,16 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v50 — 2026-11-26 · Scan a receipt to open the sale
+
+- ✨ **Barcode on every receipt:** printed sale receipts (58 and 80 mm) and the on-screen receipt end with a barcode of the receipt number, for example `R00025` (`RA-00025` with cloud series letters). The receipt text and its font are unchanged; WhatsApp, email and copied receipts stay plain text.
+- ✨ **Sales → Scan receipt:** scan with the camera, or with a USB/Bluetooth barcode scanner into the Sales search box, and the sale opens straight away, ready for **Return / exchange**. Typing a receipt number and pressing Enter does the same.
+- ✨ Scanning a receipt on the **Sell** screen opens that sale too (nothing is added to the cart).
+- Opening a past sale still needs the Sales permission, and refunds still need Returns.
+- No SQL changes.
+
+---
+
 ## v49 — 2026-11-26 · A more premium look
 
 - ✨ **New fonts:** Playfair Display for product names, totals and headings, Inter for everything else. Both are saved inside the app (`fonts/`, open-licence), so they work offline and the till never contacts Google. Receipts, the WhatsApp receipt, A4 printouts and labels keep their own fonts.

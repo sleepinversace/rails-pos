@@ -1233,3 +1233,13 @@ body { font-family: var(--sans); font-feature-settings: "cv11" 1; }
   background: linear-gradient(145deg, #efd6b4, #c69c6d 55%, #a87d4f);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.45), 0 1px 3px rgba(120,90,60,.35);
 }
+
+
+/* ----- Receipt barcode (v50): under the slip, in black, sized for scanners ----- */
+.slip-bc { display: flex; flex-direction: column; align-items: center; gap: 1mm; margin: 3mm auto 0; }
+.slip-bc-bars { display: block; width: min(100%, 56mm); height: 11mm; fill: #000; }
+.slip-bc-no { font: 700 3mm/1 "Courier New", Courier, monospace; letter-spacing: .12em; color: #000; }
+.doc-paper .slip-bc { background: #fff; padding: 8px 10px 6px; border-radius: 6px; width: fit-content; max-width: 100%; }
+.doc-paper .slip-bc-bars { width: 220px; max-width: 100%; height: 44px; }
+.doc-paper .slip-bc-no { font-size: 12px; }
+.print-area .slip-bc { width: var(--slip-w); }

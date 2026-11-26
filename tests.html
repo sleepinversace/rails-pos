@@ -450,6 +450,58 @@ test('Barcodes: the built-in reader reads tag (EAN-13) and SKU (Code 128) barcod
   eq(P.cartTotals().count, 0, 'cart emptied');
 });
 
+test('Receipt barcode (v50): under every sale slip; scanning it opens the sale on Sales or Sell', async () => {
+  const S = P.state;
+  await nav('sell');
+  const p = S.products.find(x => x.variants.some(v => v.stock >= 3)), v = p.variants.find(x => x.stock >= 3);
+  w.addToCart(v.id, 1); await tick();
+  await pay('card');
+  const s = lastSale(), code = P.receiptCode(s);
+  ok(/^R([A-Z]-)?\d{5}$/.test(code), 'receipt code ' + code);
+  // On screen, under the receipt; the bars read back as the code with the till's own reader
+  const bc = $('#modal .doc-paper .slip-bc');
+  ok(bc && bc.querySelector('svg rect') && bc.textContent.includes(code), 'barcode under the receipt on screen');
+  const rects = [...bc.querySelectorAll('svg rect')].map(r => [+r.getAttribute('x'), +r.getAttribute('width')]);
+  const widths = []; rects.forEach(([x, wd], i) => { if (i) widths.push(x - rects[i - 1][0] - rects[i - 1][1]); widths.push(wd); });
+  const read = P.Barcode.decodeImageData(drawBarcode(widths, { module: 2.5, blur: 0.8, noise: 20 }));
+  ok(read.length && read.every(c => c === code), 'the bars read back as ' + code + ' → ' + JSON.stringify(read.slice(0, 2)));
+  closeModal(); await tick();
+  // Printed slip: same barcode under the text; the WhatsApp / email text is unchanged
+  const orig = w.print; w.print = () => {};
+  await w.printDoc(`sale:${s.id}`); await tick(50);
+  w.print = orig;
+  ok($('#printArea pre.slip') && $('#printArea .slip-bc svg rect'), 'printed slip has the barcode');
+  w.setPrintMode('none');
+  ok(!w.resolveDoc(`sale:${s.id}`).text.includes(code), 'plain-text receipt has no barcode code');
+  // Finding the sale from what a scanner or a person types
+  eq([P.findSaleByCode(code)?.id, P.findSaleByCode(code.toLowerCase())?.id, P.findSaleByCode(code.slice(1))?.id], [s.id, s.id, s.id], 'R-code, lower case and the plain receipt number');
+  eq([P.findSaleByCode('R99999'), P.findSaleByCode('Rose'), P.findSaleByCode('')], [null, null, null], 'unknown codes and words find nothing');
+  // Sales screen: a USB scanner types the code + Enter
+  await nav('sales');
+  type('#salesSearch', code);
+  $('#salesSearch').dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await tick();
+  ok(!$('#modal').hidden && $('#modal').textContent.includes(code.slice(1)) && $('#modal [data-action="open-return"]'), 'Enter in Sales opens the sale, with Return / exchange');
+  eq($('#salesSearch').value, '', 'search box cleared');
+  closeModal(); await tick();
+  ok($('#view-sales [data-action="scan"][data-target="sales"]'), 'Sales has a Scan receipt button');
+  w.onScanned(code, 'sales'); await tick();
+  ok(!$('#modal').hidden && $('#modal').textContent.includes(code.slice(1)), 'camera scan on Sales opens it');
+  closeModal(); await tick();
+  w.onScanned('R99999', 'sales'); await tick();
+  ok($('#modal').hidden && $('#salesSearch').value === 'R99999', 'unknown receipt: left in the search box, nothing opened');
+  type('#salesSearch', ''); w.renderSales();
+  // Sell screen: scanning a receipt opens the sale and adds nothing to the cart
+  await nav('sell');
+  const before = P.cartTotals().count;
+  type('#sellSearch', code);
+  $('#sellSearch').dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await tick();
+  ok(!$('#modal').hidden && $('#modal').textContent.includes(code.slice(1)) && P.cartTotals().count === before && $('#sellSearch').value === '', 'receipt scanned on Sell opens the sale');
+  closeModal(); await tick();
+  w.onScanned(code, 'sell'); await tick();
+  ok(!$('#modal').hidden && P.cartTotals().count === before, 'camera scan on Sell opens it too');
+  closeModal(); await tick();
+});
+
 test('Product photo: shrunk to a small square and shown on the till', async () => {
   const c = document.createElement('canvas'); c.width = 1600; c.height = 1000;
   const g = c.getContext('2d'); g.fillStyle = '#c33'; g.fillRect(0, 0, 1600, 1000); g.fillStyle = '#fff'; g.fillRect(700, 400, 200, 200);

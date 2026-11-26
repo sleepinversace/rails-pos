@@ -90,6 +90,25 @@ const fmtNo = n => pad(n, 5);
 const docNo = (n, series) => (series ? series + '-' : '') + fmtNo(n);
 const saleNo = s => docNo(s.number, s.series);
 const retNo = r => 'CN' + docNo(r.number, r.series);
+/* v50: the barcode at the bottom of a printed receipt holds "R" + the receipt
+   number (R00025, or RA-00025 with cloud series), so scanning it opens the sale. */
+const receiptCode = s => 'R' + saleNo(s);
+/** A scanned or typed receipt code (R00025, 00025, RA-00025, A-00025, 25) → that sale, or null. */
+function findSaleByCode(code) {
+  let c = String(code || '').trim().toUpperCase();
+  if (!c) return null;
+  if (/^R[A-Z]?-?\d+$/.test(c) && !/^R-/.test(c)) c = c.slice(1);
+  return state.sales.find(s => saleNo(s).toUpperCase() === c)
+    || (/^\d+$/.test(c) ? state.sales.find(s => !s.series && s.number === Number(c)) : null) || null;
+}
+/** Open a sale from its receipt barcode (Sales screen, or the Sell screen's scanner). */
+function openSaleByCode(code) {
+  const s = findSaleByCode(code);
+  if (!s) return false;
+  if (!can('sales')) { toast('Opening past sales needs the Sales permission', true); return true; }
+  showDoc(`sale:${s.id}`);
+  return true;
+}
 const zNo = z => docNo(z.number, z.series);
 const startOfDay = (d = new Date()) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 const daysAgo = iso => Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
@@ -2033,7 +2052,7 @@ async function printDoc(ref) {
   const area = $('#printArea');
   area.style.setProperty('--slip-w', `${paper.print}mm`);
   area.style.setProperty('--slip-font', `${(paper.print / chars / 0.6).toFixed(3)}mm`);
-  area.innerHTML = `${logoHtml('slip-logo')}<pre class="slip">${slipHtml(doc.text)}</pre>`;
+  area.innerHTML = `${logoHtml('slip-logo')}<pre class="slip">${slipHtml(doc.text)}</pre>${receiptBarcodeHtml(doc)}`;
   // Measure the slip so the page is exactly as long as it (plus a little for the cutter).
   area.classList.add('measuring');
   await area.querySelector('img')?.decode?.().catch(() => {});
@@ -2041,6 +2060,13 @@ async function printDoc(ref) {
   area.classList.remove('measuring');
   setPrintMode('slip', `@page { size: ${paper.page}mm ${Math.ceil(mm + 12)}mm; margin: 0; }`);
   window.print();
+}
+
+/** Barcode of the receipt number under a sale's slip (printed and on screen). */
+function receiptBarcodeHtml(doc) {
+  if (doc?.kind !== 'sale') return '';
+  const code = receiptCode(doc.sale), svg = barcodeSvg(code);
+  return svg ? `<div class="slip-bc" aria-label="Receipt barcode ${esc(code)}">${svg.replace('class="lbl-bc"', 'class="slip-bc-bars"')}<div class="slip-bc-no">${esc(code)}</div></div>` : '';
 }
 
 /** Email a document with the device's email app (statements, lay-by slips, receipts). */
@@ -2064,7 +2090,7 @@ function showDoc(ref, { justSold = false, fresh = justSold } = {}) {
   if (fresh && state.settings.autoPrint && !TEST_MODE) setTimeout(() => printDoc(ref), 150);
   const s = doc.sale;
   const canReturn = doc.kind === 'sale' && s.status !== 'returned' && can('returns');
-  const paper = `<div class="doc-paper">${logoHtml()}<pre class="receipt w${paperChars()}" tabindex="0" aria-label="${esc(doc.title)}">${slipHtml(doc.text)}</pre></div>`;
+  const paper = `<div class="doc-paper">${logoHtml()}<pre class="receipt w${paperChars()}" tabindex="0" aria-label="${esc(doc.title)}">${slipHtml(doc.text)}</pre>${receiptBarcodeHtml(doc)}</div>`;
   // Straight after a sale: a big tick, the change due in large numbers and
   // the next steps; the slip itself is folded away under "Show receipt".
   const hero = justSold ? `<div class="sold-hero">
@@ -2470,6 +2496,7 @@ function onSellSearchEnter() {
     input.focus();
     return;
   }
+  if (/^R/i.test(input.value.trim()) && openSaleByCode(input.value)) { input.value = ''; renderSell(); return; } // a receipt was scanned
   const cards = $$('#productGrid [data-action="pick"]');
   if (cards.length === 1) openPicker(cards[0].dataset.id);
   else if (!cards.length) toast('No product or SKU found', true);
@@ -5765,10 +5792,16 @@ function onScanned(code, target) {
   closeScanner();
   navigator.vibrate?.(60);
   if (target === 'stocktake') return stCountCode(code);
+  if (target === 'sales') {
+    if (!openSaleByCode(code)) { $('#salesSearch').value = code; renderSales(); toast(`No sale with receipt ${code}`, true); }
+    return;
+  }
   if (target === 'sell') {
     const f = findByCode(code);
     if (f) {
       if (addToCart(f.variant.id, 1)) toast(`Added ${f.product.name} ${f.variant.size}/${f.variant.colour}`);
+    } else if (/^R/i.test(code) && openSaleByCode(code)) {
+      // a receipt was scanned: its sale is open
     } else {
       $('#sellSearch').value = code;
       renderSell();
@@ -7530,6 +7563,8 @@ function bindEvents() {
   });
   $('#stockSearch').addEventListener('input', renderStock);
   $('#salesSearch').addEventListener('input', renderSales);
+  // A barcode scanner types the receipt code + Enter: open that sale
+  $('#salesSearch').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); if (openSaleByCode(e.target.value)) { e.target.value = ''; renderSales(); } } });
   $('#discountValue').addEventListener('input', e => { ui.cart.discountText = e.target.value; renderTotals(); saveCart(); });
   $('#tendered').addEventListener('input', e => { ui.cart.tenderedText = e.target.value; renderTotals(); saveCart(); });
 
@@ -7662,7 +7697,7 @@ async function boot() {
 
 // Handle for tests / debugging in the console.
 window.__pos = { state, ui, DB, actions, buildReport, computeShift, receiptText, creditNoteText, zText, cartTotals, flushAllAdjust, checkLogin,
-  Cloud, CLOUD, syncNow, applyRemote, Sfx, Barcode, findByCode, resizePhoto, licence, sellingAllowed,
+  Cloud, CLOUD, syncNow, applyRemote, Sfx, findSaleByCode, receiptCode, Barcode, findByCode, resizePhoto, licence, sellingAllowed,
   lbBalance, lbPaid, lbOverdue, lbState, laybyText, statementText };
 
 boot();
