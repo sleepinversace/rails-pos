@@ -1116,7 +1116,7 @@ a.link { display: inline-flex; align-items: center; min-height: 36px; }
   --low: #f3cfd4;
   --low-soft: #3a2429;
 }
-body { font-family: var(--sans); font-feature-settings: "cv11" 1; }
+body { font-family: var(--sans); font-feature-settings: "cv11" 1, "lnum" 1; } /* lnum: Playfair's digits sit on the line ("#00025", not old-style). A rule using the font: shorthand resets this for its element (only .brand-mono does, and it has no digits) */
 .money, .num { font-variant-numeric: lining-nums tabular-nums; }
 
 /* Header: light in the light look (dark keeps its black bar) */

@@ -235,7 +235,7 @@ function supportCard() {
     <div class="card"><p class="small muted">Run the latest <b>cloud/supabase-setup.sql</b> in Supabase → SQL Editor to set the email paused shops send proof of payment to.</p></div>`;
   return `<div class="section-title">Message on paused tills</div>
     <form class="card inv-details" id="supportForm" novalidate>
-      <p class="small muted" style="margin-top:0">When a shop is deactivated, its paid-until date has passed (plus 7 days' grace), or a till has been offline for over 7 days, selling pauses and the till shows a full-screen message: <i>"Please send proof of payment to <b>${esc(support.email || 'your email')}</b> or on WhatsApp 073 314 2884 to have it reactivated."</i> with Email and WhatsApp buttons.</p>
+      <p class="small muted mt-0">When a shop is deactivated, its paid-until date has passed (plus 7 days' grace), or a till has been offline for over 7 days, selling pauses and the till shows a full-screen message: <i>"Please send proof of payment to <b>${esc(support.email || 'your email')}</b> or on WhatsApp 073 314 2884 to have it reactivated."</i> with Email and WhatsApp buttons.</p>
       <div class="grid-2">
         <label class="field"><span>Email for proof of payment</span><input name="email" type="email" class="input" maxlength="200" value="${esc(support.email || '')}" placeholder="you@example.com"></label>
         <label class="field"><span>Extra line (optional)</span><input name="message" class="input" maxlength="300" value="${esc(support.message || '')}" placeholder="e.g. Use your shop name as the reference."></label>

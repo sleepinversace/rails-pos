@@ -17,6 +17,16 @@ and bump `CACHE_VERSION` in `sw.js`.
 
 ---
 
+## v52 — 2026-11-26 · Bug sweep fixes
+
+- 🐞 **Numbers in titles:** Playfair Display draws "old-style" digits by default, so titles such as "Invoice #00025" had digits dropping below the line. All digits now sit on the line.
+- 🐞 **Supplier admin page:** its security policy (CSP) had no `font-src`, so since v49 the new fonts were blocked there (plain system fonts and console errors). Fonts are now allowed from the app itself.
+- 🐞 **Supplier admin page:** one note used an inline style, which the same policy blocks (since v42); it is a class now. Admin files `?v=34`.
+- 📝 Docs: test counts (44 till tests, 145 Profit checker checks), file sizes, "Ready for the next customer" and the v49 look in the guide, README and handover.
+- No SQL changes.
+
+---
+
 ## v51 — 2026-11-26 · Stock screen fix
 
 - 🐞 **Stock screen:** since v49 the quantity box between − and + stretched and squeezed the size, colour and SKU into a narrow column (most visible on phones). It has a fixed width again. A test now checks it.

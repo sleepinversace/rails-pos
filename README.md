@@ -10,7 +10,7 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - You can't sell more than is in stock.
   - Product tiles show the photo, or a clothing icon in a soft colour per category, and say "58 in stock", "Only 2 left" or "Out of stock".
   - The empty cart shows today's sales (the rand total only for staff who may see reports) and any parked sales.
-  - After charging, a **Sale complete** screen shows the change due in large numbers, with Print, WhatsApp, Email, Copy and New sale.
+  - After charging, a **Sale complete** screen (gold tick, the total and how it was paid) shows the change due in large numbers, with Print, WhatsApp, Email, Copy and New sale.
 - **Tax-correct slips**
   - A VAT-registered shop prints a TAX INVOICE with its VAT number.
   - Sales over R5,000 ask for the buyer's name and address (needed for a full tax invoice).
@@ -153,7 +153,7 @@ Then open http://localhost:8000. Offline mode only works over `http://localhost`
 
 With the server running, open **http://localhost:8000/tests.html** and click **Run all tests**, or open `tests.html?auto` to run them straight away.
 
-The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 43 tests should pass (one runs two "devices" against a fake Supabase to test syncing; one reads drawn barcodes that are blurred, noisy and upside down). They cover:
+The tests drive the real app (clicks, typing, reloads, a second tab) using a **separate test database**, so your shop data is never touched. All 44 tests should pass (one runs two "devices" against a fake Supabase to test syncing; one reads drawn barcodes that are blurred, noisy and upside down). They cover:
 - sign-in, lock and changing the PIN
 - admin: adding, editing and deleting users, and what a cashier can't do
 - selling and stock

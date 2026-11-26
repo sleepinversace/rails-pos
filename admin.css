@@ -61,3 +61,6 @@
 .online.on::before { content: "\25CF  "; }
 .st-none { background: var(--surface-2); color: var(--muted); }
 .link.danger-text { color: var(--danger); }
+
+/* v52: the CSP blocks inline style attributes, so spacing tweaks are classes */
+.mt-0 { margin-top: 0; }

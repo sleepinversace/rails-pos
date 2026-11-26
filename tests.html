@@ -1039,6 +1039,9 @@ test('New look: header, tiles, empty cart, Charge, sale complete, sync pill, sid
   const v = p.variants.filter(x => x.stock >= 2 && !(p.name.includes('Tee') && x.size === 'S' && x.colour === 'Red')).sort((a, b) => b.stock - a.stock)[0];
   // v49: premium fonts come from the app's own fonts/ folder (offline); receipts keep their typewriter font
   eq($('#cartItems .cw-title').textContent, 'Ready for the next customer', 'welcome wording');
+  ok(/lnum/.test(w.getComputedStyle(d.body).fontFeatureSettings), 'digits sit on the line (no old-style figures in titles)');
+  const adminHtml = await (await fetch('admin.html', { cache: 'no-store' })).text();
+  ok(/font-src 'self'/.test(adminHtml) && !/style="/.test(await (await fetch('admin.js', { cache: 'no-store' })).text()), 'admin page allows the app fonts and has no inline styles');
   await nav('stock');
   const qtyBox = $('#view-stock .stepper input');
   ok(qtyBox && qtyBox.offsetWidth > 0 && qtyBox.offsetWidth <= 60, 'stock quantity box keeps a fixed width: ' + (qtyBox && qtyBox.offsetWidth));
