@@ -103,6 +103,9 @@ Rails POS is a till for small South African clothing shops. It runs in the brows
   - Screens and buttons a user may not use are hidden, and every action is checked again when tapped. A cashier's cart ignores any discount.
   - You can't delete yourself, and there is always at least one user with Admin access.
   - This keeps staff and customers out of the till. It is not copy protection: a licence check needs a server (see *What to build next*).
+- **Sounds** (v48)
+  - Soft sounds for the key moments: a tick when an item goes in the cart, a chime when a sale is complete or a lay-by is collected, a chime for lay-by payments, coins at cash-up, and a low tone when something is refused. Ordinary buttons stay silent.
+  - **Settings → Shop floor → Sounds on this device:** Off, Soft, Normal (default) or Loud, per device. Made in the app (Web Audio), so nothing is downloaded.
 - **Usable by everyone**
   - A boutique look: soft blush with black buttons and rose edges, serif headings, raised buttons, and product tiles with room for a photo. A Dark look (near-black with rose buttons) is in Settings → Appearance.
   - Keyboard and screen-reader friendly dialogs.
